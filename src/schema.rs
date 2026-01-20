@@ -28,6 +28,10 @@ pub mod sql_types {
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "server_cluster_type"))]
     pub struct ServerClusterType;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "user_token_type"))]
+    pub struct UserTokenType;
 }
 
 diesel::table! {
@@ -147,6 +151,20 @@ diesel::table! {
 
 diesel::table! {
     use diesel::sql_types::*;
+    use super::sql_types::UserTokenType;
+
+    user_tokens (id) {
+        id -> Int8,
+        user_id -> Int8,
+        token_type -> UserTokenType,
+        token -> Text,
+        expires_at -> Timestamptz,
+        revoked -> Nullable<Bool>,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
     use super::sql_types::PlatformType;
 
     users (id) {
@@ -166,6 +184,7 @@ diesel::joinable!(project_runtimes -> db_clusters (db_cluster_id));
 diesel::joinable!(project_runtimes -> projects (project_id));
 diesel::joinable!(project_runtimes -> server_clusters (server_cluster_id));
 diesel::joinable!(projects -> users (owner_user_id));
+diesel::joinable!(user_tokens -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     db_clusters,
@@ -175,5 +194,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     project_runtimes,
     projects,
     server_clusters,
+    user_tokens,
     users,
 );
