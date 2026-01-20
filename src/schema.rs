@@ -15,6 +15,20 @@ pub mod sql_types {
 }
 
 diesel::table! {
+    packages (id) {
+        id -> Int8,
+        #[max_length = 255]
+        title -> Varchar,
+        #[max_length = 255]
+        slug -> Varchar,
+        description -> Nullable<Text>,
+        price -> Float8,
+        discount_percent -> Nullable<Int4>,
+        is_trial -> Nullable<Bool>,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::FrameworkType;
     use super::sql_types::LanguageType;
@@ -47,4 +61,4 @@ diesel::table! {
 
 diesel::joinable!(projects -> users (owner_user_id));
 
-diesel::allow_tables_to_appear_in_same_query!(projects, users,);
+diesel::allow_tables_to_appear_in_same_query!(packages, projects, users,);
