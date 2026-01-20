@@ -30,6 +30,8 @@ pub struct Settings {
   pub port: String,
   pub app_environment: AppEnvironment,
   pub pg_database_url: String,
+  pub auth_access_token_secret: String,
+  pub auth_refresh_token_secret: String,
 }
 
 impl Settings {
@@ -41,11 +43,15 @@ impl Settings {
 
     let port = env::var("PORT").expect("PORT must be set");
     let pg_database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let auth_access_token_secret = env::var("AUTH_ACCESS_TOKEN_SECRET").expect("AUTH_ACCESS_TOKEN_SECRET must be set");
+    let auth_refresh_token_secret = env::var("AUTH_REFRESH_TOKEN_SECRET").expect("AUTH_REFRESH_TOKEN_SECRET must be set");
 
     Ok(Settings {
       port,
       app_environment,
       pg_database_url,
+      auth_access_token_secret,
+      auth_refresh_token_secret,
     })
   }
 }
