@@ -29,11 +29,7 @@ impl TryFrom<String> for AppEnvironment {
 pub struct Settings {
   pub port: String,
   pub app_environment: AppEnvironment,
-  pub postgres_host: String,
-  pub postgres_port: String,
-  pub postgres_user: String,
-  pub postgres_password: String,
-  pub postgres_db: String,
+  pub pg_database_url: String,
 }
 
 impl Settings {
@@ -44,20 +40,12 @@ impl Settings {
     let app_environment = AppEnvironment::try_from(app_env_str)?;
 
     let port = env::var("PORT").expect("PORT must be set");
-    let postgres_host = env::var("POSTGRES_HOST").expect("POSTGRES_HOST must be set");
-    let postgres_port = env::var("POSTGRES_PORT").expect("POSTGRES_PORT must be set");
-    let postgres_user = env::var("POSTGRES_USER").expect("POSTGRES_USER must be set");
-    let postgres_password = env::var("POSTGRES_PASSWORD").expect("POSTGRES_PASSWORD must be set");
-    let postgres_db = env::var("POSTGRES_DB").expect("POSTGRES_DB must be set");
+    let pg_database_url = env::var("PG_DATABASE_URL").expect("PG_DATABASE_URL must be set");
 
     Ok(Settings {
       port,
       app_environment,
-      postgres_host,
-      postgres_port,
-      postgres_user,
-      postgres_password,
-      postgres_db,
+      pg_database_url,
     })
   }
 }
