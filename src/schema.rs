@@ -6,6 +6,10 @@ pub mod sql_types {
     pub struct DbClusterType;
 
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "deployment_status_type"))]
+    pub struct DeploymentStatusType;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "framework_type"))]
     pub struct FrameworkType;
 
@@ -74,6 +78,28 @@ diesel::table! {
 
 diesel::table! {
     use diesel::sql_types::*;
+    use super::sql_types::PlatformEnvironmentType;
+    use super::sql_types::DeploymentStatusType;
+
+    project_runtimes (id) {
+        id -> Int8,
+        project_id -> Int8,
+        environment -> PlatformEnvironmentType,
+        db_cluster_id -> Nullable<Int8>,
+        db_cluster_deployment_metadata -> Nullable<Jsonb>,
+        db_cluster_deployment_status -> Nullable<DeploymentStatusType>,
+        db_cluster_deployment_is_healthy -> Nullable<Bool>,
+        db_cluster_deployment_last_health -> Nullable<Timestamptz>,
+        server_cluster_id -> Nullable<Int8>,
+        server_cluster_deployment_metadata -> Nullable<Jsonb>,
+        server_cluster_deployment_status -> Nullable<DeploymentStatusType>,
+        server_cluster_deployment_is_healthy -> Nullable<Bool>,
+        server_cluster_deployment_last_health -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
     use super::sql_types::FrameworkType;
     use super::sql_types::LanguageType;
 
@@ -119,12 +145,16 @@ diesel::table! {
 
 diesel::joinable!(payments -> packages (package_id));
 diesel::joinable!(payments -> users (user_id));
+diesel::joinable!(project_runtimes -> db_clusters (db_cluster_id));
+diesel::joinable!(project_runtimes -> projects (project_id));
+diesel::joinable!(project_runtimes -> server_clusters (server_cluster_id));
 diesel::joinable!(projects -> users (owner_user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     db_clusters,
     packages,
     payments,
+    project_runtimes,
     projects,
     server_clusters,
     users,
