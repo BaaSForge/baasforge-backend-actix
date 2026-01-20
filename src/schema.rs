@@ -29,6 +29,24 @@ diesel::table! {
 }
 
 diesel::table! {
+    payments (id) {
+        id -> Int8,
+        user_id -> Int8,
+        amount -> Float8,
+        package_id -> Int8,
+        #[max_length = 255]
+        package_title -> Nullable<Varchar>,
+        #[max_length = 255]
+        package_slug -> Nullable<Varchar>,
+        package_price -> Nullable<Float8>,
+        package_discount -> Nullable<Int4>,
+        is_success -> Bool,
+        gateway_metadata -> Nullable<Jsonb>,
+        expires_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::FrameworkType;
     use super::sql_types::LanguageType;
@@ -59,6 +77,8 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(payments -> packages (package_id));
+diesel::joinable!(payments -> users (user_id));
 diesel::joinable!(projects -> users (owner_user_id));
 
-diesel::allow_tables_to_appear_in_same_query!(packages, projects, users,);
+diesel::allow_tables_to_appear_in_same_query!(packages, payments, projects, users,);
