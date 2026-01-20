@@ -20,6 +20,10 @@ pub mod sql_types {
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "platform_type"))]
     pub struct PlatformType;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "server_cluster_type"))]
+    pub struct ServerClusterType;
 }
 
 diesel::table! {
@@ -87,6 +91,20 @@ diesel::table! {
 
 diesel::table! {
     use diesel::sql_types::*;
+    use super::sql_types::PlatformEnvironmentType;
+    use super::sql_types::ServerClusterType;
+
+    server_clusters (id) {
+        id -> Int8,
+        environment -> PlatformEnvironmentType,
+        server_type -> ServerClusterType,
+        max_capacity -> Int4,
+        metadata -> Nullable<Jsonb>,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
     use super::sql_types::PlatformType;
 
     users (id) {
@@ -103,4 +121,11 @@ diesel::joinable!(payments -> packages (package_id));
 diesel::joinable!(payments -> users (user_id));
 diesel::joinable!(projects -> users (owner_user_id));
 
-diesel::allow_tables_to_appear_in_same_query!(db_clusters, packages, payments, projects, users,);
+diesel::allow_tables_to_appear_in_same_query!(
+    db_clusters,
+    packages,
+    payments,
+    projects,
+    server_clusters,
+    users,
+);

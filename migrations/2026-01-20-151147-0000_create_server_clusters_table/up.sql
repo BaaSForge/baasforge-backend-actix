@@ -1,0 +1,9 @@
+CREATE TYPE server_cluster_type AS ENUM ('dockerized_v1', 'aws_lambda');
+
+CREATE TABLE server_clusters (
+    id BIGSERIAL PRIMARY KEY,
+    environment platform_environment_type NOT NULL,
+    server_type server_cluster_type NOT NULL,
+    max_capacity INTEGER NOT NULL,
+    metadata JSONB
+);
