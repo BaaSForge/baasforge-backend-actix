@@ -78,6 +78,22 @@ diesel::table! {
 
 diesel::table! {
     use diesel::sql_types::*;
+    use super::sql_types::DeploymentStatusType;
+
+    project_runtime_functions (id) {
+        id -> Int8,
+        project_runtime_id -> Int8,
+        deployment_metadata -> Nullable<Jsonb>,
+        deployment_status -> DeploymentStatusType,
+        deployment_is_healthy -> Bool,
+        deployment_last_health -> Nullable<Timestamptz>,
+        code -> Nullable<Text>,
+        explanation -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
     use super::sql_types::PlatformEnvironmentType;
     use super::sql_types::DeploymentStatusType;
 
@@ -145,6 +161,7 @@ diesel::table! {
 
 diesel::joinable!(payments -> packages (package_id));
 diesel::joinable!(payments -> users (user_id));
+diesel::joinable!(project_runtime_functions -> project_runtimes (project_runtime_id));
 diesel::joinable!(project_runtimes -> db_clusters (db_cluster_id));
 diesel::joinable!(project_runtimes -> projects (project_id));
 diesel::joinable!(project_runtimes -> server_clusters (server_cluster_id));
@@ -154,6 +171,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     db_clusters,
     packages,
     payments,
+    project_runtime_functions,
     project_runtimes,
     projects,
     server_clusters,
