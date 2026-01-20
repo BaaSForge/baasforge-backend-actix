@@ -40,7 +40,7 @@ impl Settings {
     let app_environment = AppEnvironment::try_from(app_env_str)?;
 
     let port = env::var("PORT").expect("PORT must be set");
-    let pg_database_url = env::var("PG_DATABASE_URL").expect("PG_DATABASE_URL must be set");
+    let pg_database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
     Ok(Settings {
       port,
