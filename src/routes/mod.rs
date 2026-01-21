@@ -1,4 +1,4 @@
-pub mod users;
+pub mod auth;
 use crate::configs::Settings;
 use actix_web::web;
 use actix_web::{Result};
@@ -24,8 +24,12 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
   HttpServer::new(move || {
     App::new()
       .app_data(web::Data::new(settings.clone()))
-      .service(routes::get_environment)
-      .service(users::get_user_token)
+      .service(
+        web::scope("/api/v1")
+          .service(routes::get_environment)
+          .service(auth::initiate_google_auth)
+          .service(auth::handle_google_auth_callback),
+      )
   })
   .bind(("127.0.0.1", port))?
   .run()

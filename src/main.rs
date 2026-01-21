@@ -2,6 +2,7 @@ use actix_web;
 mod configs;
 mod routes;
 mod libs;
+mod services;
 
 #[actix_web::main]
 async fn main() -> Result<(), actix_web::Error> {
