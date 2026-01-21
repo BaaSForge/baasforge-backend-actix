@@ -1,10 +1,14 @@
 use actix_web::{get, HttpResponse};
-use crate::routes::Settings;
 use actix_web::web;
 use serde_json::json;
 use actix_web::post;
 use crate::services::auth::{create_access_token, create_refresh_token, create_access_cookie, create_refresh_cookie};
 use crate::libs::api_response::{api_success, api_error};
+use crate::routes::AppContext;
+use crate::schema::users;
+use crate::models::user::{User, PlatformType};
+use diesel::prelude::*;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // #[get("/auth/token")]
 // async fn get_user_token(req: HttpRequest) -> Result<HttpResponse, ApiError> {
@@ -38,9 +42,9 @@ async fn initiate_google_auth() -> HttpResponse {
 
 // TODO: verify the authenticated user coming from google
 #[get("/auth/google/callback")]
-async fn handle_google_auth_callback(settings: web::Data<Settings>) -> HttpResponse {
-  let access_token_res = create_access_token(&settings);
-  let refresh_token_res = create_refresh_token(&settings);
+async fn handle_google_auth_callback(context: web::Data<AppContext>) -> HttpResponse {
+  let access_token_res = create_access_token(&context.settings);
+  let refresh_token_res = create_refresh_token(&context.settings);
 
   let access_token = match access_token_res {
     Ok(t) => t,
@@ -61,9 +65,24 @@ async fn handle_google_auth_callback(settings: web::Data<Settings>) -> HttpRespo
   let access_token_cookie = create_access_cookie(access_token.clone());
   let refresh_token_cookie = create_refresh_cookie(refresh_token.clone());
 
-  let api_result = api_success("Google authentication callback successful", json!({}));
-  HttpResponse::Ok()
+  let mut conn = context.pool.get().expect("Failed to get DB connection");
+
+  let timestamp = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .expect("Time went backwards")
+    .as_nanos()
+    .to_string();
+
+  let _ = diesel::insert_into(users::table)
+    .values(&User {
+      platform: PlatformType::Google,
+      id_in_platform: timestamp,
+      full_name: Some("something".to_string()),
+    })
+    .execute(&mut conn);
+
+  HttpResponse::Created()
     .cookie(access_token_cookie)
     .cookie(refresh_token_cookie)
-    .json(api_result)
+    .json(api_success("Google authenticated successfully", json!({})))
 }
