@@ -41,6 +41,7 @@ ureq = "3.1.4" # (simpler, but less feature-rich)
 diesel = { version = "2.3.5", features = ["postgres", "r2d2"] } # Robust ORM with SQL migration support
 diesel_migrations = "2.3.1"  # For running migrations
 #diesel_cli = { version = "2.3.5", features = ["postgres"] } # Command-line tool for Diesel migrations
+diesel-derive-enum = { version = "2.1.0", features = ["postgres"] }
 
 # RabbitMQ SDK
 lapin = "3.7.2" # Popular RabbitMQ client.
