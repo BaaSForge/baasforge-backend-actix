@@ -33,11 +33,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // TODO: implement google OAuth here
 #[post("/auth/google/initiate")]
 async fn initiate_google_auth() -> HttpResponse {
-  let response = HttpResponse::TemporaryRedirect()
+  HttpResponse::TemporaryRedirect()
     .append_header(("Location", "/api/v1/auth/google/callback"))
-    .finish();
-
-  response
+    .finish()
 }
 
 // TODO: verify the authenticated user coming from google

@@ -1,4 +1,3 @@
-// TODO: use diesel-derive-enum instead
 use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::expression::AsExpression;
 use diesel::pg::{Pg, PgValue};
