@@ -38,7 +38,7 @@ reqwest = { version = "0.13.1", features = ["json", "blocking"] } # Asynchronous
 ureq = "3.1.4" # (simpler, but less feature-rich)
 
 # ORM (PostgreSQL with migrations - TypeORM/Prisma equivalent)
-diesel = { version = "2.3.5", features = ["postgres"] } # Robust ORM with SQL migration support
+diesel = { version = "2.3.5", features = ["postgres", "r2d2"] } # Robust ORM with SQL migration support
 diesel_migrations = "2.3.1"  # For running migrations
 #diesel_cli = { version = "2.3.5", features = ["postgres"] } # Command-line tool for Diesel migrations
 
