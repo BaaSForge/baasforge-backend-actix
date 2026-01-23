@@ -1,16 +1,19 @@
 use crate::libs::api_response::{api_error, api_success};
+// use actix_web::HttpMessage;
 use crate::models::user_tokens::{UserToken, UserTokenType};
 use crate::models::users::{PlatformType, User, UserDTO};
 use crate::routes::AppContext;
 use crate::schema::users::{full_name, id_in_platform, platform};
 use crate::schema::{user_tokens, users};
 use crate::services::auth::{
-    ACCESS_TOKEN_EXPIRY_HOURS, REFRESH_TOKEN_EXPIRY_HOURS, create_access_cookie,
+    ACCESS_TOKEN_EXPIRY_HOURS,
+    // AccessClaims,
+    REFRESH_TOKEN_EXPIRY_HOURS, create_access_cookie,
     create_access_token, create_refresh_cookie, create_refresh_token,
 };
-use actix_web::post;
 use actix_web::web;
-use actix_web::{HttpResponse, get};
+// use actix_web::{HttpRequest};
+use actix_web::{HttpResponse, get, post};
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use serde_json::json;
@@ -45,7 +48,16 @@ async fn initiate_google_auth() -> HttpResponse {
 
 // TODO: verify the authenticated user coming from google
 #[get("/auth/google/callback")]
-async fn handle_google_auth_callback(context: web::Data<AppContext>) -> HttpResponse {
+async fn handle_google_auth_callback(
+    // req: HttpRequest,
+    context: web::Data<AppContext>,
+) -> HttpResponse {
+    // let extensions = req.extensions();
+    // let claims = match extensions.get::<AccessClaims>() {
+    //     Some(c) => c,
+    //     None => return HttpResponse::Unauthorized().finish(),
+    // };
+
     let full_name_dto = "something";
     let id_in_platform_dto = "1";
 

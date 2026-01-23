@@ -4,6 +4,7 @@ mod libs;
 mod services;
 mod models;
 mod database;
+mod middlewares;
 mod schema;
 
 #[actix_web::main]

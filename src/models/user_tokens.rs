@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use diesel::Insertable;
 use diesel::Queryable;
+use diesel::Selectable;
 
 #[derive(Debug, diesel_derive_enum::DbEnum)]
 #[ExistingTypePath = "crate::schema::sql_types::UserTokenType"]
@@ -10,7 +11,7 @@ pub enum UserTokenType {
     Access,
 }
 
-#[derive(Debug, Queryable, Insertable)]
+#[derive(Debug, Queryable, Insertable, Selectable)]
 #[diesel(table_name = crate::schema::user_tokens)]
 pub struct UserToken {
     pub user_id: i64,

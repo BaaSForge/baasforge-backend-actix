@@ -1,9 +1,11 @@
 pub mod auth;
 use crate::configs::Settings;
 use crate::database::{DbPool, establish_pool};
+use actix_web::middleware::from_fn;
 use actix_web::web;
 use actix_web::{Result};
 use std::error::Error;
+use crate::middlewares::auth::{auth_middleware};
 
 #[derive(Clone)]
 pub struct AppContext {
@@ -29,6 +31,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
   HttpServer::new(move || {
     App::new()
       .app_data(web::Data::new(app_context.clone()))
+      .wrap(from_fn(auth_middleware))
       .service(
         web::scope("/api/v1")
           .service(auth::initiate_google_auth)
