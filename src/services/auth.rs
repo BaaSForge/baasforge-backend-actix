@@ -4,8 +4,8 @@ use crate::configs::Settings;
 use actix_web::cookie::{Cookie, SameSite};
 use std::time::Duration as StdDuration;
 
-const ACCESS_TOKEN_EXPIRY_HOURS: u64 = 8;
-const REFRESH_TOKEN_EXPIRY_HOURS: u64 = 90 * 24; // 90 days
+pub(crate) const ACCESS_TOKEN_EXPIRY_HOURS: u64 = 8;
+pub(crate) const REFRESH_TOKEN_EXPIRY_HOURS: u64 = 90 * 24; // 90 days
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct AccessClaims {
