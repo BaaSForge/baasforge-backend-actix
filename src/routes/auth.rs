@@ -6,20 +6,17 @@ use crate::routes::AppContext;
 use crate::schema::users::{full_name, id_in_platform, platform};
 use crate::schema::{user_tokens, users};
 use crate::services::auth::{
-    ACCESS_TOKEN_EXPIRY_HOURS,
-    // AccessClaims,
-    REFRESH_TOKEN_EXPIRY_HOURS, create_access_cookie,
-    create_access_token, create_refresh_cookie, create_refresh_token,
+    ACCESS_TOKEN_COOKIE_KEY, ACCESS_TOKEN_EXPIRY_HOURS, REFRESH_TOKEN_COOKIE_KEY,
+    REFRESH_TOKEN_EXPIRY_HOURS, create_access_cookie, create_access_token, create_clear_cookie,
+    create_refresh_cookie, create_refresh_token,
 };
-use actix_web::web;
+use actix_web::{HttpRequest, HttpResponse, web};
 // use actix_web::{HttpRequest};
-use actix_web::{HttpResponse, get, post};
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use serde_json::json;
 
-// #[get("/auth/token")]
-// async fn get_user_token(req: HttpRequest) -> Result<HttpResponse, ApiError> {
+// pub async fn get_user_token(req: HttpRequest) -> Result<HttpResponse, ApiError> {
 //   let user_token = req.cookie("token");
 
 //   match user_token {
@@ -39,16 +36,14 @@ use serde_json::json;
 // }
 
 // TODO: implement google OAuth here
-#[post("/auth/google/initiate")]
-async fn initiate_google_auth() -> HttpResponse {
+pub async fn initiate_google_auth() -> HttpResponse {
     HttpResponse::TemporaryRedirect()
         .append_header(("Location", "/api/v1/auth/google/callback"))
         .finish()
 }
 
 // TODO: verify the authenticated user coming from google
-#[get("/auth/google/callback")]
-async fn handle_google_auth_callback(
+pub async fn handle_google_auth_callback(
     // req: HttpRequest,
     context: web::Data<AppContext>,
 ) -> HttpResponse {
@@ -138,4 +133,27 @@ async fn handle_google_auth_callback(
         .cookie(access_token_cookie)
         .cookie(refresh_token_cookie)
         .json(api_success("Google authenticated successfully", json!({})))
+}
+
+pub async fn handle_logout(req: HttpRequest, context: web::Data<AppContext>) -> HttpResponse {
+    let mut conn = context.pool.get().unwrap();
+
+    let access = req.cookie(ACCESS_TOKEN_COOKIE_KEY);
+    let refresh = req.cookie(REFRESH_TOKEN_COOKIE_KEY);
+
+    if let (Some(a), Some(r)) = (access, refresh) {
+        diesel::update(user_tokens::table)
+            .filter(user_tokens::token.eq_any(vec![a.value().to_string(), r.value().to_string()]))
+            .set(user_tokens::revoked.eq(Some(true)))
+            .execute(&mut conn)
+            .ok();
+    }
+
+    let clear_access = create_clear_cookie(ACCESS_TOKEN_COOKIE_KEY);
+    let clear_refresh = create_clear_cookie(REFRESH_TOKEN_COOKIE_KEY);
+
+    HttpResponse::Ok()
+        .cookie(clear_access)
+        .cookie(clear_refresh)
+        .finish()
 }

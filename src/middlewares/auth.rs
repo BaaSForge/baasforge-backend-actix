@@ -7,7 +7,7 @@ use crate::{
 };
 use crate::schema::user_tokens::{token, token_type};
 
-pub async fn auth_middleware<B>(
+pub async fn auth_closed_guard_middleware<B>(
     req: ServiceRequest,
     next: Next<B>,
 ) -> Result<ServiceResponse<BoxBody>, Error>
@@ -51,4 +51,19 @@ where
     req.extensions_mut().insert(claims);
     let res = next.call(req).await?;
     Ok(res.map_into_boxed_body())    
+}
+
+pub async fn auth_opened_guard_middleware<B>(
+    req: ServiceRequest,
+    next: Next<B>,
+) -> Result<ServiceResponse<BoxBody>, Error>
+where
+    B: actix_web::body::MessageBody + 'static,
+{
+    if req.cookie(ACCESS_TOKEN_COOKIE_KEY).is_some() {
+        return Ok(req.into_response(HttpResponse::Forbidden().finish()));
+    }
+
+    let res = next.call(req).await?;
+    Ok(res.map_into_boxed_body())
 }

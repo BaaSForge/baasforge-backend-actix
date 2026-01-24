@@ -64,6 +64,20 @@ pub fn create_access_cookie(value: String) -> Cookie<'static> {
         .finish()
 }
 
+pub fn create_clear_cookie(key: &str) -> Cookie<'static> {
+    Cookie::build(key.to_string(), "")
+        .path("/")
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Strict)
+        .max_age(
+            StdDuration::from_secs(0)
+                .try_into()
+                .unwrap(),
+        )
+        .finish()
+}
+
 pub fn create_refresh_cookie(value: String) -> Cookie<'static> {
     Cookie::build(REFRESH_TOKEN_COOKIE_KEY, value)
         .path("/")
