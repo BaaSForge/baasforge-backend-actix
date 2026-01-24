@@ -106,3 +106,18 @@ pub fn decode_access_token(token: &str, settings: &Settings) -> Result<AccessCla
 
     Ok(token_data.claims)
 }
+
+pub fn decode_refresh_token(token: &str, settings: &Settings) -> Result<RefreshClaims, Error> {
+    let validation = Validation::new(Algorithm::HS256);
+    let token_data = decode::<RefreshClaims>(
+        token,
+        &DecodingKey::from_secret(settings.auth_refresh_token_secret.as_ref()),
+        &validation,
+    )?;
+
+    if token_data.claims.exp < Utc::now().timestamp() as usize {
+        return Err(Error::from(ErrorKind::ExpiredSignature));
+    }
+
+    Ok(token_data.claims)
+}

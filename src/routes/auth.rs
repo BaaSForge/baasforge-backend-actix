@@ -1,4 +1,5 @@
 use crate::libs::api_response::{api_error, api_success};
+use crate::middlewares::auth::RefreshPayload;
 // use actix_web::HttpMessage;
 use crate::models::user_tokens::{UserToken, UserTokenType};
 use crate::models::users::{PlatformType, User, UserDTO};
@@ -10,7 +11,7 @@ use crate::services::auth::{
     REFRESH_TOKEN_EXPIRY_MINUTES, create_access_cookie, create_access_token, create_clear_cookie,
     create_refresh_cookie, create_refresh_token,
 };
-use actix_web::{HttpRequest, HttpResponse, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 // use actix_web::{HttpRequest};
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
@@ -47,12 +48,6 @@ pub async fn handle_google_auth_callback(
     // req: HttpRequest,
     context: web::Data<AppContext>,
 ) -> HttpResponse {
-    // let extensions = req.extensions();
-    // let claims = match extensions.get::<AccessClaims>() {
-    //     Some(c) => c,
-    //     None => return HttpResponse::Unauthorized().finish(),
-    // };
-
     let full_name_dto = "something";
     let id_in_platform_dto = "1";
 
@@ -155,5 +150,35 @@ pub async fn handle_logout(req: HttpRequest, context: web::Data<AppContext>) -> 
     HttpResponse::Ok()
         .cookie(clear_access)
         .cookie(clear_refresh)
+        .finish()
+}
+
+pub async fn handle_refresh_token(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let extensions = req.extensions();
+    let refresh_payload = extensions
+        .get::<RefreshPayload>()
+        .expect("RefreshPayload must exist");
+
+    let access = create_access_token(&context.settings).unwrap();
+    let exp = Utc::now() + Duration::minutes(ACCESS_TOKEN_EXPIRY_MINUTES as i64);
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    diesel::insert_into(user_tokens::table)
+        .values(&UserToken {
+            user_id: refresh_payload.user_id,
+            token_type: UserTokenType::Access,
+            token: access.clone(),
+            expires_at: exp,
+            revoked: Some(false),
+        })
+        .execute(&mut conn)
+        .unwrap();
+
+    HttpResponse::Ok()
+        .cookie(create_access_cookie(access))
         .finish()
 }
