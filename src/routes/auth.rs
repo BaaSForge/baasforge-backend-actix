@@ -6,8 +6,8 @@ use crate::routes::AppContext;
 use crate::schema::users::{full_name, id_in_platform, platform};
 use crate::schema::{user_tokens, users};
 use crate::services::auth::{
-    ACCESS_TOKEN_COOKIE_KEY, ACCESS_TOKEN_EXPIRY_HOURS, REFRESH_TOKEN_COOKIE_KEY,
-    REFRESH_TOKEN_EXPIRY_HOURS, create_access_cookie, create_access_token, create_clear_cookie,
+    ACCESS_TOKEN_COOKIE_KEY, ACCESS_TOKEN_EXPIRY_MINUTES, REFRESH_TOKEN_COOKIE_KEY,
+    REFRESH_TOKEN_EXPIRY_MINUTES, create_access_cookie, create_access_token, create_clear_cookie,
     create_refresh_cookie, create_refresh_token,
 };
 use actix_web::{HttpRequest, HttpResponse, web};
@@ -101,8 +101,8 @@ pub async fn handle_google_auth_callback(
     };
 
     let now = Utc::now();
-    let access_exp = now + Duration::hours(ACCESS_TOKEN_EXPIRY_HOURS as i64);
-    let refresh_exp = now + Duration::hours(REFRESH_TOKEN_EXPIRY_HOURS as i64);
+    let access_exp = now + Duration::minutes(ACCESS_TOKEN_EXPIRY_MINUTES as i64);
+    let refresh_exp = now + Duration::minutes(REFRESH_TOKEN_EXPIRY_MINUTES as i64);
 
     let access_token_cookie = create_access_cookie(access_token.clone());
     let refresh_token_cookie = create_refresh_cookie(refresh_token.clone());

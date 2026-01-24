@@ -7,8 +7,8 @@ use jsonwebtoken::{
 };
 use std::time::Duration as StdDuration;
 
-pub(crate) const ACCESS_TOKEN_EXPIRY_HOURS: u64 = 8;
-pub(crate) const REFRESH_TOKEN_EXPIRY_HOURS: u64 = 90 * 24; // 90 days
+pub(crate) const ACCESS_TOKEN_EXPIRY_MINUTES: u64 = 60 * 8; // 8 hours
+pub(crate) const REFRESH_TOKEN_EXPIRY_MINUTES: u64 = 60 * 24 * 90; // 90 days
 pub(crate) const ACCESS_TOKEN_COOKIE_KEY: &str = "access_token";
 pub(crate) const REFRESH_TOKEN_COOKIE_KEY: &str = "refresh_token";
 
@@ -24,7 +24,7 @@ pub struct RefreshClaims {
 
 pub fn create_access_token(settings: &Settings) -> Result<String, jsonwebtoken::errors::Error> {
     let access_expiration = (Utc::now()
-        + Duration::hours(ACCESS_TOKEN_EXPIRY_HOURS.try_into().unwrap()))
+        + Duration::minutes(ACCESS_TOKEN_EXPIRY_MINUTES.try_into().unwrap()))
     .timestamp() as usize;
     let access_claims = AccessClaims {
         exp: access_expiration,
@@ -38,7 +38,7 @@ pub fn create_access_token(settings: &Settings) -> Result<String, jsonwebtoken::
 
 pub fn create_refresh_token(settings: &Settings) -> Result<String, jsonwebtoken::errors::Error> {
     let refresh_expiration = (Utc::now()
-        + Duration::hours(REFRESH_TOKEN_EXPIRY_HOURS.try_into().unwrap()))
+        + Duration::minutes(REFRESH_TOKEN_EXPIRY_MINUTES.try_into().unwrap()))
     .timestamp() as usize;
     let refresh_claims = RefreshClaims {
         exp: refresh_expiration,
@@ -57,7 +57,7 @@ pub fn create_access_cookie(value: String) -> Cookie<'static> {
         .secure(true)
         .same_site(SameSite::Strict)
         .max_age(
-            StdDuration::from_secs(ACCESS_TOKEN_EXPIRY_HOURS * 3600)
+            StdDuration::from_mins(ACCESS_TOKEN_EXPIRY_MINUTES)
                 .try_into()
                 .unwrap(),
         )
@@ -71,7 +71,7 @@ pub fn create_clear_cookie(key: &str) -> Cookie<'static> {
         .secure(true)
         .same_site(SameSite::Strict)
         .max_age(
-            StdDuration::from_secs(0)
+            StdDuration::from_mins(0)
                 .try_into()
                 .unwrap(),
         )
@@ -85,7 +85,7 @@ pub fn create_refresh_cookie(value: String) -> Cookie<'static> {
         .secure(true)
         .same_site(SameSite::Strict)
         .max_age(
-            StdDuration::from_secs(REFRESH_TOKEN_EXPIRY_HOURS * 3600)
+            StdDuration::from_mins(REFRESH_TOKEN_EXPIRY_MINUTES)
                 .try_into()
                 .unwrap(),
         )
