@@ -1,7 +1,10 @@
 pub mod auth;
 use crate::configs::Settings;
 use crate::database::{DbPool, establish_pool};
-use crate::middlewares::auth::{auth_closed_guard_middleware, auth_closed_refresh_token_guard_middleware, auth_opened_guard_middleware};
+use crate::middlewares::auth::{
+    auth_refresh_token_maturity_guard_middleware, auth_closed_guard_middleware,
+    auth_closed_refresh_token_guard_middleware, auth_opened_guard_middleware,
+};
 use actix_web::Result;
 use actix_web::middleware::from_fn;
 use actix_web::web;
@@ -60,6 +63,14 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .to(auth::handle_refresh_token)
                             .wrap(from_fn(auth_opened_guard_middleware))
                             .wrap(from_fn(auth_closed_refresh_token_guard_middleware)),
+                    )
+                    .route(
+                        "/tokens",
+                        web::delete()
+                            .to(auth::handle_revoke_tokens)
+                            .wrap(from_fn(auth_refresh_token_maturity_guard_middleware))
+                            .wrap(from_fn(auth_closed_refresh_token_guard_middleware))
+                            .wrap(from_fn(auth_closed_guard_middleware))
                     ),
             )
     })

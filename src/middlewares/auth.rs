@@ -1,5 +1,7 @@
 use crate::schema::user_tokens::{token, token_type};
-use crate::services::auth::{AccessClaims, RefreshClaims, decode_refresh_token};
+use crate::services::auth::{
+    AccessClaims, RefreshClaims, decode_refresh_token, is_token_mature_enuogh,
+};
 use crate::{
     libs::api_response::api_error,
     models::user_tokens::{UserToken, UserTokenType},
@@ -22,12 +24,14 @@ pub struct AccessPayload {
     pub claims: AccessClaims,
     #[allow(unused)]
     pub user_id: i64,
+    pub db_token: UserToken,
 }
 
 pub struct RefreshPayload {
     #[allow(unused)]
     pub claims: RefreshClaims,
     pub user_id: i64,
+    pub db_token: UserToken,
 }
 
 pub async fn auth_closed_guard_middleware<B>(
@@ -41,7 +45,10 @@ where
         cookie.value().to_string()
     } else {
         if let Some(_) = req.cookie(REFRESH_TOKEN_COOKIE_KEY) {
-            let body = api_error("You need to refresh the access token", json!({"needs_refresh_token": true}));
+            let body = api_error(
+                "You need to refresh the access token",
+                json!({"needs_refresh_token": true}),
+            );
             return Ok(req
                 .into_response(HttpResponse::Unauthorized().json(body))
                 .map_into_boxed_body());
@@ -80,6 +87,7 @@ where
     let payload = AccessPayload {
         claims,
         user_id: db_token.user_id,
+        db_token,
     };
 
     req.extensions_mut().insert(payload);
@@ -130,6 +138,7 @@ where
     let payload = RefreshPayload {
         claims,
         user_id: db_token.user_id,
+        db_token,
     };
 
     req.extensions_mut().insert(payload);
@@ -146,6 +155,37 @@ where
 {
     if req.cookie(ACCESS_TOKEN_COOKIE_KEY).is_some() {
         return Ok(req.into_response(HttpResponse::Forbidden().finish()));
+    }
+
+    let res = next.call(req).await?;
+    Ok(res.map_into_boxed_body())
+}
+
+pub async fn auth_refresh_token_maturity_guard_middleware<B>(
+    req: ServiceRequest,
+    next: Next<B>,
+) -> Result<ServiceResponse<BoxBody>, Error>
+where
+    B: actix_web::body::MessageBody + 'static,
+{
+    let is_mature_enuogh = {
+        let extensions = req.extensions();
+
+        let refresh_payload = extensions
+            .get::<RefreshPayload>()
+            .expect("RefreshPayload must exist");
+
+        is_token_mature_enuogh(&refresh_payload.db_token)
+    };
+
+    if !is_mature_enuogh {
+        let body = api_error(
+            "Your session has just been created. You must wait several days to perform critical actions.",
+            json!({}),
+        );
+        return Ok(req
+            .into_response(HttpResponse::Forbidden().json(body))
+            .map_into_boxed_body());
     }
 
     let res = next.call(req).await?;

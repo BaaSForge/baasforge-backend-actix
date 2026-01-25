@@ -1,4 +1,4 @@
-use crate::configs::Settings;
+use crate::{configs::Settings, models::user_tokens::UserToken};
 use actix_web::cookie::{Cookie, SameSite};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{
@@ -92,10 +92,10 @@ pub fn create_refresh_cookie(value: String) -> Cookie<'static> {
         .finish()
 }
 
-pub fn decode_access_token(token: &str, settings: &Settings) -> Result<AccessClaims, Error> {
+pub fn decode_access_token(token_str: &str, settings: &Settings) -> Result<AccessClaims, Error> {
     let validation = Validation::new(Algorithm::HS256);
     let token_data = decode::<AccessClaims>(
-        token,
+        token_str,
         &DecodingKey::from_secret(settings.auth_access_token_secret.as_ref()),
         &validation,
     )?;
@@ -107,10 +107,10 @@ pub fn decode_access_token(token: &str, settings: &Settings) -> Result<AccessCla
     Ok(token_data.claims)
 }
 
-pub fn decode_refresh_token(token: &str, settings: &Settings) -> Result<RefreshClaims, Error> {
+pub fn decode_refresh_token(token_str: &str, settings: &Settings) -> Result<RefreshClaims, Error> {
     let validation = Validation::new(Algorithm::HS256);
     let token_data = decode::<RefreshClaims>(
-        token,
+        token_str,
         &DecodingKey::from_secret(settings.auth_refresh_token_secret.as_ref()),
         &validation,
     )?;
@@ -120,4 +120,11 @@ pub fn decode_refresh_token(token: &str, settings: &Settings) -> Result<RefreshC
     }
 
     Ok(token_data.claims)
+}
+
+pub fn is_token_mature_enuogh(
+    db_token: &UserToken
+) -> bool {
+    let age = Utc::now() - db_token.created_at;
+    db_token.is_signup_token || age >= Duration::days(7)
 }

@@ -1,0 +1,2 @@
+ALTER TABLE user_tokens
+ADD COLUMN is_signup_token BOOLEAN NOT NULL DEFAULT FALSE;

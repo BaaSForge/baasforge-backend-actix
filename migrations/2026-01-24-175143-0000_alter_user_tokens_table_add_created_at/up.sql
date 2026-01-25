@@ -1,0 +1,2 @@
+ALTER TABLE user_tokens
+ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT now();

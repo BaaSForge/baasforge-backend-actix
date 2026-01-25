@@ -160,6 +160,8 @@ diesel::table! {
         token -> Text,
         expires_at -> Timestamptz,
         revoked -> Nullable<Bool>,
+        created_at -> Timestamptz,
+        is_signup_token -> Bool,
     }
 }
 
