@@ -1,15 +1,17 @@
 use diesel::Insertable;
 use diesel::Queryable;
+use serde::Serialize;
 
-#[derive(Debug, diesel_derive_enum::DbEnum)]
+#[derive(Debug, diesel_derive_enum::DbEnum, Serialize)]
 #[ExistingTypePath = "crate::schema::sql_types::PlatformType"]
 #[DbValueStyle = "snake_case"]
+#[serde(rename_all = "snake_case")]
 pub enum PlatformType {
     Google,
     Github,
 }
 
-#[derive(Debug, Queryable)]
+#[derive(Debug, Queryable, Serialize)]
 #[diesel(table_name = crate::schema::users)]
 pub struct User {
     pub id: i64,

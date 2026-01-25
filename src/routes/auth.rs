@@ -224,7 +224,10 @@ pub async fn handle_revoke_tokens(
         .unwrap();
 
     if existing != ids.len() as i64 {
-        let api_result = api_error("One or more token IDs do not exist or doesn't belong to you or maybe already revoked, also note current access and refresh tokens can't be revoked", json!({}));
+        let api_result = api_error(
+            "One or more token IDs do not exist or doesn't belong to you or maybe already revoked, also note current access and refresh tokens can't be revoked",
+            json!({}),
+        );
         return HttpResponse::BadRequest().json(api_result);
     }
 
@@ -234,4 +237,29 @@ pub async fn handle_revoke_tokens(
         .unwrap();
 
     HttpResponse::Ok().finish()
+}
+
+pub async fn handle_get_current_user(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let extensions = req.extensions();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to retrieve current user");
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let user = users::table
+        .find(access_payload.user_id)
+        .first::<User>(&mut conn)
+        .optional()
+        .unwrap();
+
+    match user {
+        Some(u) => {
+            HttpResponse::Ok().json(api_success("Current user fetched successfully", json!(u)))
+        }
+        None => HttpResponse::NotFound().json(api_error("User not found", json!({}))),
+    }
 }
