@@ -66,6 +66,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                     )
                     .route(
                         "/tokens",
+                        web::get()
+                            .to(auth::handle_list_tokens)
+                            .wrap(from_fn(auth_closed_guard_middleware))
+                            .wrap(from_fn(auth_closed_refresh_token_guard_middleware))
+                    )
+                    .route(
+                        "/tokens",
                         web::delete()
                             .to(auth::handle_revoke_tokens)
                             .wrap(from_fn(auth_refresh_token_maturity_guard_middleware))
