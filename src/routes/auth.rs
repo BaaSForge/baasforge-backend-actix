@@ -1,7 +1,7 @@
 use crate::libs::api_response::{api_error, api_success};
 use crate::middlewares::auth::{AccessPayload, RefreshPayload};
 // use actix_web::HttpMessage;
-use crate::models::user_tokens::{UserTokenDTO, UserTokenType};
+use crate::models::user_tokens::{UserTokenInternal, UserTokenResponse, UserTokenType};
 use crate::models::users::{PlatformType, User, UserDTO};
 use crate::routes::AppContext;
 use crate::schema::users::{full_name, id_in_platform, platform};
@@ -108,7 +108,7 @@ pub async fn handle_google_auth_callback(
     let refresh_token_cookie = create_refresh_cookie(refresh_token.clone());
 
     let new_tokens = vec![
-        UserTokenDTO {
+        UserTokenInternal {
             user_id: user.id,
             token_type: UserTokenType::Access,
             token: access_token,
@@ -116,7 +116,7 @@ pub async fn handle_google_auth_callback(
             revoked: Some(false),
             is_signup_token: is_just_signed_up,
         },
-        UserTokenDTO {
+        UserTokenInternal {
             user_id: user.id,
             token_type: UserTokenType::Refresh,
             token: refresh_token,
@@ -175,7 +175,7 @@ pub async fn handle_refresh_token(
     let mut conn = context.pool.get().expect("DB conn");
 
     diesel::insert_into(user_tokens::table)
-        .values(&UserTokenDTO {
+        .values(&UserTokenInternal {
             user_id: refresh_payload.user_id,
             token_type: UserTokenType::Access,
             token: access.clone(),
@@ -237,6 +237,30 @@ pub async fn handle_revoke_tokens(
         .unwrap();
 
     HttpResponse::Ok().finish()
+}
+
+pub async fn handle_list_tokens(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let extensions = req.extensions();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to list tokens");
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let tokens = user_tokens::table
+        .filter(user_tokens::user_id.eq(access_payload.user_id))
+        .filter(user_tokens::revoked.eq(false))
+        .select(UserTokenResponse::as_select())
+        .load::<UserTokenResponse>(&mut conn)
+        .unwrap_or_default();
+
+    HttpResponse::Ok().json(api_success(
+        "User tokens fetched successfully",
+        json!(tokens),
+    ))
 }
 
 pub async fn handle_get_current_user(
