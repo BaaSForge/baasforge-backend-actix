@@ -8,11 +8,11 @@ use serde_json::json;
 pub async fn handle_list_packages(context: web::Data<AppContext>) -> HttpResponse {
     let mut conn = context.pool.get().expect("DB conn");
 
-    let tokens = packages::table
+    let packages = packages::table
         .filter(packages::is_active.eq(true))
         .select(Package::as_select())
         .load::<Package>(&mut conn)
         .unwrap_or_default();
 
-    HttpResponse::Ok().json(api_success("Packages fetched successfully", json!(tokens)))
+    HttpResponse::Ok().json(api_success("Packages fetched successfully", json!(packages)))
 }

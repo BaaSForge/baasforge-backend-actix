@@ -1,0 +1,2 @@
+ALTER TABLE payments
+ADD COLUMN package_is_tiral BOOLEAN NOT NULL DEFAULT FALSE;

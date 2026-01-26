@@ -1,5 +1,7 @@
 pub mod auth;
-pub mod packages;
+pub mod package;
+pub mod purchase;
+pub mod payment;
 use crate::configs::Settings;
 use crate::database::{DbPool, establish_pool};
 use crate::middlewares::auth::{
@@ -92,7 +94,19 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                     .route(
                         "/packages",
                         web::get()
-                            .to(packages::handle_list_packages)
+                            .to(package::handle_list_packages)
+                    )
+                    .route(
+                        "/purchase",
+                        web::post()
+                            .to(purchase::handle_initiate_purchase)
+                            .wrap(from_fn(auth_closed_guard_middleware))
+                    )
+                    .route(
+                        "/payments",
+                        web::get()
+                            .to(payment::handle_list_user_payments)
+                            .wrap(from_fn(auth_closed_guard_middleware))
                     )
             )
     })

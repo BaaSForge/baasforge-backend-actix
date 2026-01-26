@@ -78,6 +78,7 @@ diesel::table! {
         is_success -> Bool,
         gateway_metadata -> Nullable<Jsonb>,
         expires_at -> Nullable<Timestamptz>,
+        package_is_tiral -> Bool,
     }
 }
 
