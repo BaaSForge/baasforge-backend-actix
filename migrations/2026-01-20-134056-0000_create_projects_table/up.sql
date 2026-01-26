@@ -1,4 +1,4 @@
-CREATE TYPE framework_type AS ENUM ('mcv');
+CREATE TYPE framework_type AS ENUM ('mvc');
 
 CREATE TYPE language_type AS ENUM ('rust');
 

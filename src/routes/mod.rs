@@ -1,13 +1,16 @@
 pub mod auth;
 pub mod package;
-pub mod purchase;
 pub mod payment;
+pub mod project;
+pub mod purchase;
+
 use crate::configs::Settings;
 use crate::database::{DbPool, establish_pool};
 use crate::middlewares::auth::{
-    auth_refresh_token_maturity_guard_middleware, auth_closed_guard_middleware,
-    auth_closed_refresh_token_guard_middleware, auth_opened_guard_middleware,
+    auth_closed_guard_middleware, auth_closed_refresh_token_guard_middleware,
+    auth_opened_guard_middleware, auth_refresh_token_maturity_guard_middleware,
 };
+use crate::middlewares::payment::paid_features_guard_middleware_factory;
 use actix_web::Result;
 use actix_web::middleware::from_fn;
 use actix_web::web;
@@ -72,7 +75,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         web::get()
                             .to(auth::handle_list_tokens)
                             .wrap(from_fn(auth_closed_guard_middleware))
-                            .wrap(from_fn(auth_closed_refresh_token_guard_middleware))
+                            .wrap(from_fn(auth_closed_refresh_token_guard_middleware)),
                     )
                     .route(
                         "/tokens",
@@ -80,34 +83,46 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .to(auth::handle_revoke_tokens)
                             .wrap(from_fn(auth_refresh_token_maturity_guard_middleware))
                             .wrap(from_fn(auth_closed_refresh_token_guard_middleware))
-                            .wrap(from_fn(auth_closed_guard_middleware))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
                         "/me",
                         web::get()
                             .to(auth::handle_get_current_user)
-                            .wrap(from_fn(auth_closed_guard_middleware))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
                     ),
             )
             .service(
                 web::scope("/api/v1/payment")
-                    .route(
-                        "/packages",
-                        web::get()
-                            .to(package::handle_list_packages)
-                    )
+                    .route("/packages", web::get().to(package::handle_list_packages))
                     .route(
                         "/purchase",
                         web::post()
                             .to(purchase::handle_initiate_purchase)
-                            .wrap(from_fn(auth_closed_guard_middleware))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
                         "/payments",
                         web::get()
                             .to(payment::handle_list_user_payments)
-                            .wrap(from_fn(auth_closed_guard_middleware))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    ),
+            )
+            .service(
+                web::scope("/api/v1/projects")
+                    .route(
+                        "/projects",
+                        web::get()
+                            .to(project::handle_list_projects)
+                            .wrap(from_fn(auth_closed_guard_middleware)),
                     )
+                    .route(
+                        "/projects",
+                        web::post()
+                            .to(project::handle_create_project)
+                            .wrap(from_fn(paid_features_guard_middleware_factory(vec![])))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    ),
             )
     })
     .bind(("127.0.0.1", port))?
