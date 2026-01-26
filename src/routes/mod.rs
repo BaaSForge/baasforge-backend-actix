@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod packages;
 use crate::configs::Settings;
 use crate::database::{DbPool, establish_pool};
 use crate::middlewares::auth::{
@@ -85,6 +86,14 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .to(auth::handle_get_current_user)
                             .wrap(from_fn(auth_closed_guard_middleware))
                     ),
+            )
+            .service(
+                web::scope("/api/v1/payment")
+                    .route(
+                        "/packages",
+                        web::get()
+                            .to(packages::handle_list_packages)
+                    )
             )
     })
     .bind(("127.0.0.1", port))?

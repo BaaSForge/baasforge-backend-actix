@@ -59,6 +59,7 @@ diesel::table! {
         price -> Float8,
         discount_percent -> Nullable<Int4>,
         is_trial -> Nullable<Bool>,
+        is_active -> Bool,
     }
 }
 
