@@ -35,6 +35,13 @@ pub mod sql_types {
 }
 
 diesel::table! {
+    app_settings (key) {
+        key -> Text,
+        value -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::PlatformEnvironmentType;
     use super::sql_types::DbClusterType;
@@ -198,6 +205,7 @@ diesel::joinable!(projects -> users (owner_user_id));
 diesel::joinable!(user_tokens -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    app_settings,
     db_clusters,
     packages,
     payments,

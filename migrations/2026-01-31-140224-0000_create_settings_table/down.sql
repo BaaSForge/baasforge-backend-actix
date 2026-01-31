@@ -1,1 +1,1 @@
-CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT);
+DROP TABLE IF EXISTS app_settings;
