@@ -1050,6 +1050,7 @@ dependencies = [
  "log",
  "openai",
  "redis 1.0.2",
+ "regex",
  "reqwest 0.13.1",
  "ring",
  "rust-s3",

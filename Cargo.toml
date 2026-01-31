@@ -139,3 +139,4 @@ brevo = "1.0.0"
 # Error Handling
 anyhow = "1.0.100"
 thiserror = "2.0.18"
+regex = { version = "1.12.2", features = ["unicode-perl", "perf"] }

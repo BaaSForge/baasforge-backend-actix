@@ -11,6 +11,7 @@ use crate::middlewares::auth::{
     auth_opened_guard_middleware, auth_refresh_token_maturity_guard_middleware,
 };
 use crate::middlewares::payment::paid_features_guard_middleware_factory;
+use crate::middlewares::project::projects_owner_guard_middleware_factory;
 use actix_web::Result;
 use actix_web::middleware::from_fn;
 use actix_web::web;
@@ -109,7 +110,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                     ),
             )
             .service(
-                web::scope("/api/v1/projects")
+                web::scope("/api/v1/platform")
                     .route(
                         "/projects",
                         web::get()
@@ -122,7 +123,44 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .to(project::handle_create_project)
                             .wrap(from_fn(paid_features_guard_middleware_factory(vec![])))
                             .wrap(from_fn(auth_closed_guard_middleware)),
-                    ),
+                    )
+                    .route(
+                        "/projects/{id}",
+                        web::delete()
+                            .to(project::handle_delete_project)
+                            .wrap(from_fn(auth_refresh_token_maturity_guard_middleware))
+                            .wrap(from_fn(auth_closed_refresh_token_guard_middleware))
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}",
+                        web::get()
+                            .to(project::handle_get_project)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/runtimes",
+                        web::get()
+                            .to(project::handle_list_project_runtimes)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/releases",
+                        web::get()
+                            .to(project::handle_list_project_releases)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/functions",
+                        web::get()
+                            .to(project::handle_list_project_functions)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
             )
     })
     .bind(("127.0.0.1", port))?

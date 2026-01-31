@@ -1,7 +1,13 @@
 use crate::libs::api_response::api_error;
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
-use crate::models::projects::{FrameworkType, LanguageType, ProjectInsert, ProjectResponse};
+use crate::models::projects::{
+    FrameworkType, LanguageType, ProjectFunctionResponse, ProjectInsert, ProjectReleaseResponse,
+    ProjectResponse, ProjectRuntimeResponse,
+};
+use crate::schema::project_functions;
+use crate::schema::project_releases;
+use crate::schema::project_runtimes;
 use crate::schema::projects;
 use crate::services::payment::{
     PaidFeature, most_complete_needed_package, user_missing_paid_features,
@@ -9,6 +15,7 @@ use crate::services::payment::{
 use crate::{libs::api_response::api_success, routes::AppContext};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use diesel::prelude::*;
+use diesel::result::Error;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -36,7 +43,7 @@ pub async fn handle_create_project(
 
     let mut conn = context.pool.get().expect("DB conn");
 
-    let projects: Vec<_> = projects::table
+    let projects = projects::table
         .filter(projects::owner_user_id.eq(access_payload.user_id))
         .select(ProjectResponse::as_select())
         .load::<ProjectResponse>(&mut conn)
@@ -63,12 +70,13 @@ pub async fn handle_create_project(
             ));
         }
     }
-    
-    if projects.iter().any(|p| p.slug == body.slug || p.name == body.name) {
-        return HttpResponse::BadRequest().json(api_error(
-            "Project slug and name must be unique",
-            json!({}),
-        ));
+
+    if projects
+        .iter()
+        .any(|p| p.slug == body.slug || p.name == body.name)
+    {
+        return HttpResponse::BadRequest()
+            .json(api_error("Project slug and name must be unique", json!({})));
     }
 
     let new_project = ProjectInsert {
@@ -88,6 +96,92 @@ pub async fn handle_create_project(
     HttpResponse::Ok().json(api_success("Project created successfully", json!(project)))
 }
 
+pub async fn handle_get_project(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to get project");
+
+    let project_id = path.into_inner();
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let project = projects::table
+        .filter(projects::owner_user_id.eq(access_payload.user_id))
+        .filter(projects::id.eq(project_id))
+        .select(ProjectResponse::as_select())
+        .first::<ProjectResponse>(&mut conn)
+        .optional()
+        .expect("DB query failed");
+
+    match project {
+        Some(proj) => {
+            HttpResponse::Ok().json(api_success("Project fetched successfully", json!(proj)))
+        }
+        None => HttpResponse::NotFound().json(api_error("Project not found", json!({}))),
+    }
+}
+
+pub async fn handle_delete_project(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+) -> HttpResponse {
+    let extensions = req.extensions();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist");
+
+    let project_id = path.into_inner();
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    // TODO: add messages to queue to detach runtimes
+
+    // TODO: create a saga which removes rows exactly when all side systems are detached successfully
+    let res = conn.transaction::<_, Error, _>(|conn| {
+        diesel::delete(project_runtimes::table.filter(project_runtimes::project_id.eq(project_id)))
+            .execute(conn)?;
+
+        diesel::delete(
+            project_functions::table.filter(project_functions::project_id.eq(project_id)),
+        )
+        .execute(conn)?;
+
+        diesel::delete(project_releases::table.filter(project_releases::project_id.eq(project_id)))
+            .execute(conn)?;
+        
+        diesel::delete(
+            projects::table
+                .filter(projects::id.eq(project_id))
+                .filter(projects::owner_user_id.eq(access_payload.user_id)),
+        )
+        .execute(conn)?;
+
+        Ok(())
+    });
+
+    match res {
+        Ok(_) => HttpResponse::Ok().json(api_success(
+            "Project and it's runtimes, functions and releases has been deleted successfully",
+            json!({ "project_id": project_id }),
+        )),
+        Err(Error::NotFound) => {
+            HttpResponse::NotFound().json(api_error("Project not found", json!({})))
+        }
+        Err(e) => {
+            eprintln!("DB transaction error: {:?}", e);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
 pub async fn handle_list_projects(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -100,7 +194,7 @@ pub async fn handle_list_projects(
 
     let mut conn = context.pool.get().expect("DB conn");
 
-    let projects: Vec<_> = projects::table
+    let projects = projects::table
         .filter(projects::owner_user_id.eq(access_payload.user_id))
         .select(ProjectResponse::as_select())
         .load::<ProjectResponse>(&mut conn)
@@ -109,5 +203,92 @@ pub async fn handle_list_projects(
     HttpResponse::Ok().json(api_success(
         "Projects fetched successfully",
         json!(projects),
+    ))
+}
+
+pub async fn handle_list_project_functions(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to list project functions");
+
+    let project_id = path.into_inner();
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let functions = project_functions::table
+        .inner_join(projects::table.on(project_functions::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(access_payload.user_id))
+        .filter(project_functions::project_id.eq(project_id))
+        .select(ProjectFunctionResponse::as_select())
+        .load::<ProjectFunctionResponse>(&mut conn)
+        .unwrap_or_default();
+
+    HttpResponse::Ok().json(api_success(
+        "Project functions fetched successfully",
+        json!(functions),
+    ))
+}
+
+pub async fn handle_list_project_runtimes(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to list project runtimes");
+
+    let project_id = path.into_inner();
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let runtimes = project_runtimes::table
+        .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(access_payload.user_id))
+        .filter(project_runtimes::project_id.eq(project_id))
+        .select(ProjectRuntimeResponse::as_select())
+        .load::<ProjectRuntimeResponse>(&mut conn)
+        .unwrap_or_default();
+
+    HttpResponse::Ok().json(api_success(
+        "Project runtimes fetched successfully",
+        json!(runtimes),
+    ))
+}
+
+pub async fn handle_list_project_releases(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to list project releases");
+
+    let project_id = path.into_inner();
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let releases = project_releases::table
+        .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(access_payload.user_id))
+        .filter(project_releases::project_id.eq(project_id))
+        .select(ProjectReleaseResponse::as_select())
+        .load::<ProjectReleaseResponse>(&mut conn)
+        .unwrap_or_default();
+
+    HttpResponse::Ok().json(api_success(
+        "Project releases fetched successfully",
+        json!(releases),
     ))
 }
