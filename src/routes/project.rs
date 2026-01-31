@@ -127,6 +127,56 @@ pub async fn handle_get_project(
     }
 }
 
+#[derive(Deserialize)]
+pub struct ProjectPatchRequest {
+    pub name: String,
+}
+
+pub async fn handle_patch_project(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+    body: web::Json<ProjectPatchRequest>,
+) -> HttpResponse {
+    let extensions = req.extensions();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to patch project");
+
+    let project_id = path.into_inner();
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let exists = projects::table
+        .filter(projects::owner_user_id.eq(access_payload.user_id))
+        .filter(projects::name.eq(&body.name))
+        .filter(projects::id.ne(project_id))
+        .select(projects::id)
+        .first::<i64>(&mut conn)
+        .optional()
+        .expect("DB query failed");
+
+    if exists.is_some() {
+        return HttpResponse::BadRequest()
+            .json(api_error("Project name must be unique", json!({})));
+    }
+
+    let updated_project = diesel::update(
+        projects::table
+            .filter(projects::owner_user_id.eq(access_payload.user_id))
+            .filter(projects::id.eq(project_id)),
+    )
+    .set(projects::name.eq(&body.name))
+    .returning(ProjectResponse::as_select())
+    .get_result::<ProjectResponse>(&mut conn)
+    .optional()
+    .expect("DB update failed");
+
+    match updated_project {
+        Some(proj) => HttpResponse::Ok().json(api_success("Project name updated", json!(proj))),
+        None => HttpResponse::NotFound().json(api_error("Project not found", json!({}))),
+    }
+}
+
 pub async fn handle_delete_project(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -156,7 +206,7 @@ pub async fn handle_delete_project(
 
         diesel::delete(project_releases::table.filter(project_releases::project_id.eq(project_id)))
             .execute(conn)?;
-        
+
         diesel::delete(
             projects::table
                 .filter(projects::id.eq(project_id))

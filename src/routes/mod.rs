@@ -135,6 +135,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                     )
                     .route(
                         "/projects/{id}",
+                        web::patch()
+                            .to(project::handle_patch_project)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}",
                         web::get()
                             .to(project::handle_get_project)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
