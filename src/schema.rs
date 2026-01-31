@@ -83,9 +83,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    use diesel::sql_types::*;
-    use super::sql_types::DeploymentStatusType;
-
     project_functions (id) {
         id -> Int8,
         project_id -> Int8,
