@@ -59,6 +59,11 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         web::get()
                             .to(test::handle_get_first_server_cluster_nodes)
                     )
+                    .route(
+                        "/first-cluster-deploy",
+                        web::post()
+                            .to(test::handle_deploy_hello_world_pod)
+                    )
             )
             .service(
                 web::scope("/api/v1/auth")

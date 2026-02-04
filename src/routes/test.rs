@@ -288,3 +288,64 @@ pub async fn handle_get_first_server_cluster_nodes(context: web::Data<AppContext
         )),
     }
 }
+
+pub async fn handle_deploy_hello_world_pod(context: web::Data<AppContext>) -> HttpResponse {
+    use k8s_openapi::api::core::v1::{Container, Pod, PodSpec};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let server_cluster = match server_clusters::table
+        .select(ServerCluster::as_select())
+        .first::<ServerCluster>(&mut conn)
+        .optional()
+        .expect("DB query failed")
+    {
+        Some(cluster) => cluster,
+        None => {
+            return HttpResponse::NotFound().json(api_error("No server cluster found", json!({})));
+        }
+    };
+
+    let k8s_client =
+        match K8sClient::from_server_cluster(&server_cluster, Some("default".to_string())).await {
+            Ok(client) => client,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(api_error(
+                    &format!("Failed to create K8s client: {}", e),
+                    json!({}),
+                ));
+            }
+        };
+
+    let pods: Api<Pod> = Api::namespaced(k8s_client.client, &k8s_client.namespace);
+
+    let hello_pod = Pod {
+        metadata: ObjectMeta {
+            name: Some("hello-world-pod".to_string()),
+            namespace: Some(k8s_client.namespace.clone()),
+            ..Default::default()
+        },
+        spec: Some(PodSpec {
+            containers: vec![Container {
+                name: "hello-world".to_string(),
+                image: Some("hello-world:latest".to_string()),
+                ..Default::default()
+            }],
+            restart_policy: Some("Never".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    match pods.create(&Default::default(), &hello_pod).await {
+        Ok(pod) => HttpResponse::Ok().json(api_success(
+            "Pod created successfully",
+            json!({"name": pod.metadata.name}),
+        )),
+        Err(e) => HttpResponse::InternalServerError().json(api_error(
+            &format!("Failed to deploy pod: {}", e),
+            json!({}),
+        )),
+    }
+}
