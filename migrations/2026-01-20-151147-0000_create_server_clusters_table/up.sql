@@ -1,4 +1,4 @@
-CREATE TYPE server_cluster_type AS ENUM ('dockerized_v1', 'aws_lambda');
+CREATE TYPE server_cluster_type AS ENUM ('k8s');
 
 CREATE TABLE server_clusters (
     id BIGSERIAL PRIMARY KEY,

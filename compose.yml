@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17.6-alpine3.21
+    container_name: postgres_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: baal_db
+      POSTGRES_USER: baal
+      POSTGRES_PASSWORD: a4Z3AAga678ss2113sagh
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5632:5432"
+    volumes:
+      - ./.dev/postgres_data:/var/lib/postgresql/data

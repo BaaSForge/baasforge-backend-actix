@@ -3,6 +3,7 @@ pub mod package;
 pub mod payment;
 pub mod project;
 pub mod purchase;
+pub mod test;
 
 use crate::configs::Settings;
 use crate::database::{DbPool, establish_pool};
@@ -12,6 +13,7 @@ use crate::middlewares::auth::{
 };
 use crate::middlewares::payment::paid_features_guard_middleware_factory;
 use crate::middlewares::project::projects_owner_guard_middleware_factory;
+use crate::middlewares::test::test_closed_stage_guard_middleware;
 use actix_web::Result;
 use actix_web::middleware::from_fn;
 use actix_web::web;
@@ -44,6 +46,15 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(app_context.clone()))
+            .service(
+                web::scope("/api/v1/test")
+                    .wrap(from_fn(test_closed_stage_guard_middleware))
+                    .route(
+                        "/server-cluster",
+                        web::get()
+                            .to(test::handle_get_first_server_cluster)
+                    )
+            )
             .service(
                 web::scope("/api/v1/auth")
                     .route(
