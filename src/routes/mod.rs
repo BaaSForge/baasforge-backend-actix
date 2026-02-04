@@ -50,9 +50,14 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                 web::scope("/api/v1/test")
                     .wrap(from_fn(test_closed_stage_guard_middleware))
                     .route(
-                        "/server-cluster",
+                        "/first-cluster-pods",
                         web::get()
                             .to(test::handle_get_first_server_cluster)
+                    )
+                    .route(
+                        "/first-cluster-nodes",
+                        web::get()
+                            .to(test::handle_get_first_server_cluster_nodes)
                     )
             )
             .service(

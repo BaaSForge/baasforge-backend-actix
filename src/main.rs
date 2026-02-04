@@ -1,15 +1,20 @@
 mod configs;
-mod routes;
-mod libs;
-mod services;
-mod models;
 mod database;
+mod libs;
 mod middlewares;
+mod models;
+mod routes;
 mod schema;
+mod services;
+use rustls::crypto::ring::default_provider;
 
 #[actix_web::main]
 async fn main() -> Result<(), actix_web::Error> {
-  routes::start_server().await?;
+    default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
 
-  Ok(())
+    routes::start_server().await?;
+
+    Ok(())
 }
