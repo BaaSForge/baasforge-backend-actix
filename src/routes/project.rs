@@ -2,8 +2,8 @@ use crate::libs::api_response::api_error;
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
-    FrameworkType, LanguageType, ProjectUnitResponse, ProjectInsert, ProjectReleaseResponse,
-    ProjectResponse, ProjectRuntimeResponse,
+    FrameworkType, LanguageType, PlatformEnvironmentType, ProjectUnitResponse, ProjectInsert,
+    ProjectReleaseResponse, ProjectResponse, ProjectRuntimeResponse,
 };
 use crate::schema::project_units;
 use crate::schema::project_releases;
@@ -286,10 +286,16 @@ pub async fn handle_list_project_units(
     ))
 }
 
+#[derive(Deserialize)]
+pub struct ListProjectRuntimesQuery {
+    pub stage: Option<bool>,
+}
+
 pub async fn handle_list_project_runtimes(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<i64>,
+    query: web::Query<ListProjectRuntimesQuery>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -301,13 +307,31 @@ pub async fn handle_list_project_runtimes(
 
     let mut conn = context.pool.get().expect("DB conn");
 
-    let runtimes = project_runtimes::table
-        .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
-        .filter(projects::owner_user_id.eq(access_payload.user_id))
-        .filter(project_runtimes::project_id.eq(project_id))
-        .select(ProjectRuntimeResponse::as_select())
-        .load::<ProjectRuntimeResponse>(&mut conn)
-        .unwrap_or_default();
+    let env_filter = query.stage.map(|is_stage| {
+        if is_stage {
+            PlatformEnvironmentType::Stage
+        } else {
+            PlatformEnvironmentType::Prod
+        }
+    });
+
+    let runtimes = match env_filter {
+        Some(env) => project_runtimes::table
+            .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(access_payload.user_id))
+            .filter(project_runtimes::project_id.eq(project_id))
+            .filter(project_runtimes::environment.eq(env))
+            .select(ProjectRuntimeResponse::as_select())
+            .load::<ProjectRuntimeResponse>(&mut conn)
+            .unwrap_or_default(),
+        None => project_runtimes::table
+            .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(access_payload.user_id))
+            .filter(project_runtimes::project_id.eq(project_id))
+            .select(ProjectRuntimeResponse::as_select())
+            .load::<ProjectRuntimeResponse>(&mut conn)
+            .unwrap_or_default(),
+    };
 
     HttpResponse::Ok().json(api_success(
         "Project runtimes fetched successfully",
