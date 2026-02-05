@@ -85,6 +85,8 @@ pub struct ProjectUnitResponse {
     pub version: String,
     pub parent_unit_id: Option<i64>,
     pub unit_type: ProjectUnitType,
+    pub is_draft: bool,
+    pub chat_session_id: Option<i64>,
 }
 
 

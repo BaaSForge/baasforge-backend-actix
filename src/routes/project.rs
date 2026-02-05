@@ -275,6 +275,7 @@ pub async fn handle_list_project_units(
         .inner_join(projects::table.on(project_units::project_id.eq(projects::id)))
         .filter(projects::owner_user_id.eq(access_payload.user_id))
         .filter(project_units::project_id.eq(project_id))
+        .filter(project_units::is_draft.eq(false))
         .select(ProjectUnitResponse::as_select())
         .load::<ProjectUnitResponse>(&mut conn)
         .unwrap_or_default();

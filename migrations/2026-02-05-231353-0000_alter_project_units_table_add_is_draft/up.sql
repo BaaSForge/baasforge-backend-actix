@@ -1,0 +1,1 @@
+ALTER TABLE project_units ADD COLUMN is_draft BOOLEAN NOT NULL DEFAULT false;

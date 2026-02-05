@@ -173,6 +173,8 @@ diesel::table! {
         version -> Varchar,
         parent_unit_id -> Nullable<Int8>,
         unit_type -> ProjectUnitType,
+        is_draft -> Bool,
+        chat_session_id -> Nullable<Int8>,
     }
 }
 
@@ -246,6 +248,7 @@ diesel::joinable!(project_releases -> projects (project_id));
 diesel::joinable!(project_runtimes -> db_clusters (db_cluster_id));
 diesel::joinable!(project_runtimes -> projects (project_id));
 diesel::joinable!(project_runtimes -> server_clusters (server_cluster_id));
+diesel::joinable!(project_units -> chat_sessions (chat_session_id));
 diesel::joinable!(project_units -> projects (project_id));
 diesel::joinable!(projects -> users (owner_user_id));
 diesel::joinable!(user_tokens -> users (user_id));
