@@ -208,6 +208,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .to(chat::handle_list_chat_session_messages)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/chat-sessions/{session_id}/messages",
+                        web::post()
+                            .to(chat::handle_create_chat_session_message)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
                     ),
             )
     })

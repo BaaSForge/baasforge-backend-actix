@@ -1,13 +1,15 @@
-use crate::libs::api_response::api_success;
+use crate::libs::api_response::{api_error, api_success};
 use crate::middlewares::auth::AccessPayload;
-use crate::models::chat_messages::ChatMessageResponse;
+use crate::models::chat_messages::{
+    ChatMessageCreateBody, ChatMessageInsert, ChatMessageResponse, ChatMessageType, ChatSessionRoleType,
+};
 use crate::models::chat_sessions::{ChatSessionInsert, ChatSessionResponse};
 use crate::routes::AppContext;
-use chrono::Utc;
 use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
 use crate::schema::projects;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
+use chrono::Utc;
 use diesel::prelude::*;
 use serde_json::json;
 
@@ -69,6 +71,57 @@ pub async fn handle_list_chat_session_messages(
     HttpResponse::Ok().json(api_success(
         "Chat session messages fetched successfully",
         json!(messages),
+    ))
+}
+
+pub async fn handle_create_chat_session_message(
+    context: web::Data<AppContext>,
+    path: web::Path<(i64, i64)>,
+    body: web::Json<ChatMessageCreateBody>,
+) -> HttpResponse {
+    let (project_id, session_id) = path.into_inner();
+    let body = body.into_inner();
+
+    if body.type_ != ChatMessageType::Text {
+        return HttpResponse::BadRequest().json(api_error(
+            "Only text type messages are allowed for this endpoint",
+            json!({}),
+        ));
+    }
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    match chat_sessions::table
+        .filter(chat_sessions::id.eq(session_id))
+        .filter(chat_sessions::project_id.eq(project_id))
+        .select(chat_sessions::id)
+        .get_result::<i64>(&mut conn)
+    {
+        Ok(_) => {}
+        Err(diesel::result::Error::NotFound) => {
+            return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+    }
+
+    let insert = ChatMessageInsert {
+        chat_session_id: session_id,
+        role: ChatSessionRoleType::User,
+        type_: body.type_,
+        payload: body.payload,
+    };
+
+    let message: ChatMessageResponse = diesel::insert_into(chat_messages::table)
+        .values(&insert)
+        .returning(ChatMessageResponse::as_select())
+        .get_result(&mut conn)
+        .expect("Insert chat message failed");
+
+    HttpResponse::Ok().json(api_success(
+        "Chat message created successfully",
+        json!(message),
     ))
 }
 
