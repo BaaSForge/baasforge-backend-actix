@@ -2,13 +2,13 @@ use crate::libs::api_response::api_error;
 use crate::models::server_clusters::ServerCluster;
 use crate::schema::server_clusters;
 use crate::services::k8s::K8sClient;
+use crate::services::rabbit::ensure_queue_channel;
 use crate::{libs::api_response::api_success, routes::AppContext};
 use actix_web::{HttpResponse, web};
 use diesel::prelude::*;
 use k8s_openapi::api::core::v1::{Node, Pod};
-use kube::{
-    api::{Api, ListParams},
-};
+use kube::api::{Api, ListParams};
+use lapin::{BasicProperties, options::*};
 use serde_json::json;
 
 pub async fn handle_get_first_server_cluster(context: web::Data<AppContext>) -> HttpResponse {
@@ -248,4 +248,52 @@ pub async fn handle_deploy_hello_world_pod(context: web::Data<AppContext>) -> Ht
             json!({}),
         )),
     }
+}
+
+pub async fn handle_rabbit_test(context: web::Data<AppContext>) -> HttpResponse {
+    let (_, channel) = match ensure_queue_channel(&context.settings.rabbit_url, "channel1").await {
+        Ok(t) => t,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(api_error(
+                &format!("Failed to ensure queue channel: {}", e),
+                json!({}),
+            ));
+        }
+    };
+
+    let payload = b"Hello from Rust!";
+
+    let confirm = match channel
+        .basic_publish(
+            "",
+            "channel1",
+            BasicPublishOptions::default(),
+            payload,
+            BasicProperties::default().with_delivery_mode(2),
+        )
+        .await
+    {
+        Ok(fut) => match fut.await {
+            Ok(c) => c,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(api_error(
+                    &format!("Failed to confirm publish: {}", e),
+                    json!({}),
+                ));
+            }
+        },
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(api_error(
+                &format!("Failed to publish message: {}", e),
+                json!({}),
+            ));
+        }
+    };
+
+    println!("Message published: {:?}", confirm);
+
+    HttpResponse::Ok().json(api_success(
+        "RabbitMQ test successful",
+        json!({"queue_name": "channel1"}),
+    ))
 }

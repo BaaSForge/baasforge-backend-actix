@@ -64,6 +64,11 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         web::post()
                             .to(test::handle_deploy_hello_world_pod)
                     )
+                    .route(
+                        "/rabbit-test",
+                        web::post()
+                            .to(test::handle_rabbit_test)
+                    )
             )
             .service(
                 web::scope("/api/v1/auth")

@@ -32,6 +32,7 @@ pub struct Settings {
   pub pg_database_url: String,
   pub auth_access_token_secret: String,
   pub auth_refresh_token_secret: String,
+  pub rabbit_url: String,
 }
 
 impl Settings {
@@ -45,6 +46,7 @@ impl Settings {
     let pg_database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let auth_access_token_secret = env::var("AUTH_ACCESS_TOKEN_SECRET").expect("AUTH_ACCESS_TOKEN_SECRET must be set");
     let auth_refresh_token_secret = env::var("AUTH_REFRESH_TOKEN_SECRET").expect("AUTH_REFRESH_TOKEN_SECRET must be set");
+    let rabbit_url = env::var("RABBIT_URL").expect("RABBIT_URL must be set");
 
     Ok(Settings {
       port,
@@ -52,6 +54,7 @@ impl Settings {
       pg_database_url,
       auth_access_token_secret,
       auth_refresh_token_secret,
+      rabbit_url,
     })
   }
 }
