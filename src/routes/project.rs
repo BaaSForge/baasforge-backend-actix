@@ -2,10 +2,10 @@ use crate::libs::api_response::api_error;
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
-    FrameworkType, LanguageType, ProjectFunctionResponse, ProjectInsert, ProjectReleaseResponse,
+    FrameworkType, LanguageType, ProjectUnitResponse, ProjectInsert, ProjectReleaseResponse,
     ProjectResponse, ProjectRuntimeResponse,
 };
-use crate::schema::project_functions;
+use crate::schema::project_units;
 use crate::schema::project_releases;
 use crate::schema::project_runtimes;
 use crate::schema::projects;
@@ -200,7 +200,7 @@ pub async fn handle_delete_project(
             .execute(conn)?;
 
         diesel::delete(
-            project_functions::table.filter(project_functions::project_id.eq(project_id)),
+            project_units::table.filter(project_units::project_id.eq(project_id)),
         )
         .execute(conn)?;
 
@@ -219,7 +219,7 @@ pub async fn handle_delete_project(
 
     match res {
         Ok(_) => HttpResponse::Ok().json(api_success(
-            "Project and it's runtimes, functions and releases has been deleted successfully",
+            "Project and it's runtimes, units and releases has been deleted successfully",
             json!({ "project_id": project_id }),
         )),
         Err(Error::NotFound) => {
@@ -256,7 +256,7 @@ pub async fn handle_list_projects(
     ))
 }
 
-pub async fn handle_list_project_functions(
+pub async fn handle_list_project_units(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<i64>,
@@ -265,23 +265,23 @@ pub async fn handle_list_project_functions(
 
     let access_payload = extensions
         .get::<AccessPayload>()
-        .expect("AccessPayload must exist to list project functions");
+        .expect("AccessPayload must exist to list project units");
 
     let project_id = path.into_inner();
 
     let mut conn = context.pool.get().expect("DB conn");
 
-    let functions = project_functions::table
-        .inner_join(projects::table.on(project_functions::project_id.eq(projects::id)))
+    let units = project_units::table
+        .inner_join(projects::table.on(project_units::project_id.eq(projects::id)))
         .filter(projects::owner_user_id.eq(access_payload.user_id))
-        .filter(project_functions::project_id.eq(project_id))
-        .select(ProjectFunctionResponse::as_select())
-        .load::<ProjectFunctionResponse>(&mut conn)
+        .filter(project_units::project_id.eq(project_id))
+        .select(ProjectUnitResponse::as_select())
+        .load::<ProjectUnitResponse>(&mut conn)
         .unwrap_or_default();
 
     HttpResponse::Ok().json(api_success(
-        "Project functions fetched successfully",
-        json!(functions),
+        "Project units fetched successfully",
+        json!(units),
     ))
 }
 

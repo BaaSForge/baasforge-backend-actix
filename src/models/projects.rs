@@ -44,6 +44,14 @@ pub enum PlatformEnvironmentType {
     Prod
 }
 
+#[derive(Debug, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
+#[ExistingTypePath = "crate::schema::sql_types::ProjectUnitType"]
+#[DbValueStyle = "snake_case"]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectUnitType {
+    Controller,
+}
+
 #[derive(Insertable)]
 #[diesel(table_name = crate::schema::projects)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -67,15 +75,16 @@ pub struct ProjectResponse {
 }
 
 #[derive(Serialize, Queryable, Selectable)]
-#[diesel(table_name = crate::schema::project_functions)]
+#[diesel(table_name = crate::schema::project_units)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
-pub struct ProjectFunctionResponse {
+pub struct ProjectUnitResponse {
     pub id: i64,
     pub project_id: i64,
     pub code: Option<String>,
     pub explanation: Option<String>,
     pub version: String,
-    pub parent_function_id: Option<i64>,
+    pub parent_unit_id: Option<i64>,
+    pub unit_type: ProjectUnitType,
 }
 
 
@@ -105,5 +114,5 @@ pub struct ProjectReleaseResponse {
     pub id: i64,
     pub project_id: i64,
     pub version: String,
-    pub functions_metadata: Option<Value>,
+    pub units_metadata: Option<Value>,
 }
