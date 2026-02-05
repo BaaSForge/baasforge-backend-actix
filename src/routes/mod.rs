@@ -203,6 +203,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
+                        "/projects/{id}/chat-sessions/{session_id}",
+                        web::get()
+                            .to(chat::handle_get_project_chat_session)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
                         "/projects/{id}/chat-sessions/{session_id}/messages",
                         web::get()
                             .to(chat::handle_list_chat_session_messages)

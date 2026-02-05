@@ -4,11 +4,14 @@ use crate::models::chat_messages::{
     ChatMessageCreateBody, ChatMessageInsert, ChatMessageResponse, ChatMessageType,
     ChatSessionRoleType,
 };
-use crate::models::chat_sessions::{ChatSessionInsert, ChatSessionResponse};
-use crate::models::projects::ProjectUnitResponse;
+use crate::models::chat_sessions::{
+    ChatSessionInsert, ChatSessionResponse, ChatSessionWithProjectRuntimeResponse,
+};
+use crate::models::projects::{ProjectRuntimeResponse, ProjectUnitResponse};
 use crate::routes::AppContext;
 use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
+use crate::schema::project_runtimes;
 use crate::schema::project_units;
 use crate::schema::projects;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
@@ -42,6 +45,60 @@ pub async fn handle_list_project_chat_sessions(
     HttpResponse::Ok().json(api_success(
         "Project chat sessions fetched successfully",
         json!(sessions),
+    ))
+}
+
+pub async fn handle_get_project_chat_session(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(i64, i64)>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to get project chat session");
+
+    let (project_id, session_id) = path.into_inner();
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let session = match chat_sessions::table
+        .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(access_payload.user_id))
+        .filter(chat_sessions::project_id.eq(project_id))
+        .filter(chat_sessions::id.eq(session_id))
+        .select(ChatSessionResponse::as_select())
+        .get_result::<ChatSessionResponse>(&mut conn)
+    {
+        Ok(s) => s,
+        Err(diesel::result::Error::NotFound) => {
+            return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+    };
+
+    let project_runtime = session.stage_project_runtime_id.and_then(|runtime_id| {
+        project_runtimes::table
+            .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(access_payload.user_id))
+            .filter(project_runtimes::project_id.eq(project_id))
+            .filter(project_runtimes::id.eq(runtime_id))
+            .select(ProjectRuntimeResponse::as_select())
+            .get_result::<ProjectRuntimeResponse>(&mut conn)
+            .ok()
+    });
+
+    let response = ChatSessionWithProjectRuntimeResponse {
+        session,
+        project_runtime,
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Chat session fetched successfully",
+        json!(response),
     ))
 }
 
@@ -190,6 +247,7 @@ pub async fn handle_create_project_chat_session(
         project_id: project_id,
         user_id: access_payload.user_id,
         title: format!("New chat session {}", Utc::now().format("%H:%M")),
+        stage_project_runtime_id: None,
     };
 
     let chat_session: ChatSessionResponse = diesel::insert_into(chat_sessions::table)

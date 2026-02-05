@@ -77,6 +77,7 @@ diesel::table! {
         #[max_length = 150]
         title -> Varchar,
         created_at -> Timestamptz,
+        stage_project_runtime_id -> Nullable<Int8>,
     }
 }
 
@@ -240,6 +241,7 @@ diesel::table! {
 }
 
 diesel::joinable!(chat_messages -> chat_sessions (chat_session_id));
+diesel::joinable!(chat_sessions -> project_runtimes (stage_project_runtime_id));
 diesel::joinable!(chat_sessions -> projects (project_id));
 diesel::joinable!(chat_sessions -> users (user_id));
 diesel::joinable!(payments -> packages (package_id));
