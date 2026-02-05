@@ -34,16 +34,16 @@ pub mod sql_types {
     pub struct PlatformType;
 
     #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "project_unit_type"))]
+    pub struct ProjectUnitType;
+
+    #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "server_cluster_type"))]
     pub struct ServerClusterType;
 
     #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "user_token_type"))]
     pub struct UserTokenType;
-
-    #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
-    #[diesel(postgres_type(name = "project_unit_type"))]
-    pub struct ProjectUnitType;
 }
 
 diesel::table! {
@@ -58,16 +58,24 @@ diesel::table! {
     use super::sql_types::ChatSessionRoleType;
     use super::sql_types::ChatMessageType;
 
+    chat_messages (id) {
+        id -> Int8,
+        chat_session_id -> Int8,
+        role -> ChatSessionRoleType,
+        #[sql_name = "type"]
+        type_ -> ChatMessageType,
+        payload -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     chat_sessions (id) {
         id -> Int8,
         project_id -> Int8,
         user_id -> Int8,
         #[max_length = 150]
         title -> Varchar,
-        role -> ChatSessionRoleType,
-        #[sql_name = "type"]
-        type_ -> ChatMessageType,
-        payload -> Nullable<Jsonb>,
         created_at -> Timestamptz,
     }
 }
@@ -121,22 +129,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    use diesel::sql_types::*;
-    use super::sql_types::ProjectUnitType;
-
-    project_units (id) {
-        id -> Int8,
-        project_id -> Int8,
-        code -> Nullable<Text>,
-        explanation -> Nullable<Text>,
-        #[max_length = 50]
-        version -> Varchar,
-        parent_unit_id -> Nullable<Int8>,
-        unit_type -> ProjectUnitType,
-    }
-}
-
-diesel::table! {
     project_releases (id) {
         id -> Int8,
         project_id -> Int8,
@@ -165,6 +157,22 @@ diesel::table! {
         server_cluster_deployment_status -> Nullable<DeploymentStatusType>,
         server_cluster_deployment_is_healthy -> Nullable<Bool>,
         server_cluster_deployment_last_health -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::ProjectUnitType;
+
+    project_units (id) {
+        id -> Int8,
+        project_id -> Int8,
+        code -> Nullable<Text>,
+        explanation -> Nullable<Text>,
+        #[max_length = 50]
+        version -> Varchar,
+        parent_unit_id -> Nullable<Int8>,
+        unit_type -> ProjectUnitType,
     }
 }
 
@@ -229,27 +237,29 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(chat_messages -> chat_sessions (chat_session_id));
 diesel::joinable!(chat_sessions -> projects (project_id));
 diesel::joinable!(chat_sessions -> users (user_id));
 diesel::joinable!(payments -> packages (package_id));
 diesel::joinable!(payments -> users (user_id));
-diesel::joinable!(project_units -> projects (project_id));
 diesel::joinable!(project_releases -> projects (project_id));
 diesel::joinable!(project_runtimes -> db_clusters (db_cluster_id));
 diesel::joinable!(project_runtimes -> projects (project_id));
 diesel::joinable!(project_runtimes -> server_clusters (server_cluster_id));
+diesel::joinable!(project_units -> projects (project_id));
 diesel::joinable!(projects -> users (owner_user_id));
 diesel::joinable!(user_tokens -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     app_settings,
+    chat_messages,
     chat_sessions,
     db_clusters,
     packages,
     payments,
-    project_units,
     project_releases,
     project_runtimes,
+    project_units,
     projects,
     server_clusters,
     user_tokens,
