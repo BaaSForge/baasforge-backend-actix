@@ -1,8 +1,9 @@
 use crate::libs::api_response::api_success;
 use crate::middlewares::auth::AccessPayload;
 use crate::models::chat_messages::ChatMessageResponse;
-use crate::models::chat_sessions::ChatSessionResponse;
+use crate::models::chat_sessions::{ChatSessionInsert, ChatSessionResponse};
 use crate::routes::AppContext;
+use chrono::Utc;
 use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
 use crate::schema::projects;
@@ -68,5 +69,38 @@ pub async fn handle_list_chat_session_messages(
     HttpResponse::Ok().json(api_success(
         "Chat session messages fetched successfully",
         json!(messages),
+    ))
+}
+
+pub async fn handle_create_project_chat_session(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<i64>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to create project chat session");
+
+    let project_id = path.into_inner();
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let chat_session = ChatSessionInsert {
+        project_id: project_id,
+        user_id: access_payload.user_id,
+        title: format!("New chat session {}", Utc::now().format("%H:%M")),
+    };
+
+    let chat_session: ChatSessionResponse = diesel::insert_into(chat_sessions::table)
+        .values(&chat_session)
+        .returning(ChatSessionResponse::as_select())
+        .get_result(&mut conn)
+        .expect("Insert failed");
+
+    HttpResponse::Ok().json(api_success(
+        "Project chat session created successfully",
+        json!(chat_session),
     ))
 }

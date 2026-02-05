@@ -52,24 +52,17 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                     .wrap(from_fn(test_closed_stage_guard_middleware))
                     .route(
                         "/first-cluster-pods",
-                        web::get()
-                            .to(test::handle_get_first_server_cluster)
+                        web::get().to(test::handle_get_first_server_cluster),
                     )
                     .route(
                         "/first-cluster-nodes",
-                        web::get()
-                            .to(test::handle_get_first_server_cluster_nodes)
+                        web::get().to(test::handle_get_first_server_cluster_nodes),
                     )
                     .route(
                         "/first-cluster-deploy",
-                        web::post()
-                            .to(test::handle_deploy_hello_world_pod)
+                        web::post().to(test::handle_deploy_hello_world_pod),
                     )
-                    .route(
-                        "/rabbit-test",
-                        web::post()
-                            .to(test::handle_rabbit_test)
-                    )
+                    .route("/rabbit-test", web::post().to(test::handle_rabbit_test)),
             )
             .service(
                 web::scope("/api/v1/auth")
@@ -197,6 +190,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                     )
                     .route(
                         "/projects/{id}/chat-sessions",
+                        web::post()
+                            .to(chat::handle_create_project_chat_session)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/chat-sessions",
                         web::get()
                             .to(chat::handle_list_project_chat_sessions)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
@@ -208,7 +208,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .to(chat::handle_list_chat_session_messages)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
-                    )
+                    ),
             )
     })
     .bind(("127.0.0.1", port))?
