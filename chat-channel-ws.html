@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chat session channel – WebSocket</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 640px;
+      margin: 1rem auto;
+      padding: 0 1rem;
+    }
+
+    h1 {
+      font-size: 1.25rem;
+    }
+
+    label {
+      display: block;
+      margin-top: 0.75rem;
+      font-weight: 500;
+    }
+
+    input {
+      width: 100%;
+      padding: 0.5rem;
+      margin-top: 0.25rem;
+    }
+
+    button {
+      margin-top: 1rem;
+      padding: 0.5rem 1rem;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    #status {
+      margin-top: 1rem;
+      padding: 0.5rem;
+      border-radius: 4px;
+    }
+
+    #status.connected {
+      background: #d4edda;
+      color: #155724;
+    }
+
+    #status.disconnected {
+      background: #f8d7da;
+      color: #721c24;
+    }
+
+    #status.connecting {
+      background: #fff3cd;
+      color: #856404;
+    }
+
+    #log {
+      margin-top: 1rem;
+      padding: 0.75rem;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      border-radius: 4px;
+      font-family: ui-monospace, monospace;
+      font-size: 0.875rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 50vh;
+      overflow-y: auto;
+    }
+
+    #log .time {
+      color: #858585;
+    }
+
+    #log .msg {
+      color: #9cdcfe;
+    }
+
+    #log .event {
+      color: #dcdcaa;
+    }
+
+    #log .err {
+      color: #f48771;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Chat session channel</h1>
+  <p>Connect to the WebSocket channel for a project chat session. Auth: use same origin (cookie) or set token.</p>
+
+  <label for="baseUrl">API base URL</label>
+  <input id="baseUrl" type="text" value="http://localhost:1100" placeholder="http://localhost:1100" />
+
+  <label for="projectId">Project ID</label>
+  <input id="projectId" type="text" value="1" placeholder="1" />
+
+  <label for="sessionId">Chat session ID</label>
+  <input id="sessionId" type="text" value="1" placeholder="1" />
+
+  <label for="token">Access token (optional if same origin + logged in)</label>
+  <input id="token" type="text" placeholder="Leave empty to use cookie" />
+
+  <button id="connectBtn">Connect</button>
+  <button id="disconnectBtn" disabled>Disconnect</button>
+  <button id="authCheckBtn">Check auth (GET /me)</button>
+
+  <div id="status" class="disconnected">Disconnected</div>
+  <div id="log"></div>
+
+  <script>
+    (function () {
+      const baseUrlEl = document.getElementById('baseUrl');
+      const projectIdEl = document.getElementById('projectId');
+      const sessionIdEl = document.getElementById('sessionId');
+      const tokenEl = document.getElementById('token');
+      const connectBtn = document.getElementById('connectBtn');
+      const disconnectBtn = document.getElementById('disconnectBtn');
+      const authCheckBtn = document.getElementById('authCheckBtn');
+      const statusEl = document.getElementById('status');
+      const logEl = document.getElementById('log');
+
+      let ws = null;
+
+      function setStatus(className, text) {
+        statusEl.className = className;
+        statusEl.textContent = text;
+      }
+
+      function log(type, message) {
+        const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+        const line = document.createElement('div');
+        line.innerHTML = '<span class="time">[' + time + ']</span> <span class="' + type + '">' + escapeHtml(message) + '</span>';
+        logEl.appendChild(line);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function escapeHtml(s) {
+        const div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
+      }
+
+      function buildWsUrl() {
+        const base = (baseUrlEl.value || '').trim().replace(/\/$/, '');
+        const projectId = (projectIdEl.value || '').trim();
+        const sessionId = (sessionIdEl.value || '').trim();
+        const token = (tokenEl.value || '').trim();
+
+        if (!base || !projectId || !sessionId) {
+          log('err', 'Please set base URL, project ID and session ID.');
+          return null;
+        }
+
+        const proto = base.startsWith('https') ? 'wss' : 'ws';
+        const host = base.replace(/^https?:\/\//, '');
+        let url = proto + '://' + host + '/api/v1/platform/projects/' + encodeURIComponent(projectId) + '/chat-sessions/' + encodeURIComponent(sessionId) + '/channel';
+        if (token) {
+          url += '?token=' + encodeURIComponent(token);
+        }
+        return url;
+      }
+
+      function connect() {
+        const url = buildWsUrl();
+        if (!url) return;
+
+        setStatus('connecting', 'Connecting…');
+        const urlForLog = url.replace(/\?.*/, '') + (url.includes('?') ? '?token=…' : '');
+        log('event', 'Connecting to ' + urlForLog);
+        log('event', 'Note: Auth uses cookies only. ?token= is NOT used by the server. Open this page from same origin (e.g. http://localhost:1100/...) to send cookies.');
+        ws = new WebSocket(url);
+        log('event', 'WebSocket created, readyState=' + ws.readyState + ' (0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)');
+
+        ws.onopen = function () {
+          setStatus('connected', 'Connected');
+          log('event', 'Connection opened.');
+          connectBtn.disabled = true;
+          disconnectBtn.disabled = false;
+        };
+
+        ws.onmessage = function (event) {
+          let msg = event.data;
+          try {
+            const parsed = JSON.parse(msg);
+            msg = JSON.stringify(parsed, null, 2);
+          } catch (_) { }
+          log('msg', msg);
+        };
+
+        ws.onerror = function (event) {
+          log('err', 'WebSocket error (browsers often hide details; check onclose code/reason).');
+        };
+
+        ws.onclose = function (event) {
+          const closeInfo = [
+            'code=' + event.code,
+            event.reason ? 'reason="' + event.reason + '"' : null,
+            'clean=' + event.wasClean,
+          ].filter(Boolean).join(', ');
+          setStatus('disconnected', 'Disconnected' + (event.code ? ' (code ' + event.code + ')' : ''));
+          log('event', 'Connection closed. [' + closeInfo + ']');
+          log('event', 'Close code reference: 1000=normal, 1001=going away, 1002=protocol error, 1003=unsupported data, 1006=abnormal/no close frame, 1008=policy violation, 1011=server error');
+          connectBtn.disabled = false;
+          disconnectBtn.disabled = true;
+          ws = null;
+        };
+      }
+
+      function disconnect() {
+        if (ws) {
+          ws.close();
+          ws = null;
+        }
+      }
+
+      async function checkAuth() {
+        const base = (baseUrlEl.value || '').trim().replace(/\/$/, '');
+        if (!base) {
+          log('err', 'Set base URL first.');
+          return;
+        }
+        const url = base + '/api/v1/auth/me';
+        log('event', 'Checking auth: GET ' + url + ' (credentials: include)');
+        try {
+          const res = await fetch(url, { credentials: 'include' });
+          const text = await res.text();
+          log(res.ok ? 'msg' : 'err', 'Auth check: ' + res.status + ' ' + res.statusText + '\n' + text);
+          if (!res.ok) {
+            log('err', 'Auth failed. WebSocket will also fail. Log in first (same origin) or fix cookies.');
+          }
+        } catch (e) {
+          log('err', 'Auth check failed: ' + e.message);
+        }
+      }
+
+      connectBtn.addEventListener('click', connect);
+      disconnectBtn.addEventListener('click', disconnect);
+      authCheckBtn.addEventListener('click', checkAuth);
+    })();
+  </script>
+</body>
+
+</html>

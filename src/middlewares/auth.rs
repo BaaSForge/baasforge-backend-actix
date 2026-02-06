@@ -45,6 +45,10 @@ where
         cookie.value().to_string()
     } else {
         if let Some(_) = req.cookie(REFRESH_TOKEN_COOKIE_KEY) {
+            log::warn!(
+                "[auth] Unauthorized: path={} reason=needs_refresh_token",
+                req.path()
+            );
             let body = api_error(
                 "You need to refresh the access token",
                 json!({"needs_refresh_token": true}),
@@ -53,6 +57,10 @@ where
                 .into_response(HttpResponse::Unauthorized().json(body))
                 .map_into_boxed_body());
         } else {
+            log::warn!(
+                "[auth] Unauthorized: path={} reason=no_access_token_cookie (WebSocket needs same-origin or cookie)",
+                req.path()
+            );
             return Ok(req
                 .into_response(HttpResponse::Unauthorized().finish())
                 .map_into_boxed_body());
@@ -65,8 +73,10 @@ where
 
     let mut conn = app_context.pool.get().expect("Failed to get DB connection");
 
-    let claims = decode_access_token(&token_str, &app_context.settings)
-        .map_err(|_| actix_web::error::ErrorUnauthorized("Invalid token"))?;
+    let claims = decode_access_token(&token_str, &app_context.settings).map_err(|e| {
+        log::warn!("[auth] Unauthorized: path={} reason=invalid_token decode_err={:?}", req.path(), e);
+        actix_web::error::ErrorUnauthorized("Invalid token")
+    })?;
 
     let db_token: Option<UserToken> = user_tokens::table
         .filter(token.eq(&token_str))
@@ -81,7 +91,13 @@ where
 
     let db_token = match db_token {
         Some(t) if !t.revoked.unwrap_or(false) => t,
-        _ => return Ok(req.into_response(HttpResponse::Unauthorized().finish())),
+        _ => {
+            log::warn!(
+                "[auth] Unauthorized: path={} reason=token_not_found_or_revoked",
+                req.path()
+            );
+            return Ok(req.into_response(HttpResponse::Unauthorized().finish()));
+        }
     };
 
     let payload = AccessPayload {

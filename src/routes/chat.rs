@@ -16,10 +16,12 @@ use crate::schema::project_runtimes;
 use crate::schema::project_units;
 use crate::schema::projects;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
+use actix_ws::Message;
 use chrono::Utc;
 use diesel::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
+use tokio_stream::StreamExt as _;
 
 pub async fn handle_list_project_chat_sessions(
     context: web::Data<AppContext>,
@@ -419,4 +421,95 @@ pub async fn handle_detach_chat_session_stage_runtime(
         "Chat session stage runtime detached successfully",
         json!(updated),
     ))
+}
+
+pub async fn handle_chat_session_channel_ws(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(i64, i64)>,
+    body: web::Payload,
+) -> actix_web::Result<impl actix_web::Responder> {
+    let (project_id, session_id) = path.into_inner();
+    log::info!(
+        "[chat-ws] WebSocket handshake request: project_id={} session_id={}",
+        project_id,
+        session_id
+    );
+
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to connect to chat session channel");
+
+    let user_id = access_payload.user_id;
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let session_owned: Option<i64> = chat_sessions::table
+        .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(user_id))
+        .filter(chat_sessions::project_id.eq(project_id))
+        .filter(chat_sessions::id.eq(session_id))
+        .select(chat_sessions::id)
+        .first::<i64>(&mut conn)
+        .optional()
+        .expect("DB query failed");
+
+    if session_owned.is_none() {
+        log::warn!(
+            "[chat-ws] Chat session not found or no access: project_id={} session_id={} user_id={}",
+            project_id,
+            session_id,
+            user_id
+        );
+        return Ok(HttpResponse::NotFound().json(api_error(
+            "Chat session not found or you do not have access",
+            json!({}),
+        )));
+    }
+
+    log::info!(
+        "[chat-ws] WebSocket upgrade accepted: project_id={} session_id={}",
+        project_id,
+        session_id
+    );
+
+    let (response, mut session, mut msg_stream) =
+        actix_ws::handle(&req, body).map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+
+    actix_web::rt::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        interval.tick().await;
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let payload = json!({
+                        "type": "channel_message",
+                        "session_id": session_id,
+                        "project_id": project_id,
+                        "timestamp": Utc::now().to_rfc3339(),
+                        "message": "Placeholder: will be replaced by RabbitMQ",
+                    });
+                    if session.text(payload.to_string()).await.is_err() {
+                        break;
+                    }
+                }
+                next = msg_stream.next() => {
+                    match next {
+                        Some(Ok(Message::Ping(bytes))) => {
+                            if session.pong(&bytes).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | None => break,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let _ = session.close(None).await;
+    });
+
+    Ok(response)
 }

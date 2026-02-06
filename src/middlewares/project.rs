@@ -63,6 +63,11 @@ pub fn projects_owner_guard_middleware_factory() -> impl Fn(
 
             match project_opt {
                 None => {
+                    log::warn!(
+                        "[projects_owner] Forbidden: path={} reason=project_not_found project_id={}",
+                        path,
+                        project_id
+                    );
                     return Ok(req
                         .into_response(
                             HttpResponse::NotFound()
@@ -71,6 +76,13 @@ pub fn projects_owner_guard_middleware_factory() -> impl Fn(
                         .map_into_boxed_body());
                 }
                 Some((_proj_id, owner_id_in_db)) if owner_id_in_db != user_id => {
+                    log::warn!(
+                        "[projects_owner] Forbidden: path={} reason=not_owner project_id={} user_id={} owner_id={}",
+                        path,
+                        project_id,
+                        user_id,
+                        owner_id_in_db
+                    );
                     return Ok(req
                         .into_response(HttpResponse::Forbidden().json(api_error(
                             "You are not the owner of this project",

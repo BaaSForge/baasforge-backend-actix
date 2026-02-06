@@ -11,6 +11,13 @@ use kube::api::{Api, ListParams};
 use lapin::{BasicProperties, options::*};
 use serde_json::json;
 
+pub async fn handle_serve_chat_channel_ws_page() -> HttpResponse {
+    let html = include_str!("../../chat-channel-ws.html");
+    HttpResponse::Ok()
+        .insert_header(("Content-Type", "text/html; charset=utf-8"))
+        .body(html)
+}
+
 pub async fn handle_get_first_server_cluster(context: web::Data<AppContext>) -> HttpResponse {
     let mut conn = context.pool.get().expect("DB conn");
 

@@ -62,7 +62,11 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         "/first-cluster-deploy",
                         web::post().to(test::handle_deploy_hello_world_pod),
                     )
-                    .route("/rabbit-test", web::post().to(test::handle_rabbit_test)),
+                    .route("/rabbit-test", web::post().to(test::handle_rabbit_test))
+                    .route(
+                        "/chat-channel-ws",
+                        web::get().to(test::handle_serve_chat_channel_ws_page),
+                    ),
             )
             .service(
                 web::scope("/api/v1/auth")
@@ -241,6 +245,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         "/projects/{id}/chat-sessions/{session_id}/detach-stage-runtime",
                         web::post()
                             .to(chat::handle_detach_chat_session_stage_runtime)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/chat-sessions/{session_id}/channel",
+                        web::get()
+                            .to(chat::handle_chat_session_channel_ws)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     ),
