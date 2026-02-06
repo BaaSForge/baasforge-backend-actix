@@ -113,9 +113,13 @@
   <label for="token">Access token (optional if same origin + logged in)</label>
   <input id="token" type="text" placeholder="Leave empty to use cookie" />
 
+  <label for="testMessage">Test message (for Send test message button)</label>
+  <input id="testMessage" type="text" value="Hello from test!" placeholder="Custom message" />
+
   <button id="connectBtn">Connect</button>
   <button id="disconnectBtn" disabled>Disconnect</button>
   <button id="authCheckBtn">Check auth (GET /me)</button>
+  <button id="sendTestBtn">Send test message to channel</button>
 
   <div id="status" class="disconnected">Disconnected</div>
   <div id="log"></div>
@@ -126,9 +130,11 @@
       const projectIdEl = document.getElementById('projectId');
       const sessionIdEl = document.getElementById('sessionId');
       const tokenEl = document.getElementById('token');
+      const testMessageEl = document.getElementById('testMessage');
       const connectBtn = document.getElementById('connectBtn');
       const disconnectBtn = document.getElementById('disconnectBtn');
       const authCheckBtn = document.getElementById('authCheckBtn');
+      const sendTestBtn = document.getElementById('sendTestBtn');
       const statusEl = document.getElementById('status');
       const logEl = document.getElementById('log');
 
@@ -226,6 +232,38 @@
         }
       }
 
+      async function sendTestMessage() {
+        const base = (baseUrlEl.value || '').trim().replace(/\/$/, '');
+        const projectId = (projectIdEl.value || '').trim();
+        const sessionId = (sessionIdEl.value || '').trim();
+        const message = (testMessageEl.value || 'Test message from API').trim();
+        if (!base || !projectId || !sessionId) {
+          log('err', 'Set base URL, project ID and session ID first.');
+          return;
+        }
+        const url = base + '/api/v1/test/chat-channel-send';
+        log('event', 'Sending test message: POST ' + url + ' (project_id=' + projectId + ', session_id=' + sessionId + ')');
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              project_id: parseInt(projectId, 10),
+              session_id: parseInt(sessionId, 10),
+              message: message,
+            }),
+          });
+          const text = await res.text();
+          log(res.ok ? 'msg' : 'err', 'Send result: ' + res.status + ' ' + res.statusText + '\n' + text);
+          if (res.ok) {
+            log('event', 'If WebSocket is connected, you should see the message appear above.');
+          }
+        } catch (e) {
+          log('err', 'Send failed: ' + e.message);
+        }
+      }
+
       async function checkAuth() {
         const base = (baseUrlEl.value || '').trim().replace(/\/$/, '');
         if (!base) {
@@ -249,6 +287,7 @@
       connectBtn.addEventListener('click', connect);
       disconnectBtn.addEventListener('click', disconnect);
       authCheckBtn.addEventListener('click', checkAuth);
+      sendTestBtn.addEventListener('click', sendTestMessage);
     })();
   </script>
 </body>

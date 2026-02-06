@@ -15,6 +15,7 @@ use crate::schema::chat_sessions;
 use crate::schema::project_runtimes;
 use crate::schema::project_units;
 use crate::schema::projects;
+use crate::services::rabbit;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use actix_ws::Message;
 use chrono::Utc;
@@ -477,22 +478,53 @@ pub async fn handle_chat_session_channel_ws(
     let (response, mut session, mut msg_stream) =
         actix_ws::handle(&req, body).map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
+    let rabbit_url = context.settings.rabbit_url.clone();
+
     actix_web::rt::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
-        interval.tick().await;
+        let (_connection, mut consumer) = match rabbit::create_chat_session_consumer(
+            &rabbit_url,
+            project_id,
+            session_id,
+        )
+        .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!(
+                    "[chat-ws] Failed to create RabbitMQ consumer: project_id={} session_id={} err={}",
+                    project_id,
+                    session_id,
+                    e
+                );
+                let _ = session
+                    .text(
+                        json!({
+                            "type": "error",
+                            "message": "Failed to subscribe to channel",
+                        })
+                        .to_string(),
+                    )
+                    .await;
+                let _ = session.close(None).await;
+                return;
+            }
+        };
 
         loop {
             tokio::select! {
-                _ = interval.tick() => {
-                    let payload = json!({
-                        "type": "channel_message",
-                        "session_id": session_id,
-                        "project_id": project_id,
-                        "timestamp": Utc::now().to_rfc3339(),
-                        "message": "Placeholder: will be replaced by RabbitMQ",
-                    });
-                    if session.text(payload.to_string()).await.is_err() {
-                        break;
+                delivery = consumer.next() => {
+                    match delivery {
+                        Some(Ok(delivery)) => {
+                            let payload = String::from_utf8_lossy(&delivery.data).into_owned();
+                            if session.text(payload).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(Err(e)) => {
+                            log::warn!("[chat-ws] RabbitMQ consumer error: {}", e);
+                            break;
+                        }
+                        None => break,
                     }
                 }
                 next = msg_stream.next() => {

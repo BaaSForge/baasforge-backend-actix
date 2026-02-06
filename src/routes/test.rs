@@ -2,13 +2,15 @@ use crate::libs::api_response::api_error;
 use crate::models::server_clusters::ServerCluster;
 use crate::schema::server_clusters;
 use crate::services::k8s::K8sClient;
-use crate::services::rabbit::ensure_queue_channel;
+use crate::services::rabbit::{self, chat_session_routing_key};
 use crate::{libs::api_response::api_success, routes::AppContext};
 use actix_web::{HttpResponse, web};
+use chrono::Utc;
 use diesel::prelude::*;
 use k8s_openapi::api::core::v1::{Node, Pod};
 use kube::api::{Api, ListParams};
 use lapin::{BasicProperties, options::*};
+use serde::Deserialize;
 use serde_json::json;
 
 pub async fn handle_serve_chat_channel_ws_page() -> HttpResponse {
@@ -258,15 +260,16 @@ pub async fn handle_deploy_hello_world_pod(context: web::Data<AppContext>) -> Ht
 }
 
 pub async fn handle_rabbit_test(context: web::Data<AppContext>) -> HttpResponse {
-    let (_, channel) = match ensure_queue_channel(&context.settings.rabbit_url, "channel1").await {
-        Ok(t) => t,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(api_error(
-                &format!("Failed to ensure queue channel: {}", e),
-                json!({}),
-            ));
-        }
-    };
+    let (_, channel) =
+        match rabbit::ensure_queue_channel(&context.settings.rabbit_url, "channel1").await {
+            Ok(t) => t,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(api_error(
+                    &format!("Failed to ensure queue channel: {}", e),
+                    json!({}),
+                ));
+            }
+        };
 
     let payload = b"Hello from Rust!";
 
@@ -303,4 +306,52 @@ pub async fn handle_rabbit_test(context: web::Data<AppContext>) -> HttpResponse 
         "RabbitMQ test successful",
         json!({"queue_name": "channel1"}),
     ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatChannelSendBody {
+    pub project_id: i64,
+    pub session_id: i64,
+    #[serde(default = "default_chat_channel_message")]
+    pub message: String,
+}
+
+fn default_chat_channel_message() -> String {
+    "Test message from API".to_string()
+}
+
+pub async fn handle_chat_channel_send(
+    context: web::Data<AppContext>,
+    body: web::Json<ChatChannelSendBody>,
+) -> HttpResponse {
+    let body = body.into_inner();
+    let payload = json!({
+        "type": "channel_message",
+        "session_id": body.session_id,
+        "project_id": body.project_id,
+        "timestamp": Utc::now().to_rfc3339(),
+        "message": body.message,
+    });
+
+    match rabbit::publish_chat_session_message(
+        &context.settings.rabbit_url,
+        body.project_id,
+        body.session_id,
+        payload.to_string().as_bytes(),
+    )
+    .await
+    {
+        Ok(()) => HttpResponse::Ok().json(api_success(
+            "Message sent to chat channel",
+            json!({
+                "project_id": body.project_id,
+                "session_id": body.session_id,
+                "routing_key": chat_session_routing_key(body.project_id, body.session_id),
+            }),
+        )),
+        Err(e) => HttpResponse::InternalServerError().json(api_error(
+            &format!("Failed to publish to chat channel: {}", e),
+            json!({}),
+        )),
+    }
 }
