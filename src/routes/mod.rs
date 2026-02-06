@@ -82,7 +82,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                     )
                     .route(
                         "/google/callback",
-                        web::post()
+                        web::get()
                             .to(auth::handle_google_auth_callback)
                             .wrap(from_fn(auth_opened_guard_middleware)),
                     )

@@ -37,17 +37,33 @@ use serde_json::json;
 //   }
 // }
 
+#[derive(Debug, Deserialize)]
+pub struct InitiateGoogleAuthQuery {
+    #[serde(rename = "callback-url")]
+    pub callback_url: Option<String>,
+}
+
 // TODO: implement google OAuth here
-pub async fn initiate_google_auth() -> HttpResponse {
-    HttpResponse::TemporaryRedirect()
-        .append_header(("Location", "/api/v1/auth/google/callback"))
+pub async fn initiate_google_auth(query: web::Query<InitiateGoogleAuthQuery>) -> HttpResponse {
+    let location = match &query.callback_url {
+        Some(url) => format!("/api/v1/auth/google/callback?callback-url={}", urlencoding::encode(url)),
+        None => "/api/v1/auth/google/callback".to_string(),
+    };
+    HttpResponse::SeeOther()
+        .append_header(("Location", location))
         .finish()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CallbackGoogleAuthQuery {
+    #[serde(rename = "callback-url")]
+    pub callback_url: String,
 }
 
 // TODO: verify the authenticated user coming from google
 pub async fn handle_google_auth_callback(
-    // req: HttpRequest,
     context: web::Data<AppContext>,
+    query: web::Query<CallbackGoogleAuthQuery>,
 ) -> HttpResponse {
     let full_name_dto = "something";
     let id_in_platform_dto = "2";
@@ -131,10 +147,11 @@ pub async fn handle_google_auth_callback(
         .execute(&mut conn)
         .expect("Failed to insert user tokens");
 
-    HttpResponse::Created()
+    HttpResponse::Found()
+        .append_header(("Location", query.callback_url.clone()))
         .cookie(access_token_cookie)
         .cookie(refresh_token_cookie)
-        .json(api_success("Google authenticated successfully", json!({})))
+        .finish()
 }
 
 pub async fn handle_logout(req: HttpRequest, context: web::Data<AppContext>) -> HttpResponse {
