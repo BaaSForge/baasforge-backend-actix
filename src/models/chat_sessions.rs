@@ -5,7 +5,7 @@ use diesel::Queryable;
 use diesel::Selectable;
 use serde::Serialize;
 
-#[derive(Serialize, Queryable, Selectable)]
+#[derive(Clone, Serialize, Queryable, Selectable)]
 #[diesel(table_name = crate::schema::chat_sessions)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ChatSessionResponse {

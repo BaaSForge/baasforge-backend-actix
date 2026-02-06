@@ -7,6 +7,7 @@ use crate::models::chat_messages::{
 use crate::models::chat_sessions::{
     ChatSessionInsert, ChatSessionResponse, ChatSessionWithProjectRuntimeResponse,
 };
+use crate::models::projects::PlatformEnvironmentType;
 use crate::models::projects::{ProjectRuntimeResponse, ProjectUnitResponse};
 use crate::routes::AppContext;
 use crate::schema::chat_messages;
@@ -17,6 +18,7 @@ use crate::schema::projects;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use chrono::Utc;
 use diesel::prelude::*;
+use serde::Deserialize;
 use serde_json::json;
 
 pub async fn handle_list_project_chat_sessions(
@@ -259,5 +261,162 @@ pub async fn handle_create_project_chat_session(
     HttpResponse::Ok().json(api_success(
         "Project chat session created successfully",
         json!(chat_session),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AttachStageRuntimeBody {
+    pub project_runtime_id: i64,
+}
+
+pub async fn handle_attach_chat_session_stage_runtime(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(i64, i64)>,
+    body: web::Json<AttachStageRuntimeBody>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to set chat session stage runtime");
+
+    let (project_id, session_id) = path.into_inner();
+    let project_runtime_id = body.project_runtime_id;
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    match project_runtimes::table
+        .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(access_payload.user_id))
+        .filter(project_runtimes::project_id.eq(project_id))
+        .filter(project_runtimes::id.eq(project_runtime_id))
+        .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Stage))
+        .select(project_runtimes::id)
+        .get_result::<i64>(&mut conn)
+    {
+        Ok(_) => {}
+        Err(diesel::result::Error::NotFound) => {
+            return HttpResponse::BadRequest().json(api_error(
+                "Project runtime not found or is not a stage environment",
+                json!({}),
+            ));
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+    };
+
+    let session_row: Option<(i64, Option<i64>)> = chat_sessions::table
+        .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(access_payload.user_id))
+        .filter(chat_sessions::id.eq(session_id))
+        .filter(chat_sessions::project_id.eq(project_id))
+        .select((chat_sessions::id, chat_sessions::stage_project_runtime_id))
+        .first(&mut conn)
+        .optional()
+        .expect("DB query failed");
+
+    let (_, current_runtime_id) = match session_row {
+        Some(row) => row,
+        None => {
+            return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
+        }
+    };
+
+    if current_runtime_id.is_some() {
+        return HttpResponse::Conflict().json(api_error(
+            "Chat session already has a stage runtime attached. Detach the current runtime first.",
+            json!({}),
+        ));
+    }
+
+    let updated: ChatSessionResponse = diesel::update(
+        chat_sessions::table
+            .filter(chat_sessions::id.eq(session_id))
+            .filter(chat_sessions::project_id.eq(project_id)),
+    )
+    .set(chat_sessions::stage_project_runtime_id.eq(project_runtime_id))
+    .returning(ChatSessionResponse::as_select())
+    .get_result::<ChatSessionResponse>(&mut conn)
+    .expect("Update chat session failed");
+
+    // TODO: RabbitMQ – Publish message when stage runtime is set.
+
+    HttpResponse::Ok().json(api_success(
+        "Chat session stage runtime updated successfully",
+        json!(updated),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DetachStageRuntimeBody {
+    pub project_runtime_id: i64,
+}
+
+pub async fn handle_detach_chat_session_stage_runtime(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(i64, i64)>,
+    body: web::Json<DetachStageRuntimeBody>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to detach chat session stage runtime");
+
+    let (project_id, session_id) = path.into_inner();
+    let project_runtime_id = body.project_runtime_id;
+
+    let mut conn = context.pool.get().expect("DB conn");
+
+    let session_row: Option<(i64, Option<i64>)> = chat_sessions::table
+        .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(access_payload.user_id))
+        .filter(chat_sessions::id.eq(session_id))
+        .filter(chat_sessions::project_id.eq(project_id))
+        .select((chat_sessions::id, chat_sessions::stage_project_runtime_id))
+        .first(&mut conn)
+        .optional()
+        .expect("DB query failed");
+
+    let (_, current_runtime_id) = match session_row {
+        Some(row) => row,
+        None => {
+            return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
+        }
+    };
+
+    let current_runtime_id = match current_runtime_id {
+        Some(id) => id,
+        None => {
+            return HttpResponse::BadRequest().json(api_error(
+                "Chat session has no stage runtime attached",
+                json!({}),
+            ));
+        }
+    };
+
+    if current_runtime_id != project_runtime_id {
+        return HttpResponse::BadRequest().json(api_error(
+            "Chat session is not attached to the given runtime",
+            json!({}),
+        ));
+    }
+
+    let updated: ChatSessionResponse = diesel::update(
+        chat_sessions::table
+            .filter(chat_sessions::id.eq(session_id))
+            .filter(chat_sessions::project_id.eq(project_id)),
+    )
+    .set(chat_sessions::stage_project_runtime_id.eq(Option::<i64>::None))
+    .returning(ChatSessionResponse::as_select())
+    .get_result::<ChatSessionResponse>(&mut conn)
+    .expect("Update chat session failed");
+
+    HttpResponse::Ok().json(api_success(
+        "Chat session stage runtime detached successfully",
+        json!(updated),
     ))
 }

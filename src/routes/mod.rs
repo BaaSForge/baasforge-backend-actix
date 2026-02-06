@@ -229,6 +229,20 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .to(chat::handle_create_chat_session_message)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/chat-sessions/{session_id}/attach-stage-runtime",
+                        web::post()
+                            .to(chat::handle_attach_chat_session_stage_runtime)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/chat-sessions/{session_id}/detach-stage-runtime",
+                        web::post()
+                            .to(chat::handle_detach_chat_session_stage_runtime)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
                     ),
             )
     })

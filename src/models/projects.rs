@@ -1,3 +1,4 @@
+use crate::models::chat_sessions::ChatSessionResponse;
 use diesel::Insertable;
 use chrono::{DateTime, Utc};
 use diesel::Queryable;
@@ -107,6 +108,13 @@ pub struct ProjectRuntimeResponse {
     pub server_cluster_deployment_status: Option<DeploymentStatusType>,
     pub server_cluster_deployment_is_healthy: Option<bool>,
     pub server_cluster_deployment_last_health: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize)]
+pub struct ProjectRuntimeWithConnectedChatResponse {
+    #[serde(flatten)]
+    pub runtime: ProjectRuntimeResponse,
+    pub connected_chat_session: Option<ChatSessionResponse>,
 }
 
 #[derive(Serialize, Queryable, Selectable)]

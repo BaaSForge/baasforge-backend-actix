@@ -1,13 +1,16 @@
 use crate::libs::api_response::api_error;
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
+use crate::models::chat_sessions::ChatSessionResponse;
 use crate::models::projects::{
-    FrameworkType, LanguageType, PlatformEnvironmentType, ProjectUnitResponse, ProjectInsert,
-    ProjectReleaseResponse, ProjectResponse, ProjectRuntimeResponse,
+    FrameworkType, LanguageType, PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse,
+    ProjectResponse, ProjectRuntimeResponse, ProjectRuntimeWithConnectedChatResponse,
+    ProjectUnitResponse,
 };
-use crate::schema::project_units;
+use crate::schema::chat_sessions;
 use crate::schema::project_releases;
 use crate::schema::project_runtimes;
+use crate::schema::project_units;
 use crate::schema::projects;
 use crate::services::payment::{
     PaidFeature, most_complete_needed_package, user_missing_paid_features,
@@ -18,6 +21,7 @@ use diesel::prelude::*;
 use diesel::result::Error;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 
 #[derive(Clone, Deserialize)]
 pub struct ProjectRequest {
@@ -199,10 +203,8 @@ pub async fn handle_delete_project(
         diesel::delete(project_runtimes::table.filter(project_runtimes::project_id.eq(project_id)))
             .execute(conn)?;
 
-        diesel::delete(
-            project_units::table.filter(project_units::project_id.eq(project_id)),
-        )
-        .execute(conn)?;
+        diesel::delete(project_units::table.filter(project_units::project_id.eq(project_id)))
+            .execute(conn)?;
 
         diesel::delete(project_releases::table.filter(project_releases::project_id.eq(project_id)))
             .execute(conn)?;
@@ -315,7 +317,7 @@ pub async fn handle_list_project_runtimes(
         }
     });
 
-    let runtimes = match env_filter {
+    let runtimes: Vec<ProjectRuntimeResponse> = match env_filter {
         Some(env) => project_runtimes::table
             .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(access_payload.user_id))
@@ -333,9 +335,34 @@ pub async fn handle_list_project_runtimes(
             .unwrap_or_default(),
     };
 
+    let runtime_ids: Vec<i64> = runtimes.iter().map(|r| r.id).collect();
+    let connected_sessions: HashMap<i64, ChatSessionResponse> = if runtime_ids.is_empty() {
+        HashMap::new()
+    } else {
+        chat_sessions::table
+            .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(access_payload.user_id))
+            .filter(chat_sessions::project_id.eq(project_id))
+            .filter(chat_sessions::stage_project_runtime_id.eq_any(&runtime_ids))
+            .select(ChatSessionResponse::as_select())
+            .load::<ChatSessionResponse>(&mut conn)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|s| s.stage_project_runtime_id.map(|rid| (rid, s)))
+            .collect()
+    };
+
+    let runtimes_with_chat: Vec<ProjectRuntimeWithConnectedChatResponse> = runtimes
+        .into_iter()
+        .map(|runtime| ProjectRuntimeWithConnectedChatResponse {
+            connected_chat_session: connected_sessions.get(&runtime.id).cloned(),
+            runtime,
+        })
+        .collect();
+
     HttpResponse::Ok().json(api_success(
         "Project runtimes fetched successfully",
-        json!(runtimes),
+        json!(runtimes_with_chat),
     ))
 }
 
