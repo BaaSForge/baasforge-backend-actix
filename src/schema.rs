@@ -238,6 +238,8 @@ diesel::table! {
         id_in_platform -> Varchar,
         #[max_length = 255]
         full_name -> Nullable<Varchar>,
+        #[max_length = 255]
+        email_in_platform -> Nullable<Varchar>,
     }
 }
 

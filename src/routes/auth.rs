@@ -4,7 +4,7 @@ use crate::middlewares::auth::{AccessPayload, RefreshPayload};
 use crate::models::user_tokens::{UserTokenInternal, UserTokenResponse, UserTokenType};
 use crate::models::users::{PlatformType, User, UserDTO};
 use crate::routes::AppContext;
-use crate::schema::users::{full_name, id_in_platform, platform};
+use crate::schema::users::{email_in_platform, full_name, id_in_platform, platform};
 use crate::schema::{user_tokens, users};
 use crate::services::auth::{
     ACCESS_TOKEN_COOKIE_KEY, ACCESS_TOKEN_EXPIRY_MINUTES, REFRESH_TOKEN_COOKIE_KEY,
@@ -67,6 +67,7 @@ pub async fn handle_google_auth_callback(
 ) -> HttpResponse {
     let full_name_dto = "something";
     let id_in_platform_dto = "2";
+    let email_dto = "user@example.com";
 
     let access_token_res = create_access_token(&context.settings);
     let refresh_token_res = create_refresh_token(&context.settings);
@@ -100,7 +101,10 @@ pub async fn handle_google_auth_callback(
 
     let user: User = if let Some(u) = existing_user {
         diesel::update(users::table.find(u.id))
-            .set(full_name.eq(Some(full_name_dto.to_string())))
+            .set((
+                full_name.eq(Some(full_name_dto.to_string())),
+                email_in_platform.eq(Some(email_dto.to_string())),
+            ))
             .get_result(&mut conn)
             .unwrap()
     } else {
@@ -111,6 +115,7 @@ pub async fn handle_google_auth_callback(
                 platform: PlatformType::Google,
                 id_in_platform: id_in_platform_dto.to_string(),
                 full_name: Some(full_name_dto.to_string()),
+                email_in_platform: Some(email_dto.to_string()),
             })
             .get_result(&mut conn)
             .unwrap()

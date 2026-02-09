@@ -21,6 +21,7 @@ pub struct User {
     pub id_in_platform: String,
     #[allow(dead_code)]
     pub full_name: Option<String>,
+    pub email_in_platform: Option<String>,
 }
 
 
@@ -30,4 +31,5 @@ pub struct UserDTO {
     pub platform: PlatformType,
     pub id_in_platform: String,
     pub full_name: Option<String>,
+    pub email_in_platform: Option<String>,
 }
