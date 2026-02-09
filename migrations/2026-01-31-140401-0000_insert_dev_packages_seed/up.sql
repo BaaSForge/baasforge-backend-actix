@@ -11,7 +11,7 @@ BEGIN
 
     INSERT INTO packages (title, slug, description, price, discount_percent, is_trial, is_active)
     VALUES
-        ('Free Trial', 'free-trial', 'some description', 0, 100, TRUE, TRUE),
-        ('Basic', 'basic', 'some description', 10, 10, FALSE, TRUE),
-        ('Pro', 'pro', 'some description', 30, 20, FALSE, TRUE);
+        ('Free Trial', 'free-trial', E'- feature first here\n- feature second also here\n- feature third', 0, 100, TRUE, TRUE),
+        ('Basic', 'basic', E'- feature first here\n- feature second also here\n- feature third', 10, 10, FALSE, TRUE),
+        ('Pro', 'pro', E'- feature first here\n- feature second also here\n- feature third', 30, 20, FALSE, TRUE);
 END $$;
