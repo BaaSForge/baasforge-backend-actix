@@ -10,6 +10,7 @@ pub async fn handle_list_packages(context: web::Data<AppContext>) -> HttpRespons
 
     let packages = packages::table
         .filter(packages::is_active.eq(true))
+        .order(packages::tier.asc())
         .select(Package::as_select())
         .load::<Package>(&mut conn)
         .unwrap_or_default();

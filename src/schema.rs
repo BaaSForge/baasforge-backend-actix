@@ -102,6 +102,7 @@ diesel::table! {
         title -> Varchar,
         #[max_length = 255]
         slug -> Varchar,
+        tier -> Int4,
         description -> Nullable<Text>,
         price -> Float8,
         discount_percent -> Nullable<Int4>,
@@ -120,6 +121,7 @@ diesel::table! {
         package_title -> Nullable<Varchar>,
         #[max_length = 255]
         package_slug -> Nullable<Varchar>,
+        package_tier -> Int4,
         package_price -> Nullable<Float8>,
         package_discount -> Nullable<Int4>,
         is_success -> Bool,

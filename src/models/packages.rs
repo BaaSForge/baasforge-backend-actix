@@ -10,6 +10,7 @@ pub struct Package {
     pub id: i64,
     pub title: String,
     pub slug: String,
+    pub tier: i32,
     pub description: Option<String>,
     pub price: f64,
     pub discount_percent: Option<i32>,

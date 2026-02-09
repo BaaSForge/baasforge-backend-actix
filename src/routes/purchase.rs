@@ -40,6 +40,7 @@ pub async fn handle_initiate_purchase(
         package_id: package.id,
         package_title: Some(package.title.clone()),
         package_slug: Some(package.slug.clone()),
+        package_tier: package.tier,
         package_price: Some(package.price),
         package_discount: package.discount_percent,
         package_is_tiral: package.is_trial.unwrap_or(false),

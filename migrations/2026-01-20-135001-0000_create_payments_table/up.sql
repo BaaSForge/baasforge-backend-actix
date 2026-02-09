@@ -5,6 +5,7 @@ CREATE TABLE payments (
     package_id BIGINT NOT NULL REFERENCES packages(id),
     package_title VARCHAR(255),
     package_slug VARCHAR(255),
+    package_tier INTEGER NOT NULL UNIQUE CHECK (package_tier > 0),
     package_price FLOAT8,
     package_discount INTEGER CHECK (package_discount BETWEEN 0 AND 100),
     is_success BOOLEAN NOT NULL,

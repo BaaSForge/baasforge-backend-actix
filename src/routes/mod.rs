@@ -135,6 +135,12 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         web::get()
                             .to(payment::handle_list_user_payments)
                             .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/paid-packages",
+                        web::get()
+                            .to(payment::handle_get_user_paid_package)
+                            .wrap(from_fn(auth_closed_guard_middleware)),
                     ),
             )
             .service(
