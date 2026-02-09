@@ -256,9 +256,17 @@ pub async fn handle_revoke_tokens(
     HttpResponse::Ok().finish()
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ListTokensQuery {
+    pub revoked: Option<bool>,
+    #[serde(rename = "type")]
+    pub token_type: Option<UserTokenType>,
+}
+
 pub async fn handle_list_tokens(
     context: web::Data<AppContext>,
     req: HttpRequest,
+    query: web::Query<ListTokensQuery>,
 ) -> HttpResponse {
     let extensions = req.extensions();
     let access_payload = extensions
@@ -268,11 +276,18 @@ pub async fn handle_list_tokens(
         .get::<RefreshPayload>()
         .expect("RefreshPayload must exist to list tokens");
 
+    let revoked_filter = query.revoked.unwrap_or(false);
+    let token_type_filter = query.token_type.clone().map_or(
+        vec![UserTokenType::Access, UserTokenType::Refresh],
+        |t| vec![t],
+    );
+
     let mut conn = context.pool.get().expect("DB conn");
 
     let tokens = user_tokens::table
         .filter(user_tokens::user_id.eq(access_payload.user_id))
-        .filter(user_tokens::revoked.eq(false))
+        .filter(user_tokens::revoked.eq(Some(revoked_filter)))
+        .filter(user_tokens::token_type.eq_any(token_type_filter))
         .filter(user_tokens::token.ne(&refresh_payload.db_token.token))
         .filter(user_tokens::token.ne(&access_payload.db_token.token))
         .select(UserTokenResponse::as_select())

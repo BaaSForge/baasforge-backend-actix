@@ -2,9 +2,9 @@ use chrono::{DateTime, Utc};
 use diesel::Insertable;
 use diesel::Queryable;
 use diesel::Selectable;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, diesel_derive_enum::DbEnum, Serialize)]
+#[derive(Clone, Debug, diesel_derive_enum::DbEnum, Serialize, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::UserTokenType"]
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
