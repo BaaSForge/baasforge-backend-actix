@@ -4,7 +4,7 @@ use diesel::Queryable;
 use diesel::Selectable;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, diesel_derive_enum::DbEnum, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, diesel_derive_enum::DbEnum, Serialize, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::UserTokenType"]
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
@@ -16,6 +16,7 @@ pub enum UserTokenType {
 #[derive(Debug, Queryable, Selectable)]
 #[diesel(table_name = crate::schema::user_tokens)]
 pub struct UserToken {
+    pub id: i64,
     pub user_id: i64,
     #[allow(dead_code)]
     pub token_type: UserTokenType,
@@ -26,6 +27,7 @@ pub struct UserToken {
     pub created_at: DateTime<Utc>,
     pub revoked: Option<bool>,
     pub is_signup_token: bool,
+    pub refresh_token_id: Option<i64>,
 }
 
 #[derive(Debug, Insertable)]
@@ -37,6 +39,7 @@ pub struct UserTokenInternal {
     pub expires_at: DateTime<Utc>,
     pub revoked: Option<bool>,
     pub is_signup_token: bool,
+    pub refresh_token_id: Option<i64>,
 }
 
 #[derive(Serialize, Queryable, Selectable)]
@@ -49,4 +52,5 @@ pub struct UserTokenResponse {
     pub created_at: DateTime<Utc>,
     pub revoked: Option<bool>,
     pub is_signup_token: bool,
+    pub refresh_token_id: Option<i64>,
 }

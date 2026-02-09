@@ -123,29 +123,34 @@ pub async fn handle_google_auth_callback(
     let access_token_cookie = create_access_cookie(access_token.clone());
     let refresh_token_cookie = create_refresh_cookie(refresh_token.clone());
 
-    let new_tokens = vec![
-        UserTokenInternal {
-            user_id: user.id,
-            token_type: UserTokenType::Access,
-            token: access_token,
-            expires_at: access_exp,
-            revoked: Some(false),
-            is_signup_token: is_just_signed_up,
-        },
-        UserTokenInternal {
-            user_id: user.id,
-            token_type: UserTokenType::Refresh,
-            token: refresh_token,
-            expires_at: refresh_exp,
-            revoked: Some(false),
-            is_signup_token: is_just_signed_up,
-        },
-    ];
+    let refresh_token_row = UserTokenInternal {
+        user_id: user.id,
+        token_type: UserTokenType::Refresh,
+        token: refresh_token,
+        expires_at: refresh_exp,
+        revoked: Some(false),
+        is_signup_token: is_just_signed_up,
+        refresh_token_id: None,
+    };
+    let refresh_token_id: i64 = diesel::insert_into(user_tokens::table)
+        .values(&refresh_token_row)
+        .returning(user_tokens::id)
+        .get_result(&mut conn)
+        .expect("Failed to insert refresh token");
 
-    let _ = diesel::insert_into(user_tokens::table)
-        .values(new_tokens)
+    let access_token_row = UserTokenInternal {
+        user_id: user.id,
+        token_type: UserTokenType::Access,
+        token: access_token,
+        expires_at: access_exp,
+        revoked: Some(false),
+        is_signup_token: is_just_signed_up,
+        refresh_token_id: Some(refresh_token_id),
+    };
+    diesel::insert_into(user_tokens::table)
+        .values(&access_token_row)
         .execute(&mut conn)
-        .expect("Failed to insert user tokens");
+        .expect("Failed to insert access token");
 
     HttpResponse::Found()
         .append_header(("Location", query.callback_url.clone()))
@@ -199,6 +204,7 @@ pub async fn handle_refresh_token(
             expires_at: exp,
             revoked: Some(false),
             is_signup_token: false,
+            refresh_token_id: Some(refresh_payload.db_token.id),
         })
         .execute(&mut conn)
         .unwrap();
@@ -230,28 +236,43 @@ pub async fn handle_revoke_tokens(
     let mut conn = context.pool.get().unwrap();
     let ids = &body.token_ids;
 
-    let existing: i64 = user_tokens::table
+    let tokens: Vec<(i64, UserTokenType)> = user_tokens::table
         .filter(user_tokens::id.eq_any(ids))
         .filter(user_tokens::user_id.eq(refresh_payload.user_id))
         .filter(user_tokens::token.ne(&refresh_payload.db_token.token))
         .filter(user_tokens::token.ne(&access_payload.db_token.token))
-        .filter(user_tokens::revoked.eq(false))
-        .count()
-        .get_result(&mut conn)
+        .filter(user_tokens::revoked.eq(Some(false)))
+        .select((user_tokens::id, user_tokens::token_type))
+        .load::<(i64, UserTokenType)>(&mut conn)
         .unwrap();
 
-    if existing != ids.len() as i64 {
+    if tokens.len() != ids.len() {
         let api_result = api_error(
-            "One or more token IDs do not exist or doesn't belong to you or maybe already revoked, also note current access and refresh tokens can't be revoked",
+            "One or more token IDs do not exist or don't belong to you or are already revoked; current access and refresh tokens cannot be revoked",
             json!({}),
         );
         return HttpResponse::BadRequest().json(api_result);
     }
 
-    diesel::update(user_tokens::table.filter(user_tokens::id.eq_any(ids)))
-        .set(user_tokens::revoked.eq(Some(true)))
-        .execute(&mut conn)
-        .unwrap();
+    let mut revoke_ids: Vec<i64> = Vec::new();
+    for (token_id, token_type) in &tokens {
+        revoke_ids.push(*token_id);
+        if *token_type == UserTokenType::Refresh {
+            let access_ids: Vec<i64> = user_tokens::table
+                .filter(user_tokens::refresh_token_id.eq(token_id))
+                .select(user_tokens::id)
+                .load(&mut conn)
+                .unwrap_or_default();
+            revoke_ids.extend(access_ids);
+        }
+    }
+
+    if !revoke_ids.is_empty() {
+        diesel::update(user_tokens::table.filter(user_tokens::id.eq_any(revoke_ids)))
+            .set(user_tokens::revoked.eq(Some(true)))
+            .execute(&mut conn)
+            .unwrap();
+    }
 
     HttpResponse::Ok().finish()
 }

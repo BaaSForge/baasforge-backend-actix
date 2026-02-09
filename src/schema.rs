@@ -223,6 +223,7 @@ diesel::table! {
         revoked -> Nullable<Bool>,
         created_at -> Timestamptz,
         is_signup_token -> Bool,
+        refresh_token_id -> Nullable<Int8>,
     }
 }
 
