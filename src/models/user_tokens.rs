@@ -27,6 +27,7 @@ pub struct UserToken {
     pub created_at: DateTime<Utc>,
     pub revoked: Option<bool>,
     pub is_signup_token: bool,
+    #[allow(dead_code)]
     pub refresh_token_id: Option<i64>,
 }
 
