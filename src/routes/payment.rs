@@ -16,6 +16,7 @@ use serde_json::json;
 pub struct PaidPackageResponse {
     pub paid_packages: Vec<Package>,
     pub largest_tier: i32,
+    pub can_purchase_trial: bool,
 }
 
 pub async fn handle_get_user_paid_package(
@@ -37,9 +38,24 @@ pub async fn handle_get_user_paid_package(
         }
     };
 
+    let previous_successful_payment_count = match payments::table
+        .filter(payments::user_id.eq(access_payload.user_id))
+        .filter(payments::is_success.eq(true))
+        .count()
+        .get_result::<i64>(&mut conn)
+    {
+        Ok(count) => count,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+    };
+
+    let can_purchase_trial = previous_successful_payment_count == 0;
+
     let body = PaidPackageResponse {
         paid_packages,
         largest_tier,
+        can_purchase_trial,
     };
 
     HttpResponse::Ok().json(api_success(
