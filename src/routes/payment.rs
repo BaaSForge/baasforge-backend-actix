@@ -13,8 +13,14 @@ use serde::Serialize;
 use serde_json::json;
 
 #[derive(Serialize)]
+pub struct PaymentWithPackage {
+    pub payment: PaymentResponse,
+    pub package: Package,
+}
+
+#[derive(Serialize)]
 pub struct PaidPackageResponse {
-    pub paid_packages: Vec<Package>,
+    pub payments: Vec<PaymentWithPackage>,
     pub largest_tier: i32,
     pub can_purchase_trial: bool,
 }
@@ -31,12 +37,13 @@ pub async fn handle_get_user_paid_package(
 
     let mut conn = context.pool.get().expect("DB conn");
 
-    let (paid_packages, largest_tier) = match get_user_active_paid_packages(&mut conn, access_payload.user_id) {
-        Ok(t) => t,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
-        }
-    };
+    let (payments_with_packages, largest_tier) =
+        match get_user_active_paid_packages(&mut conn, access_payload.user_id) {
+            Ok(t) => t,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+            }
+        };
 
     let previous_successful_payment_count = match payments::table
         .filter(payments::user_id.eq(access_payload.user_id))
@@ -52,8 +59,13 @@ pub async fn handle_get_user_paid_package(
 
     let can_purchase_trial = previous_successful_payment_count == 0;
 
+    let payments: Vec<PaymentWithPackage> = payments_with_packages
+        .into_iter()
+        .map(|(payment, package)| PaymentWithPackage { payment, package })
+        .collect();
+
     let body = PaidPackageResponse {
-        paid_packages,
+        payments,
         largest_tier,
         can_purchase_trial,
     };

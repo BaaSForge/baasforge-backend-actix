@@ -8,7 +8,7 @@ use serde::Serialize;
 pub fn get_user_active_paid_packages<C>(
     conn: &mut C,
     user_id: i64,
-) -> Result<(Vec<Package>, i32), diesel::result::Error>
+) -> Result<(Vec<(PaymentResponse, Package)>, i32), diesel::result::Error>
 where
     C: diesel::connection::Connection<Backend = diesel::pg::Pg>
         + diesel::connection::LoadConnection,
@@ -18,13 +18,13 @@ where
         .is_null()
         .or(payments::expires_at.gt(now));
 
-    let paid_packages: Vec<Package> = payments::table
+    let payments_with_packages: Vec<(PaymentResponse, Package)> = payments::table
         .inner_join(packages::table.on(payments::package_id.eq(packages::id)))
         .filter(payments::user_id.eq(user_id))
         .filter(payments::is_success.eq(true))
         .filter(not_expired)
         .order(payments::id.desc())
-        .select(Package::as_select())
+        .select((PaymentResponse::as_select(), Package::as_select()))
         .load(conn)?;
 
     let largest_tier: i32 = payments::table
@@ -39,7 +39,7 @@ where
         .get_result::<Option<i32>>(conn)?
         .unwrap_or(0);
 
-    Ok((paid_packages, largest_tier))
+    Ok((payments_with_packages, largest_tier))
 }
 
 pub const PACKAGE_PAID_FEATURES: [(&str, &[PaidFeature]); 3] = [
