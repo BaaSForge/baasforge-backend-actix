@@ -1,0 +1,2 @@
+ALTER TABLE project_releases
+ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT now();

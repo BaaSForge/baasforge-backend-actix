@@ -102,12 +102,12 @@ diesel::table! {
         title -> Varchar,
         #[max_length = 255]
         slug -> Varchar,
-        tier -> Int4,
         description -> Nullable<Text>,
         price -> Float8,
         discount_percent -> Nullable<Int4>,
         is_trial -> Nullable<Bool>,
         is_active -> Bool,
+        tier -> Int4,
     }
 }
 
@@ -121,13 +121,13 @@ diesel::table! {
         package_title -> Nullable<Varchar>,
         #[max_length = 255]
         package_slug -> Nullable<Varchar>,
-        package_tier -> Int4,
         package_price -> Nullable<Float8>,
         package_discount -> Nullable<Int4>,
         is_success -> Bool,
         gateway_metadata -> Nullable<Jsonb>,
         expires_at -> Nullable<Timestamptz>,
         package_is_tiral -> Bool,
+        package_tier -> Int4,
     }
 }
 
@@ -138,6 +138,7 @@ diesel::table! {
         #[max_length = 50]
         version -> Varchar,
         units_metadata -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
     }
 }
 
