@@ -293,7 +293,7 @@ pub struct ListProjectRuntimesQuery {
     pub stage: Option<bool>,
 }
 
-pub async fn handle_list_project_runtimes(
+pub async fn handle_list_project_runtimes_with_connected_chat_sessions(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<i64>,
@@ -317,23 +317,20 @@ pub async fn handle_list_project_runtimes(
         }
     });
 
-    let runtimes: Vec<ProjectRuntimeResponse> = match env_filter {
-        Some(env) => project_runtimes::table
-            .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
-            .filter(projects::owner_user_id.eq(access_payload.user_id))
-            .filter(project_runtimes::project_id.eq(project_id))
-            .filter(project_runtimes::environment.eq(env))
-            .select(ProjectRuntimeResponse::as_select())
-            .load::<ProjectRuntimeResponse>(&mut conn)
-            .unwrap_or_default(),
-        None => project_runtimes::table
-            .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
-            .filter(projects::owner_user_id.eq(access_payload.user_id))
-            .filter(project_runtimes::project_id.eq(project_id))
-            .select(ProjectRuntimeResponse::as_select())
-            .load::<ProjectRuntimeResponse>(&mut conn)
-            .unwrap_or_default(),
-    };
+    let mut query = project_runtimes::table
+        .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(access_payload.user_id))
+        .filter(project_runtimes::project_id.eq(project_id))
+        .into_boxed();
+
+    if let Some(env) = env_filter {
+        query = query.filter(project_runtimes::environment.eq(env));
+    }
+
+    let runtimes: Vec<ProjectRuntimeResponse> = query
+        .select(ProjectRuntimeResponse::as_select())
+        .load::<ProjectRuntimeResponse>(&mut conn)
+        .unwrap_or_default();
 
     let runtime_ids: Vec<i64> = runtimes.iter().map(|r| r.id).collect();
     let connected_sessions: HashMap<i64, ChatSessionResponse> = if runtime_ids.is_empty() {

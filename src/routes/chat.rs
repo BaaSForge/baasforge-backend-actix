@@ -43,6 +43,7 @@ pub async fn handle_list_project_chat_sessions(
         .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
         .filter(projects::owner_user_id.eq(access_payload.user_id))
         .filter(chat_sessions::project_id.eq(project_id))
+        .order(chat_sessions::created_at.desc())
         .select(ChatSessionResponse::as_select())
         .load::<ChatSessionResponse>(&mut conn)
         .unwrap_or_default();
