@@ -51,6 +51,8 @@ pub enum PlatformEnvironmentType {
 #[serde(rename_all = "snake_case")]
 pub enum ProjectUnitType {
     Controller,
+    Model,
+    View,
 }
 
 #[derive(Insertable)]

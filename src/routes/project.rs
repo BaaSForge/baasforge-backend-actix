@@ -413,16 +413,23 @@ pub async fn handle_list_project_release_units(
     let mut conn = context.pool.get().expect("DB conn");
 
     // TODO: retrieve units ids from release metadata
-    let units_ids_from_release_metadata = [1, 2, 3, 4, 5];
+    let units_ids_from_release_metadata = [1, 2, 3, 4];
 
-    let units = project_units::table
+    let units = match project_units::table
         .inner_join(projects::table.on(project_units::project_id.eq(projects::id)))
         .filter(projects::owner_user_id.eq(access_payload.user_id))
         .filter(project_units::project_id.eq(project_id))
         .filter(project_units::id.eq_any(&units_ids_from_release_metadata))
         .select(ProjectUnitResponse::as_select())
         .load::<ProjectUnitResponse>(&mut conn)
-        .unwrap_or_default();
+    {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("Failed to load project release units: {:?}", e);
+            return HttpResponse::InternalServerError()
+                .json(api_error(&e.to_string(), json!({})));
+        }
+    };
 
     HttpResponse::Ok().json(api_success(
         "Project release units fetched successfully",
