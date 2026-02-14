@@ -162,6 +162,12 @@ diesel::table! {
         server_cluster_deployment_status -> Nullable<DeploymentStatusType>,
         server_cluster_deployment_is_healthy -> Nullable<Bool>,
         server_cluster_deployment_last_health -> Nullable<Timestamptz>,
+        #[max_length = 50]
+        live_release_version -> Nullable<Varchar>,
+        #[max_length = 255]
+        name -> Nullable<Varchar>,
+        #[max_length = 100]
+        slug -> Nullable<Varchar>,
     }
 }
 

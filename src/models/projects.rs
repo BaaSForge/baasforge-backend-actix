@@ -97,6 +97,8 @@ pub struct ProjectUnitResponse {
 pub struct ProjectRuntimeResponse {
     pub id: i64,
     pub project_id: i64,
+    pub name: Option<String>,
+    pub slug: Option<String>,
     pub environment: PlatformEnvironmentType,
     pub db_cluster_id: Option<i64>,
     pub db_cluster_deployment_metadata: Option<Value>,
@@ -108,6 +110,7 @@ pub struct ProjectRuntimeResponse {
     pub server_cluster_deployment_status: Option<DeploymentStatusType>,
     pub server_cluster_deployment_is_healthy: Option<bool>,
     pub server_cluster_deployment_last_health: Option<DateTime<Utc>>,
+    pub live_release_version: Option<String>,
 }
 
 #[derive(Serialize)]
