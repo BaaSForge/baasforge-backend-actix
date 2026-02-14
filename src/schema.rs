@@ -139,6 +139,7 @@ diesel::table! {
         version -> Varchar,
         units_metadata -> Nullable<Jsonb>,
         created_at -> Timestamptz,
+        notes -> Nullable<Text>,
     }
 }
 

@@ -124,6 +124,7 @@ pub struct ProjectReleaseResponse {
     pub id: i64,
     pub project_id: i64,
     pub version: String,
+    pub notes: Option<String>,
     pub units_metadata: Option<Value>,
     pub created_at: DateTime<Utc>,
 }
