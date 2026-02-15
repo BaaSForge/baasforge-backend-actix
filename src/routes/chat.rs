@@ -409,6 +409,8 @@ pub async fn handle_detach_chat_session_stage_runtime(
         ));
     }
 
+    // TODO: prune target runtime deployment (server & db)
+
     let updated: ChatSessionResponse = diesel::update(
         chat_sessions::table
             .filter(chat_sessions::id.eq(session_id))
