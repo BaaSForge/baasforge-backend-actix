@@ -1,0 +1,2 @@
+ALTER TABLE chat_sessions
+ADD CONSTRAINT stage_project_runtime_id_unique_key UNIQUE (stage_project_runtime_id);

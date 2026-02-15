@@ -203,9 +203,9 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
-                        "/projects/{id}/units",
+                        "/projects/{id}/non-draft-units",
                         web::get()
-                            .to(project::handle_list_project_units)
+                            .to(project::handle_list_project_non_draft_units)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )

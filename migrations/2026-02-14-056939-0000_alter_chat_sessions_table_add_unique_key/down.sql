@@ -1,0 +1,2 @@
+ALTER TABLE chat_sessions
+DROP CONSTRAINT IF EXISTS stage_project_runtime_id_unique_key;

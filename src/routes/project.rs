@@ -258,7 +258,7 @@ pub async fn handle_list_projects(
     ))
 }
 
-pub async fn handle_list_project_units(
+pub async fn handle_list_project_non_draft_units(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<i64>,
