@@ -55,16 +55,17 @@ pub async fn handle_create_project(
 
     if projects.len() >= 3 {
         let missing_features = user_missing_paid_features(
-            &payments_payload.db_payments,
+            &payments_payload.active_payments,
             &vec![PaidFeature::LotsOfProjects],
         );
+
         let most_complete_needed_package =
             most_complete_needed_package(&missing_features).unwrap_or("unknown");
 
         if !missing_features.is_empty() {
             return HttpResponse::Forbidden().json(api_success(
                 &format!(
-                    "You don't have enough purchased package to have more than 3 projects, you need package {} to do this action",
+                    "You don't have enough purchased package to have more than 3 projects, you need at least package {} to do this action",
                     most_complete_needed_package
                 ),
                 json!({

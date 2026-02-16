@@ -105,13 +105,13 @@ fn features_from_payments(payments: &[PaymentResponse]) -> Vec<PaidFeature> {
 }
 
 pub fn user_missing_paid_features(
-    payments: &[PaymentResponse],
+    active_payments: &[PaymentResponse],
     required_features: &[PaidFeature],
 ) -> Vec<MissingFeature>
 where
     PaidFeature: Clone + PartialEq,
 {
-    let user_features = features_from_payments(payments);
+    let user_features = features_from_payments(active_payments);
     let missing = missing_features(&user_features, required_features);
 
     missing

@@ -10,10 +10,12 @@ use actix_web::dev::ServiceResponse;
 use actix_web::web;
 use actix_web::{HttpMessage, HttpResponse, dev::ServiceRequest, middleware::Next};
 use diesel::prelude::*;
+use chrono::Utc;
 use serde_json::json;
 
+#[derive(Debug)]
 pub struct PaymentPayload {
-    pub db_payments: Vec<PaymentResponse>,
+    pub active_payments: Vec<PaymentResponse>,
 }
 
 pub fn paid_features_guard_middleware_factory(
@@ -43,14 +45,15 @@ pub fn paid_features_guard_middleware_factory(
 
             let mut conn = app_context.pool.get().expect("Failed to get DB connection");
 
-            let payments = payments::table
+            let active_payments = payments::table
                 .filter(payments::user_id.eq(user_id))
                 .filter(payments::is_success.eq(true))
+                .filter(payments::expires_at.is_null().or(payments::expires_at.gt(Utc::now())))
                 .select(PaymentResponse::as_select())
                 .load::<PaymentResponse>(&mut conn)
                 .unwrap_or_default();
 
-            let missing_features = user_missing_paid_features(&payments, &required_features);
+            let missing_features = user_missing_paid_features(&active_payments, &required_features);
             let most_complete_needed_package = most_complete_needed_package(&missing_features);
 
             if !missing_features.is_empty() {
@@ -67,7 +70,7 @@ pub fn paid_features_guard_middleware_factory(
             }
 
             let payload = PaymentPayload {
-                db_payments: payments,
+                active_payments,
             };
 
             req.extensions_mut().insert(payload);

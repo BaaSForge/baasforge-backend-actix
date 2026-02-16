@@ -26,6 +26,7 @@ pub struct PaymentInsert {
 #[derive(Serialize, Queryable, Selectable)]
 #[diesel(table_name = crate::schema::payments)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
+#[derive(Debug)]
 pub struct PaymentResponse {
     pub id: i64,
     pub user_id: i64,
