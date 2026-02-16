@@ -108,10 +108,20 @@ pub async fn handle_get_project_chat_session(
     ))
 }
 
+const DEFAULT_MESSAGES_PAGE_SIZE: i64 = 50;
+const MAX_MESSAGES_PAGE_SIZE: i64 = 100;
+
+#[derive(Debug, Deserialize)]
+pub struct ListChatMessagesQuery {
+    pub before_id: Option<i64>,
+    pub limit: Option<i64>,
+}
+
 pub async fn handle_list_chat_session_messages(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<(i64, i64)>,
+    query: web::Query<ListChatMessagesQuery>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -121,16 +131,29 @@ pub async fn handle_list_chat_session_messages(
 
     let (project_id, session_id) = path.into_inner();
 
+    let limit = query
+        .limit
+        .map(|l| l.clamp(1, MAX_MESSAGES_PAGE_SIZE))
+        .unwrap_or(DEFAULT_MESSAGES_PAGE_SIZE);
+
     let mut conn = context.pool.get().expect("DB conn");
 
-    let messages = chat_messages::table
+    let mut db_query = chat_messages::table
         .inner_join(chat_sessions::table.on(chat_messages::chat_session_id.eq(chat_sessions::id)))
         .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
         .filter(projects::owner_user_id.eq(access_payload.user_id))
         .filter(chat_sessions::project_id.eq(project_id))
         .filter(chat_messages::chat_session_id.eq(session_id))
+        .into_boxed();
+
+    if let Some(before_id) = query.before_id {
+        db_query = db_query.filter(chat_messages::id.lt(before_id));
+    }
+
+    let messages = db_query
         .select(ChatMessageResponse::as_select())
-        .order(chat_messages::created_at.asc())
+        .order(chat_messages::id.desc())
+        .limit(limit)
         .load::<ChatMessageResponse>(&mut conn)
         .unwrap_or_default();
 
