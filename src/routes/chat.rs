@@ -2,7 +2,7 @@ use crate::libs::api_response::{api_error, api_success};
 use crate::middlewares::auth::AccessPayload;
 use crate::models::chat_messages::{
     ChatMessageCreateBody, ChatMessageInsert, ChatMessageResponse, ChatMessageType,
-    ChatSessionRoleType,
+    ChatMessageWithFirstResponse, ChatSessionRoleType,
 };
 use crate::models::chat_sessions::{
     ChatSessionInsert, ChatSessionResponse, ChatSessionWithProjectRuntimeResponse,
@@ -157,9 +157,24 @@ pub async fn handle_list_chat_session_messages(
         .load::<ChatMessageResponse>(&mut conn)
         .unwrap_or_default();
 
+    let oldest_id: Option<i64> = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .select(diesel::dsl::min(chat_messages::id))
+        .get_result(&mut conn)
+        .ok()
+        .flatten();
+
+    let messages_with_first: Vec<ChatMessageWithFirstResponse> = messages
+        .into_iter()
+        .map(|m| ChatMessageWithFirstResponse {
+            is_first: oldest_id.map_or(false, |oldest| m.id == oldest),
+            inner: m,
+        })
+        .collect();
+
     HttpResponse::Ok().json(api_success(
         "Chat session messages fetched successfully",
-        json!(messages),
+        json!(messages_with_first),
     ))
 }
 
@@ -208,9 +223,21 @@ pub async fn handle_create_chat_session_message(
         .get_result(&mut conn)
         .expect("Insert chat message failed");
 
+    let is_first = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .count()
+        .get_result::<i64>(&mut conn)
+        .expect("Count chat messages failed")
+        == 1;
+
+    let response = ChatMessageWithFirstResponse {
+        inner: message,
+        is_first,
+    };
+
     HttpResponse::Ok().json(api_success(
         "Chat message created successfully",
-        json!(message),
+        json!(response),
     ))
 }
 

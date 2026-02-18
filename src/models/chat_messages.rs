@@ -42,6 +42,13 @@ pub struct ChatMessageResponse {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Serialize)]
+pub struct ChatMessageWithFirstResponse {
+    #[serde(flatten)]
+    pub inner: ChatMessageResponse,
+    pub is_first: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ChatMessageCreateBody {
     #[serde(rename = "type")]
