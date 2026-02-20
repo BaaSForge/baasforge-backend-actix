@@ -1,8 +1,8 @@
 use crate::libs::api_response::{api_error, api_success};
 use crate::middlewares::auth::AccessPayload;
 use crate::models::chat_messages::{
-    ChatMessageCreateBody, ChatMessageInsert, ChatMessageResponse, ChatMessageType,
-    ChatMessageWithFirstResponse, ChatSessionRoleType,
+    ChatMessageCreateBody, ChatMessageInsert, ChatMessageResponse,
+    ChatMessageRow, ChatMessageType, ChatMessageWithFirstResponse, ChatSessionRoleType,
 };
 use crate::models::chat_sessions::{
     ChatSessionInsert, ChatSessionResponse, ChatSessionWithProjectRuntimeResponse,
@@ -150,12 +150,13 @@ pub async fn handle_list_chat_session_messages(
         db_query = db_query.filter(chat_messages::id.lt(before_id));
     }
 
-    let messages = db_query
-        .select(ChatMessageResponse::as_select())
+    let rows = db_query
+        .select(ChatMessageRow::as_select())
         .order(chat_messages::id.desc())
         .limit(limit)
-        .load::<ChatMessageResponse>(&mut conn)
+        .load::<ChatMessageRow>(&mut conn)
         .unwrap_or_default();
+    let messages: Vec<ChatMessageResponse> = rows.into_iter().map(ChatMessageResponse::from).collect();
 
     let oldest_id: Option<i64> = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))
@@ -193,6 +194,13 @@ pub async fn handle_create_chat_session_message(
         ));
     }
 
+    if let Err(e) = body.validate_payload() {
+        return HttpResponse::BadRequest().json(api_error(
+            "Invalid payload for message type",
+            json!({ "detail": e.to_string() }),
+        ));
+    }
+
     let mut conn = context.pool.get().expect("DB conn");
 
     match chat_sessions::table
@@ -217,11 +225,12 @@ pub async fn handle_create_chat_session_message(
         payload: body.payload,
     };
 
-    let message: ChatMessageResponse = diesel::insert_into(chat_messages::table)
+    let row: ChatMessageRow = diesel::insert_into(chat_messages::table)
         .values(&insert)
-        .returning(ChatMessageResponse::as_select())
+        .returning(ChatMessageRow::as_select())
         .get_result(&mut conn)
         .expect("Insert chat message failed");
+    let message = ChatMessageResponse::from(row);
 
     let is_first = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))

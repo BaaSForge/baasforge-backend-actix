@@ -45,7 +45,7 @@ pub enum PlatformEnvironmentType {
     Prod
 }
 
-#[derive(Debug, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
+#[derive(Debug, PartialEq, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::ProjectUnitType"]
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
@@ -77,7 +77,7 @@ pub struct ProjectResponse {
     pub language: LanguageType,
 }
 
-#[derive(Serialize, Queryable, Selectable)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Queryable, Selectable)]
 #[diesel(table_name = crate::schema::project_units)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectUnitResponse {
