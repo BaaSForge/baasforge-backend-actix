@@ -68,45 +68,45 @@ pub async fn publish_chat_session_message(
     Ok(())
 }
 
-pub async fn create_chat_session_consumer(
-    rabbit_url: &str,
-    project_id: i64,
-    session_id: i64,
-) -> Result<(Connection, lapin::Consumer), lapin::Error> {
-    let (connection, channel) = ensure_chat_session_exchange(rabbit_url).await?;
-    let routing_key = chat_session_routing_key(project_id, session_id);
+// pub async fn create_chat_session_consumer(
+//     rabbit_url: &str,
+//     project_id: i64,
+//     session_id: i64,
+// ) -> Result<(Connection, lapin::Consumer), lapin::Error> {
+//     let (connection, channel) = ensure_chat_session_exchange(rabbit_url).await?;
+//     let routing_key = chat_session_routing_key(project_id, session_id);
 
-    let mut queue_opts = QueueDeclareOptions::default();
-    queue_opts.exclusive = true;
-    queue_opts.auto_delete = true;
+//     let mut queue_opts = QueueDeclareOptions::default();
+//     queue_opts.exclusive = true;
+//     queue_opts.auto_delete = true;
 
-    let queue = channel
-        .queue_declare("", queue_opts, FieldTable::default())
-        .await?;
+//     let queue = channel
+//         .queue_declare("", queue_opts, FieldTable::default())
+//         .await?;
 
-    let queue_name = queue.borrow();
-    channel
-        .queue_bind(
-            queue_name,
-            CHAT_SESSION_EXCHANGE,
-            &routing_key,
-            QueueBindOptions::default(),
-            FieldTable::default(),
-        )
-        .await?;
+//     let queue_name = queue.borrow();
+//     channel
+//         .queue_bind(
+//             queue_name,
+//             CHAT_SESSION_EXCHANGE,
+//             &routing_key,
+//             QueueBindOptions::default(),
+//             FieldTable::default(),
+//         )
+//         .await?;
 
-    let consumer_tag = format!("chat_consumer_{}_{}", project_id, session_id);
-    let mut consume_opts = BasicConsumeOptions::default();
-    consume_opts.no_ack = true;
+//     let consumer_tag = format!("chat_consumer_{}_{}", project_id, session_id);
+//     let mut consume_opts = BasicConsumeOptions::default();
+//     consume_opts.no_ack = true;
 
-    let consumer = channel
-        .basic_consume(
-            queue_name,
-            &consumer_tag,
-            consume_opts,
-            FieldTable::default(),
-        )
-        .await?;
+//     let consumer = channel
+//         .basic_consume(
+//             queue_name,
+//             &consumer_tag,
+//             consume_opts,
+//             FieldTable::default(),
+//         )
+//         .await?;
 
-    Ok((connection, consumer))
-}
+//     Ok((connection, consumer))
+// }
