@@ -15,7 +15,6 @@ use crate::schema::chat_sessions;
 use crate::schema::project_runtimes;
 use crate::schema::project_units;
 use crate::schema::projects;
-use crate::services::rabbit;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use actix_ws::Message;
 use chrono::Utc;
@@ -543,7 +542,7 @@ pub async fn handle_chat_session_channel_ws(
     let rabbit_url = context.settings.rabbit_url.clone();
 
     actix_web::rt::spawn(async move {
-        let (_connection, mut consumer) = match rabbit::create_chat_session_consumer(
+        let (_connection, mut consumer) = match super::message_queue::create_consumer(
             &rabbit_url,
             project_id,
             session_id,
