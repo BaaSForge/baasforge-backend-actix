@@ -11,18 +11,19 @@ use crate::models::projects::PlatformEnvironmentType;
 use crate::models::projects::{ProjectRuntimeResponse, ProjectUnitResponse};
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::AppContext;
+// use crate::services::message_queue as mq_service;
 use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
 use crate::schema::project_runtimes;
 use crate::schema::project_units;
 use crate::schema::projects;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
-use actix_ws::Message;
+// use actix_ws::Message;
 use chrono::Utc;
 use diesel::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
-use tokio_stream::StreamExt as _;
+// use tokio_stream::StreamExt as _;
 
 pub async fn handle_list_project_chat_sessions(
     context: web::Data<AppContext>,
@@ -240,6 +241,7 @@ pub async fn handle_create_chat_session_message(
         == 1;
 
     let queue_message = ChatSessionQueueMessage {
+        role: ChatSessionRoleType::User,
         type_: message.type_.clone(),
         payload: message.payload.clone(),
     };
@@ -495,124 +497,124 @@ pub async fn handle_detach_chat_session_stage_runtime(
     ))
 }
 
-pub async fn handle_chat_session_channel_ws(
-    context: web::Data<AppContext>,
-    req: HttpRequest,
-    path: web::Path<(i64, i64)>,
-    body: web::Payload,
-) -> actix_web::Result<impl actix_web::Responder> {
-    let (project_id, session_id) = path.into_inner();
-    log::info!(
-        "[chat-ws] WebSocket handshake request: project_id={} session_id={}",
-        project_id,
-        session_id
-    );
+// pub async fn handle_chat_session_channel_ws(
+//     context: web::Data<AppContext>,
+//     req: HttpRequest,
+//     path: web::Path<(i64, i64)>,
+//     body: web::Payload,
+// ) -> actix_web::Result<impl actix_web::Responder> {
+//     let (project_id, session_id) = path.into_inner();
+//     log::info!(
+//         "[chat-ws] WebSocket handshake request: project_id={} session_id={}",
+//         project_id,
+//         session_id
+//     );
 
-    let extensions = req.extensions_mut();
+//     let extensions = req.extensions_mut();
 
-    let access_payload = extensions
-        .get::<AccessPayload>()
-        .expect("AccessPayload must exist to connect to chat session channel");
+//     let access_payload = extensions
+//         .get::<AccessPayload>()
+//         .expect("AccessPayload must exist to connect to chat session channel");
 
-    let user_id = access_payload.user_id;
-    let mut conn = context.pool.get().expect("DB conn");
+//     let user_id = access_payload.user_id;
+//     let mut conn = context.pool.get().expect("DB conn");
 
-    let session_owned: Option<i64> = chat_sessions::table
-        .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
-        .filter(projects::owner_user_id.eq(user_id))
-        .filter(chat_sessions::project_id.eq(project_id))
-        .filter(chat_sessions::id.eq(session_id))
-        .select(chat_sessions::id)
-        .first::<i64>(&mut conn)
-        .optional()
-        .expect("DB query failed");
+//     let session_owned: Option<i64> = chat_sessions::table
+//         .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+//         .filter(projects::owner_user_id.eq(user_id))
+//         .filter(chat_sessions::project_id.eq(project_id))
+//         .filter(chat_sessions::id.eq(session_id))
+//         .select(chat_sessions::id)
+//         .first::<i64>(&mut conn)
+//         .optional()
+//         .expect("DB query failed");
 
-    if session_owned.is_none() {
-        log::warn!(
-            "[chat-ws] Chat session not found or no access: project_id={} session_id={} user_id={}",
-            project_id,
-            session_id,
-            user_id
-        );
-        return Ok(HttpResponse::NotFound().json(api_error(
-            "Chat session not found or you do not have access",
-            json!({}),
-        )));
-    }
+//     if session_owned.is_none() {
+//         log::warn!(
+//             "[chat-ws] Chat session not found or no access: project_id={} session_id={} user_id={}",
+//             project_id,
+//             session_id,
+//             user_id
+//         );
+//         return Ok(HttpResponse::NotFound().json(api_error(
+//             "Chat session not found or you do not have access",
+//             json!({}),
+//         )));
+//     }
 
-    log::info!(
-        "[chat-ws] WebSocket upgrade accepted: project_id={} session_id={}",
-        project_id,
-        session_id
-    );
+//     log::info!(
+//         "[chat-ws] WebSocket upgrade accepted: project_id={} session_id={}",
+//         project_id,
+//         session_id
+//     );
 
-    let (response, mut session, mut msg_stream) =
-        actix_ws::handle(&req, body).map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+//     let (response, mut session, mut msg_stream) =
+//         actix_ws::handle(&req, body).map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
-    let rabbit_url = context.settings.rabbit_url.clone();
+//     let rabbit_url = context.settings.rabbit_url.clone();
 
-    actix_web::rt::spawn(async move {
-        let (_connection, mut consumer) = match super::message_queue::create_consumer(
-            &rabbit_url,
-            project_id,
-            session_id,
-        )
-        .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!(
-                    "[chat-ws] Failed to create RabbitMQ consumer: project_id={} session_id={} err={}",
-                    project_id,
-                    session_id,
-                    e
-                );
-                let _ = session
-                    .text(
-                        json!({
-                            "type": "error",
-                            "message": "Failed to subscribe to channel",
-                        })
-                        .to_string(),
-                    )
-                    .await;
-                let _ = session.close(None).await;
-                return;
-            }
-        };
+//     actix_web::rt::spawn(async move {
+//         let (_connection, mut consumer) = match mq_service::create_consumer(
+//             &rabbit_url,
+//             chat_message_queue::CHAT_SESSION_EXCHANGE,
+//             &chat_message_queue::chat_session_routing_key(project_id, session_id),
+//         )
+//         .await
+//         {
+//             Ok(c) => c,
+//             Err(e) => {
+//                 log::error!(
+//                     "[chat-ws] Failed to create RabbitMQ consumer: project_id={} session_id={} err={}",
+//                     project_id,
+//                     session_id,
+//                     e
+//                 );
+//                 let _ = session
+//                     .text(
+//                         json!({
+//                             "type": "error",
+//                             "message": "Failed to subscribe to channel",
+//                         })
+//                         .to_string(),
+//                     )
+//                     .await;
+//                 let _ = session.close(None).await;
+//                 return;
+//             }
+//         };
 
-        loop {
-            tokio::select! {
-                delivery = consumer.next() => {
-                    match delivery {
-                        Some(Ok(delivery)) => {
-                            let payload = String::from_utf8_lossy(&delivery.data).into_owned();
-                            if session.text(payload).await.is_err() {
-                                break;
-                            }
-                        }
-                        Some(Err(e)) => {
-                            log::warn!("[chat-ws] RabbitMQ consumer error: {}", e);
-                            break;
-                        }
-                        None => break,
-                    }
-                }
-                next = msg_stream.next() => {
-                    match next {
-                        Some(Ok(Message::Ping(bytes))) => {
-                            if session.pong(&bytes).await.is_err() {
-                                break;
-                            }
-                        }
-                        Some(Ok(Message::Close(_))) | None => break,
-                        _ => {}
-                    }
-                }
-            }
-        }
-        let _ = session.close(None).await;
-    });
+//         loop {
+//             tokio::select! {
+//                 delivery = consumer.next() => {
+//                     match delivery {
+//                         Some(Ok(delivery)) => {
+//                             let payload = String::from_utf8_lossy(&delivery.data).into_owned();
+//                             if session.text(payload).await.is_err() {
+//                                 break;
+//                             }
+//                         }
+//                         Some(Err(e)) => {
+//                             log::warn!("[chat-ws] RabbitMQ consumer error: {}", e);
+//                             break;
+//                         }
+//                         None => break,
+//                     }
+//                 }
+//                 next = msg_stream.next() => {
+//                     match next {
+//                         Some(Ok(Message::Ping(bytes))) => {
+//                             if session.pong(&bytes).await.is_err() {
+//                                 break;
+//                             }
+//                         }
+//                         Some(Ok(Message::Close(_))) | None => break,
+//                         _ => {}
+//                     }
+//                 }
+//             }
+//         }
+//         let _ = session.close(None).await;
+//     });
 
-    Ok(response)
-}
+//     Ok(response)
+// }

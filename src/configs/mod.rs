@@ -33,6 +33,7 @@ pub struct Settings {
   pub auth_access_token_secret: String,
   pub auth_refresh_token_secret: String,
   pub rabbit_url: String,
+  pub openai_api_key: Option<String>,
 }
 
 impl Settings {
@@ -47,6 +48,7 @@ impl Settings {
     let auth_access_token_secret = env::var("AUTH_ACCESS_TOKEN_SECRET").expect("AUTH_ACCESS_TOKEN_SECRET must be set");
     let auth_refresh_token_secret = env::var("AUTH_REFRESH_TOKEN_SECRET").expect("AUTH_REFRESH_TOKEN_SECRET must be set");
     let rabbit_url = env::var("RABBIT_URL").expect("RABBIT_URL must be set");
+    let openai_api_key = env::var("OPENAI_API_KEY").or_else(|_| env::var("OPENAI_KEY")).ok();
 
     Ok(Settings {
       port,
@@ -55,6 +57,7 @@ impl Settings {
       auth_access_token_secret,
       auth_refresh_token_secret,
       rabbit_url,
+      openai_api_key,
     })
   }
 }

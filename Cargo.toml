@@ -4,6 +4,11 @@
 name = "baal-backend-actix"
 version = "0.1.0"
 edition = "2024"
+default-run = "baal-backend-actix"
+
+[[bin]]
+name = "chat_worker"
+path = "src/bin/chat_worker.rs"
 
 [dependencies]
 # Web Framework & Core

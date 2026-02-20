@@ -1,11 +1,4 @@
-mod configs;
-mod database;
-mod libs;
-mod middlewares;
-mod models;
-mod routes;
-mod schema;
-mod services;
+use baal_backend_actix::routes;
 use rustls::crypto::ring::default_provider;
 
 #[actix_web::main]

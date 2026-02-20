@@ -1,6 +1,9 @@
-use lapin::{BasicProperties, Connection, ConnectionProperties, Consumer, ExchangeKind, options::*, types::FieldTable};
-use std::fmt;
+use lapin::{
+    BasicProperties, Connection, ConnectionProperties, Consumer, ExchangeKind,
+    options::*, types::FieldTable,
+};
 use std::borrow::Borrow;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum PublishError {
@@ -41,6 +44,8 @@ pub async fn ensure_exchange(
     Ok((connection, channel))
 }
 
+/// Publishes a message to the exchange. Uses persistent delivery so messages
+/// survive broker restarts (important for work queues and at scale).
 pub async fn publish(
     rabbit_url: &str,
     exchange_name: &str,
@@ -49,13 +54,15 @@ pub async fn publish(
 ) -> Result<(), lapin::Error> {
     let (_connection, channel) = ensure_exchange(rabbit_url, exchange_name).await?;
 
+    let props = BasicProperties::default().with_delivery_mode(2); // persistent
+
     channel
         .basic_publish(
             exchange_name,
             routing_key,
             BasicPublishOptions::default(),
             payload,
-            BasicProperties::default(),
+            props,
         )
         .await?
         .await?;
@@ -63,39 +70,46 @@ pub async fn publish(
     Ok(())
 }
 
-pub async fn create_consumer(
+/// Creates a consumer for a durable shared queue (competing consumers).
+/// Use for worker processes: durable queue, manual ack, prefetch 1 to avoid
+/// one worker hoarding messages and to survive restarts.
+pub async fn create_work_consumer(
     rabbit_url: &str,
     exchange_name: &str,
-    routing_key: &str,
+    queue_name: &str,
+    binding_pattern: &str,
 ) -> Result<(Connection, Consumer), lapin::Error> {
     let (connection, channel) = ensure_exchange(rabbit_url, exchange_name).await?;
 
     let mut queue_opts = QueueDeclareOptions::default();
-    queue_opts.exclusive = true;
-    queue_opts.auto_delete = true;
+    queue_opts.durable = true; // survive broker restart; required for competing consumers
 
     let queue = channel
-        .queue_declare("", queue_opts, FieldTable::default())
+        .queue_declare(queue_name, queue_opts, FieldTable::default())
         .await?;
 
-    let queue_name = queue.borrow();
+    let queue_name_borrow = queue.borrow();
     channel
         .queue_bind(
-            queue_name,
+            queue_name_borrow,
             exchange_name,
-            routing_key,
+            binding_pattern,
             QueueBindOptions::default(),
             FieldTable::default(),
         )
         .await?;
 
-    let consumer_tag = format!("consumer_{}_{}", exchange_name, routing_key);
+    channel
+        .basic_qos(1, BasicQosOptions::default()) // prefetch 1: fair dispatch, no hoarding
+        .await?;
+
+    let consumer_tag = format!("work_consumer_{}", queue_name);
     let mut consume_opts = BasicConsumeOptions::default();
-    consume_opts.no_ack = true;
+    consume_opts.no_ack = false; // manual ack so messages are redelivered on crash
 
     let consumer = channel
         .basic_consume(
-            queue_name,
+            queue_name_borrow,
             &consumer_tag,
             consume_opts,
             FieldTable::default(),
