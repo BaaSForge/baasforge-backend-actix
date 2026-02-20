@@ -24,3 +24,17 @@ services:
       - "15673:15672"
     volumes:
       - ./.dev/rabbit_data:/var/lib/rabbitmq
+  redis:
+    image: redis:8.2.1-alpine3.22
+    restart: always
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./.dev/redis_data:/data
