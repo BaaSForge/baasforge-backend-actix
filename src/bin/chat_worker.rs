@@ -14,6 +14,7 @@ use lapin::options::BasicAckOptions;
 use openai::chat::{ChatCompletionBuilder, ChatCompletionMessage, ChatCompletionMessageRole};
 use openai::Credentials;
 use serde_json::Value;
+use tokio::sync::mpsc::Receiver;
 use tokio_stream::StreamExt;
 use tracing::info;
 
@@ -44,11 +45,10 @@ fn payload_to_string(payload: &Option<Value>) -> String {
     }
 }
 
-async fn call_gpt(
-    credentials: &Credentials,
+fn build_chat_messages(
     session_messages: &[(ChatSessionRoleType, Option<Value>)],
     user_text: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+) -> Vec<ChatCompletionMessage> {
     let mut messages: Vec<ChatCompletionMessage> = vec![
         ChatCompletionMessage {
             role: ChatCompletionMessageRole::System,
@@ -88,23 +88,66 @@ async fn call_gpt(
         tool_calls: None,
     });
 
-    let request = ChatCompletionBuilder::default()
+    messages
+}
+
+async fn call_gpt_stream(
+    credentials: &Credentials,
+    session_messages: &[(ChatSessionRoleType, Option<Value>)],
+    user_text: &str,
+    redis_url: Option<&str>,
+    topic: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let messages = build_chat_messages(session_messages, user_text);
+
+    let mut rx: Receiver<openai::chat::ChatCompletionDelta> = ChatCompletionBuilder::default()
         .model("gpt-4o-mini")
         .messages(messages)
         .credentials(credentials.clone())
-        .build()
-        .map_err(|e| format!("build chat request: {}", e))?;
-
-    let completion = openai::chat::ChatCompletion::create(request)
+        .create_stream()
         .await
-        .map_err(|e| format!("OpenAI API: {}", e))?;
+        .map_err(|e| format!("OpenAI stream: {}", e))?;
 
-    let text = completion
-        .choices
-        .first()
-        .and_then(|c| c.message.content.clone())
-        .unwrap_or_default();
-    Ok(text)
+    let mut full_text = String::new();
+    let mut chunk_index: u32 = 0;
+
+    while let Some(delta) = rx.recv().await {
+        for choice in &delta.choices {
+            if let Some(ref content) = choice.delta.content {
+                if !content.is_empty() {
+                    full_text.push_str(content);
+                    if let Some(redis_url) = redis_url {
+                        let payload = ChatSessionNewMessageChunkPayload::new(
+                            topic.to_string(),
+                            chunk_index,
+                            content.clone(),
+                            false,
+                        );
+                        if let Err(e) =
+                            publish_chat_chunk(redis_url, topic, payload).await
+                        {
+                            tracing::warn!("Failed to publish chat chunk to Redis: {}", e);
+                        }
+                        chunk_index += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(redis_url) = redis_url {
+        let payload = ChatSessionNewMessageChunkPayload::new(
+            topic.to_string(),
+            chunk_index,
+            String::new(),
+            true,
+        );
+        if let Err(e) = publish_chat_chunk(redis_url, topic, payload).await {
+            tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
+        }
+    }
+
+    Ok(full_text)
 }
 
 #[tokio::main]
@@ -175,7 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let credentials = credentials.clone();
         let settings = settings.clone();
 
-        let acker = delivery.acker.clone();
+        let acker: lapin::acker::Acker = delivery.acker.clone();
         tokio::spawn(async move {
             let result = process_one(
                 &pool,
@@ -216,20 +259,15 @@ async fn process_one(
     user_text: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let session_messages = load_previous_session_messages(pool, session_id, 50)?;
-    let ai_text = call_gpt(credentials, &session_messages, user_text).await?;
-
     let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
-    if let Some(ref redis_url) = settings.redis_url {
-        let payload = ChatSessionNewMessageChunkPayload::new(
-            topic.clone(),
-            0,
-            ai_text.clone(),
-            true,
-        );
-        if let Err(e) = publish_chat_chunk(redis_url, &topic, payload).await {
-            tracing::warn!(%project_id, %session_id, "Failed to publish chat chunk to Redis: {}", e);
-        }
-    }
+    let ai_text = call_gpt_stream(
+        credentials,
+        &session_messages,
+        user_text,
+        settings.redis_url.as_deref(),
+        &topic,
+    )
+    .await?;
 
     let mut conn = pool.get().map_err(|e| format!("pool: {}", e))?;
     let insert = ChatMessageInsert {
