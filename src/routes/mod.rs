@@ -5,6 +5,7 @@ pub mod payment;
 pub mod project;
 pub mod purchase;
 pub mod test;
+pub mod ws;
 
 use crate::configs::Settings;
 use crate::database::{DbPool, establish_pool};
@@ -19,16 +20,22 @@ use actix_web::Result;
 use actix_web::middleware::from_fn;
 use actix_web::web;
 use std::error::Error;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AppContext {
     pub pool: DbPool,
     pub settings: Settings,
+    pub ws_broker: Arc<ws::WsBroker>,
 }
 
 impl AppContext {
-    pub fn new(pool: DbPool, settings: Settings) -> Self {
-        Self { pool, settings }
+    pub fn new(pool: DbPool, settings: Settings, ws_broker: Arc<ws::WsBroker>) -> Self {
+        Self {
+            pool,
+            settings,
+            ws_broker,
+        }
     }
 }
 
@@ -42,7 +49,11 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
         .expect("Failed to parse port number");
 
     let pool = establish_pool(settings.pg_database_url.clone());
-    let app_context = AppContext::new(pool, settings.clone());
+    let ws_broker = Arc::new(ws::WsBroker::new());
+    if let Some(ref redis_url) = settings.redis_url {
+        ws::run_redis_subscriber(redis_url.clone(), ws_broker.clone());
+    }
+    let app_context = AppContext::new(pool, settings.clone(), ws_broker);
 
     HttpServer::new(move || {
         App::new()
@@ -137,6 +148,11 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .to(payment::handle_get_user_paid_package)
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     ),
+            )
+            .service(
+                web::scope("/api/v1/ws")
+                    .wrap(from_fn(auth_closed_guard_middleware))
+                    .route("", web::get().to(ws::handle_ws)),
             )
             .service(
                 web::scope("/api/v1/platform")

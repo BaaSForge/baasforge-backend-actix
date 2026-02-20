@@ -1,12 +1,14 @@
 use baal_backend_actix::configs::Settings;
 use baal_backend_actix::database::{establish_pool, DbPool};
 use baal_backend_actix::models::chat_messages::{
-    ChatMessageInsert, ChatMessagePayload, ChatMessageRow, ChatMessageType, ChatSessionRoleType,
+    ChatMessageInsert, ChatMessageRow, ChatMessageType, ChatSessionRoleType,
 };
 use baal_backend_actix::routes::chat::message_queue::{
     self as chat_message_queue, parse_chat_routing_key, ChatSessionQueueMessage,
 };
-use baal_backend_actix::schema::chat_messages;
+use baal_backend_actix::routes::ws::events::ChatSessionNewMessageChunkPayload;
+use baal_backend_actix::routes::ws::publish_chat_chunk;
+use baal_backend_actix::schema::{chat_messages};
 use diesel::prelude::*;
 use lapin::options::BasicAckOptions;
 use openai::chat::{ChatCompletionBuilder, ChatCompletionMessage, ChatCompletionMessageRole};
@@ -155,21 +157,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         };
 
-        if !matches!(payload.role, ChatSessionRoleType::User) {
+        if let Err(e) = payload.validate() {
+            tracing::error!("Invalid queue message: {}", e);
             let _ = delivery.acker.ack(BasicAckOptions::default()).await;
             continue;
         }
-        let user_text = match &payload.type_ {
-            ChatMessageType::Text => match &payload.payload {
-                Some(ChatMessagePayload::Text(s)) => s.clone(),
-                _ => {
-                    tracing::warn!("Message type is text but payload is not a text message: {:?}", payload);
-                    let _ = delivery.acker.ack(BasicAckOptions::default()).await;
-                    continue;
-                }
-            },
-            _ => {
-                tracing::warn!("Message type is not text, you need to handle other message types: {:?}", payload);
+
+        let (user_id, user_text) = match payload.as_user_text_message() {
+            Some(x) => x,
+            None => {
                 let _ = delivery.acker.ack(BasicAckOptions::default()).await;
                 continue;
             }
@@ -177,12 +173,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let pool = pool.clone();
         let credentials = credentials.clone();
+        let settings = settings.clone();
 
         let acker = delivery.acker.clone();
         tokio::spawn(async move {
             let result = process_one(
                 &pool,
                 &credentials,
+                &settings,
+                user_id,
                 project_id,
                 session_id,
                 &user_text,
@@ -210,12 +209,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 async fn process_one(
     pool: &DbPool,
     credentials: &Credentials,
+    settings: &Settings,
+    user_id: i64,
     project_id: i64,
     session_id: i64,
     user_text: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let session_messages = load_previous_session_messages(pool, session_id, 50)?;
     let ai_text = call_gpt(credentials, &session_messages, user_text).await?;
+
+    let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+    if let Some(ref redis_url) = settings.redis_url {
+        let payload = ChatSessionNewMessageChunkPayload::new(
+            topic.clone(),
+            0,
+            ai_text.clone(),
+            true,
+        );
+        if let Err(e) = publish_chat_chunk(redis_url, &topic, payload).await {
+            tracing::warn!(%project_id, %session_id, "Failed to publish chat chunk to Redis: {}", e);
+        }
+    }
 
     let mut conn = pool.get().map_err(|e| format!("pool: {}", e))?;
     let insert = ChatMessageInsert {

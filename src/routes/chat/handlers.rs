@@ -182,9 +182,15 @@ pub async fn handle_list_chat_session_messages(
 
 pub async fn handle_create_chat_session_message(
     context: web::Data<AppContext>,
+    req: HttpRequest,
     path: web::Path<(i64, i64)>,
     body: web::Json<ChatMessageCreateBody>,
 ) -> HttpResponse {
+    let user_id = req
+        .extensions()
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to create chat session message")
+        .user_id;
     let (project_id, session_id) = path.into_inner();
     let body = body.into_inner();
 
@@ -241,6 +247,7 @@ pub async fn handle_create_chat_session_message(
         == 1;
 
     let queue_message = ChatSessionQueueMessage {
+        user_id: Some(user_id),
         role: ChatSessionRoleType::User,
         type_: message.type_.clone(),
         payload: message.payload.clone(),
