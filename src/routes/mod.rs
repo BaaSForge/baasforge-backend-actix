@@ -62,11 +62,6 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         "/first-cluster-deploy",
                         web::post().to(test::handle_deploy_hello_world_pod),
                     )
-                    .route("/rabbit-test", web::post().to(test::handle_rabbit_test))
-                    .route(
-                        "/chat-channel-send",
-                        web::post().to(test::handle_chat_channel_send),
-                    )
                     .route(
                         "/chat-channel-ws",
                         web::get().to(test::handle_serve_chat_channel_ws_page),

@@ -1,9 +1,8 @@
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageType};
-use crate::services::message_queue;
+use crate::services::message_queue::{self, PublishError};
 use lapin::Consumer;
 use lapin::Connection;
 use serde::Serialize;
-use std::fmt;
 
 pub const CHAT_SESSION_EXCHANGE: &str = "chat_session_exchange";
 
@@ -18,23 +17,6 @@ pub struct ChatSessionQueueMessage {
     pub type_: ChatMessageType,
     pub payload: Option<ChatMessagePayload>,
 }
-
-#[derive(Debug)]
-pub enum PublishError {
-    Serialize(serde_json::Error),
-    Queue(lapin::Error),
-}
-
-impl fmt::Display for PublishError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PublishError::Serialize(e) => write!(f, "serialize chat message: {}", e),
-            PublishError::Queue(e) => write!(f, "message queue: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for PublishError {}
 
 pub async fn publish(
     rabbit_url: &str,

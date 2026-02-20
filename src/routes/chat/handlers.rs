@@ -9,6 +9,7 @@ use crate::models::chat_sessions::{
 };
 use crate::models::projects::PlatformEnvironmentType;
 use crate::models::projects::{ProjectRuntimeResponse, ProjectUnitResponse};
+use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::AppContext;
 use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
@@ -237,6 +238,15 @@ pub async fn handle_create_chat_session_message(
         .get_result::<i64>(&mut conn)
         .expect("Count chat messages failed")
         == 1;
+
+    let queue_message = ChatSessionQueueMessage {
+        type_: message.type_.clone(),
+        payload: message.payload.clone(),
+    };
+    let rabbit_url = context.settings.rabbit_url.as_str();
+    if let Err(e) = chat_message_queue::publish(rabbit_url, project_id, session_id, &queue_message).await {
+        tracing::error!(%project_id, %session_id, "Failed to publish chat message to queue: {}", e);
+    }
 
     let response = ChatMessageWithFirstResponse {
         inner: message,
