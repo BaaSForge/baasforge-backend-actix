@@ -88,7 +88,16 @@ pub async fn handle_google_auth_callback(
         }
     };
 
-    let mut conn = context.pool.get().expect("Failed to get DB connection");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_google_auth_callback] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let existing_user = users::table
         .filter(platform.eq(PlatformType::Google))
@@ -165,7 +174,16 @@ pub async fn handle_google_auth_callback(
 }
 
 pub async fn handle_logout(req: HttpRequest, context: web::Data<AppContext>) -> HttpResponse {
-    let mut conn = context.pool.get().unwrap();
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_logout] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let access = req.cookie(ACCESS_TOKEN_COOKIE_KEY);
     let refresh = req.cookie(REFRESH_TOKEN_COOKIE_KEY);
@@ -199,7 +217,16 @@ pub async fn handle_refresh_token(
     let access = create_access_token(&context.settings).unwrap();
     let exp = Utc::now() + Duration::minutes(ACCESS_TOKEN_EXPIRY_MINUTES as i64);
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_refresh_token] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     diesel::insert_into(user_tokens::table)
         .values(&UserTokenInternal {
@@ -238,7 +265,16 @@ pub async fn handle_revoke_tokens(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to revoke tokens");
 
-    let mut conn = context.pool.get().unwrap();
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_revoke_tokens] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
     let ids = &body.token_ids;
 
     let tokens: Vec<(i64, UserTokenType)> = user_tokens::table
@@ -308,7 +344,16 @@ pub async fn handle_list_tokens(
         |t| vec![t],
     );
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_list_tokens] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let tokens = user_tokens::table
         .filter(user_tokens::user_id.eq(access_payload.user_id))
@@ -335,7 +380,16 @@ pub async fn handle_get_current_user(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to retrieve current user");
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_get_current_user] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let user = users::table
         .find(access_payload.user_id)

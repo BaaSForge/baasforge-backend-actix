@@ -29,7 +29,16 @@ pub async fn handle_initiate_purchase(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to initiate payment");
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_initiate_purchase] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let (paid_packages, largest_tier) =
         match get_user_active_paid_packages(&mut conn, access_payload.user_id) {

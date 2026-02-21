@@ -35,7 +35,16 @@ pub async fn handle_get_user_paid_package(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to get paid package");
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_get_user_paid_package] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let (payments_with_packages, largest_tier) =
         match get_user_active_paid_packages(&mut conn, access_payload.user_id) {
@@ -86,7 +95,16 @@ pub async fn handle_list_user_payments(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to list payments");
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_list_user_payments] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let payments = match payments::table
         .filter(payments::user_id.eq(access_payload.user_id))

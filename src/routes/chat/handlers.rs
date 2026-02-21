@@ -38,7 +38,16 @@ pub async fn handle_list_project_chat_sessions(
 
     let project_id = path.into_inner();
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("[handle_list_project_chat_sessions] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let sessions = chat_sessions::table
         .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
@@ -68,7 +77,16 @@ pub async fn handle_get_project_chat_session(
 
     let (project_id, session_id) = path.into_inner();
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("[handle_get_project_chat_session] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let session = match chat_sessions::table
         .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
@@ -137,7 +155,16 @@ pub async fn handle_list_chat_session_messages(
         .map(|l| l.clamp(1, MAX_MESSAGES_PAGE_SIZE))
         .unwrap_or(DEFAULT_MESSAGES_PAGE_SIZE);
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("[handle_list_chat_session_messages] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let mut db_query = chat_messages::table
         .inner_join(chat_sessions::table.on(chat_messages::chat_session_id.eq(chat_sessions::id)))
@@ -309,7 +336,16 @@ pub async fn handle_list_chat_session_draft_units(
 
     let (project_id, session_id) = path.into_inner();
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("[handle_list_chat_session_draft_units] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     // Verify the user has access to this chat session
     let session_exists = chat_sessions::table
@@ -352,7 +388,16 @@ pub async fn handle_create_project_chat_session(
 
     let project_id = path.into_inner();
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("[handle_create_project_chat_session] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let chat_session = ChatSessionInsert {
         project_id: project_id,
@@ -393,7 +438,16 @@ pub async fn handle_attach_chat_session_stage_runtime(
     let (project_id, session_id) = path.into_inner();
     let project_runtime_id = body.project_runtime_id;
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("[handle_attach_chat_session_stage_runtime] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     match project_runtimes::table
         .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
@@ -478,7 +532,16 @@ pub async fn handle_detach_chat_session_stage_runtime(
     let (project_id, session_id) = path.into_inner();
     let project_runtime_id = body.project_runtime_id;
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("[handle_detach_chat_session_stage_runtime] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let session_row: Option<(i64, Option<i64>)> = chat_sessions::table
         .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))

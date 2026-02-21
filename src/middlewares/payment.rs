@@ -43,7 +43,10 @@ pub fn paid_features_guard_middleware_factory(
                 .app_data::<web::Data<AppContext>>()
                 .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
 
-            let mut conn = app_context.pool.get().expect("Failed to get DB connection");
+            let mut conn = app_context.pool.get().map_err(|e| {
+                log::error!("[paid_features_guard_middleware] Failed to get DB connection: {:?}", e);
+                actix_web::error::ErrorServiceUnavailable("Database temporarily unavailable")
+            })?;
 
             let active_payments = payments::table
                 .filter(payments::user_id.eq(user_id))

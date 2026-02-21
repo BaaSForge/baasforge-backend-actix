@@ -17,7 +17,16 @@ pub async fn handle_serve_chat_channel_ws_page() -> HttpResponse {
 }
 
 pub async fn handle_get_first_server_cluster(context: web::Data<AppContext>) -> HttpResponse {
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_get_first_server_cluster] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let server_cluster = match server_clusters::table
         .select(ServerCluster::as_select())
@@ -83,7 +92,16 @@ pub async fn handle_get_first_server_cluster(context: web::Data<AppContext>) -> 
 }
 
 pub async fn handle_get_first_server_cluster_nodes(context: web::Data<AppContext>) -> HttpResponse {
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_get_first_server_cluster_nodes] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let server_cluster = match server_clusters::table
         .select(ServerCluster::as_select())
@@ -198,7 +216,16 @@ pub async fn handle_deploy_hello_world_pod(context: web::Data<AppContext>) -> Ht
     use k8s_openapi::api::core::v1::{Container, Pod, PodSpec};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_deploy_hello_world_pod] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let server_cluster = match server_clusters::table
         .select(ServerCluster::as_select())

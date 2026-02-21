@@ -48,7 +48,16 @@ pub async fn handle_create_project(
         .get::<PaymentPayload>()
         .expect("PaymentPayload must exist");
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_create_project] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let projects = projects::table
         .filter(projects::owner_user_id.eq(access_payload.user_id))
@@ -117,7 +126,16 @@ pub async fn handle_get_project(
 
     let project_id = path.into_inner();
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_get_project] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let project = projects::table
         .filter(projects::owner_user_id.eq(access_payload.user_id))
@@ -152,7 +170,16 @@ pub async fn handle_patch_project(
         .expect("AccessPayload must exist to patch project");
 
     let project_id = path.into_inner();
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_patch_project] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let exists = projects::table
         .filter(projects::owner_user_id.eq(access_payload.user_id))
@@ -198,7 +225,16 @@ pub async fn handle_delete_project(
 
     let project_id = path.into_inner();
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_delete_project] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     // TODO: add messages to queue to detach runtimes
 
@@ -311,7 +347,16 @@ pub async fn handle_list_project_non_draft_units(
 
     let project_id = path.into_inner();
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_list_project_units] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let units = project_units::table
         .inner_join(projects::table.on(project_units::project_id.eq(projects::id)))
@@ -347,7 +392,16 @@ pub async fn handle_list_project_runtimes_with_connected_chat_sessions(
 
     let project_id = path.into_inner();
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_list_project_runtimes_with_connected_chat_sessions] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let env_filter = query.stage.map(|is_stage| {
         if is_stage {
@@ -416,7 +470,16 @@ pub async fn handle_list_project_releases(
 
     let project_id = path.into_inner();
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_list_project_releases] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let releases = project_releases::table
         .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
@@ -447,7 +510,16 @@ pub async fn handle_list_project_release_units(
     #[allow(unused)]
     let (project_id, release_version) = path.into_inner();
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[handle_list_project_release_units] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     // TODO: retrieve units ids from release metadata
     let units_ids_from_release_metadata = [1, 2, 3, 4];
