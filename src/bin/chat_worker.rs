@@ -277,7 +277,7 @@ async fn process_one(
     session_id: i64,
     user_text: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let session_messages = block_on_db_tokio(pool, |conn| load_previous_session_messages(conn, session_id, 50))
+    let session_messages = block_on_db_tokio(pool, move |conn| load_previous_session_messages(conn, session_id, 50))
         .await
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
     let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
