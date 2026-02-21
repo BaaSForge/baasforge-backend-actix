@@ -52,14 +52,20 @@ pub fn projects_owner_guard_middleware_factory() -> impl Fn(
                 .app_data::<web::Data<AppContext>>()
                 .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
 
-            let mut conn = app_context.pool.get().expect("Failed to get DB connection");
+            let mut conn = app_context.pool.get().map_err(|e| {
+                log::error!("[projects_owner] Failed to get DB connection: {:?}", e);
+                actix_web::error::ErrorServiceUnavailable("Database temporarily unavailable")
+            })?;
 
             let project_opt = projects
                 .filter(id.eq(project_id))
                 .select((id, owner_user_id))
                 .first::<(i64, i64)>(&mut conn)
                 .optional()
-                .expect("DB query failed");
+                .map_err(|e| {
+                    log::error!("[projects_owner] DB query failed: {:?}", e);
+                    actix_web::error::ErrorInternalServerError("Database error")
+                })?;
 
             match project_opt {
                 None => {

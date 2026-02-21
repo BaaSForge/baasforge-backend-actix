@@ -71,7 +71,10 @@ where
         .app_data::<web::Data<AppContext>>()
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
 
-    let mut conn = app_context.pool.get().expect("Failed to get DB connection");
+    let mut conn = app_context.pool.get().map_err(|e| {
+        log::error!("[auth] Failed to get DB connection: {:?}", e);
+        actix_web::error::ErrorServiceUnavailable("Database temporarily unavailable")
+    })?;
 
     let claims = decode_access_token(&token_str, &app_context.settings).map_err(|e| {
         log::warn!("[auth] Unauthorized: path={} reason=invalid_token decode_err={:?}", req.path(), e);
@@ -130,7 +133,10 @@ where
         .app_data::<web::Data<AppContext>>()
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
 
-    let mut conn = app_context.pool.get().expect("Failed to get DB connection");
+    let mut conn = app_context.pool.get().map_err(|e| {
+        log::error!("[auth] Failed to get DB connection: {:?}", e);
+        actix_web::error::ErrorServiceUnavailable("Database temporarily unavailable")
+    })?;
 
     let claims = decode_refresh_token(&token_str, &app_context.settings)
         .map_err(|_| actix_web::error::ErrorUnauthorized("Invalid refresh token"))?;

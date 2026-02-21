@@ -275,7 +275,16 @@ pub async fn handle_list_projects(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to list projects");
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[list_projects] Failed to get DB connection: {:?}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
 
     let projects = projects::table
         .filter(projects::owner_user_id.eq(access_payload.user_id))
