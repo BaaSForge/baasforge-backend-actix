@@ -38,3 +38,12 @@ services:
       - "6379:6379"
     volumes:
       - ./.dev/redis_data:/data
+  loadbalancer:
+    image: nginx:stable-alpine3.23-perl
+    container_name: baal-lb
+    ports:
+      - "1100:1100"
+    volumes:
+      - ./nginx.dev.conf:/etc/nginx/nginx.conf:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

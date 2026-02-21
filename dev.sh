@@ -1,9 +1,11 @@
 #!/bin/bash
 clear
 
-PID=$(lsof -ti :1100)
+export PORT=${1:-1101}
+
+PID=$(lsof -ti :$PORT)
 if [ -n "$PID" ]; then
-    echo "Killing process on port 1100: $PID"
+    echo "Killing process on port $PORT: $PID"
     kill -9 $PID
 fi
 
