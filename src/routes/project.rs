@@ -9,6 +9,7 @@ use crate::models::projects::{
     ProjectResponse, ProjectRuntimeResponse, ProjectRuntimeWithConnectedChatResponse,
     ProjectUnitResponse,
 };
+use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
 use crate::schema::project_releases;
 use crate::schema::project_runtimes;
@@ -203,10 +204,25 @@ pub async fn handle_delete_project(
 
     // TODO: create a saga which removes rows exactly when all side systems are detached successfully
     let res = conn.transaction::<_, Error, _>(|conn| {
-        diesel::delete(project_runtimes::table.filter(project_runtimes::project_id.eq(project_id)))
+        let session_ids: Vec<i64> = chat_sessions::table
+            .filter(chat_sessions::project_id.eq(project_id))
+            .select(chat_sessions::id)
+            .load(conn)?;
+        if !session_ids.is_empty() {
+            diesel::delete(
+                chat_messages::table
+                    .filter(chat_messages::chat_session_id.eq_any(session_ids)),
+            )
             .execute(conn)?;
+        }
 
         diesel::delete(project_units::table.filter(project_units::project_id.eq(project_id)))
+            .execute(conn)?;
+
+        diesel::delete(chat_sessions::table.filter(chat_sessions::project_id.eq(project_id)))
+            .execute(conn)?;
+
+        diesel::delete(project_runtimes::table.filter(project_runtimes::project_id.eq(project_id)))
             .execute(conn)?;
 
         diesel::delete(project_releases::table.filter(project_releases::project_id.eq(project_id)))
@@ -228,6 +244,7 @@ pub async fn handle_delete_project(
                 let channel = project_broadcast_channel(project_id);
                 let event = WsServerEvent::ProjectDeleted(ProjectDeletedPayload {
                     project_id: project_id.to_string(),
+                    owner_user_id: access_payload.user_id,
                 });
                 let mut guard = redis.lock().await;
                 if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
@@ -235,7 +252,7 @@ pub async fn handle_delete_project(
                 }
             }
             HttpResponse::Ok().json(api_success(
-                "Project and it's runtimes, units and releases has been deleted successfully",
+                "Project and its runtimes, units, releases, chat sessions and messages have been deleted successfully",
                 json!({ "project_id": project_id }),
             ))
         }
