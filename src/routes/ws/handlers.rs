@@ -168,10 +168,22 @@ async fn handle_client_message(
             }
         }
         ClientMessage::Unsubscribe { topic } => {
-            broker.unsubscribe(conn_id, &topic).await;
-            let event = WsServerEvent::Unsubscribed { topic };
-            let out = serde_json::to_string(&event).map_err(|e| e.to_string())?;
-            session.text(out).await.map_err(|e| e.to_string())?;
+            // Only allow unsubscribing from topics this user is allowed to subscribe to (defense in depth)
+            let auth = topics::authorize_topic(&topic, user_id, pool);
+            match auth {
+                topics::TopicAuth::Allowed(canonical_topic) => {
+                    broker.unsubscribe(conn_id, &canonical_topic).await;
+                    let event = WsServerEvent::Unsubscribed { topic: canonical_topic };
+                    let out = serde_json::to_string(&event).map_err(|e| e.to_string())?;
+                    session.text(out).await.map_err(|e| e.to_string())?;
+                }
+                topics::TopicAuth::Denied(_) => {
+                    // Ignore unsub for topics user cannot access; don't leak that the topic exists
+                    let event = WsServerEvent::Unsubscribed { topic };
+                    let out = serde_json::to_string(&event).map_err(|e| e.to_string())?;
+                    session.text(out).await.map_err(|e| e.to_string())?;
+                }
+            }
         }
     }
     Ok(())

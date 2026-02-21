@@ -220,6 +220,8 @@ pub async fn handle_create_chat_session_message(
     };
 
     match chat_sessions::table
+        .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(user_id))
         .filter(chat_sessions::id.eq(session_id))
         .filter(chat_sessions::project_id.eq(project_id))
         .select(chat_sessions::id)
