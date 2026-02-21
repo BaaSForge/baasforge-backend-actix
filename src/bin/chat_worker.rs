@@ -6,8 +6,8 @@ use baal_backend_actix::models::chat_messages::{
 use baal_backend_actix::routes::chat::message_queue::{
     self as chat_message_queue, parse_chat_routing_key, ChatSessionQueueMessage,
 };
-use baal_backend_actix::routes::ws::events::ChatSessionNewMessageChunkPayload;
-use baal_backend_actix::routes::ws::publish_chat_chunk_with_conn;
+use baal_backend_actix::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
+use baal_backend_actix::routes::ws::publish_event_to_channel;
 use baal_backend_actix::schema::{chat_messages};
 use diesel::prelude::*;
 use lapin::options::BasicAckOptions;
@@ -125,9 +125,10 @@ async fn call_gpt_stream(
                             content.clone(),
                             false,
                         );
+                        let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
                         let mut guard = conn.lock().await;
                         if let Err(e) =
-                            publish_chat_chunk_with_conn(&mut *guard, topic, payload).await
+                            publish_event_to_channel(&mut *guard, topic, &event).await
                         {
                             tracing::warn!("Failed to publish chat chunk to Redis: {}", e);
                         }
@@ -145,8 +146,9 @@ async fn call_gpt_stream(
             String::new(),
             true,
         );
+        let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
         let mut guard = conn.lock().await;
-        if let Err(e) = publish_chat_chunk_with_conn(&mut *guard, topic, payload).await {
+        if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
             tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
         }
     }

@@ -23,6 +23,9 @@ use crate::routes::chat::message_queue;
 use crate::services::message_queue as mq_service;
 use std::error::Error;
 use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub type SharedRedisConn = Option<Arc<Mutex<redis::aio::MultiplexedConnection>>>;
 
 #[derive(Clone)]
 pub struct AppContext {
@@ -30,6 +33,7 @@ pub struct AppContext {
     pub settings: Settings,
     pub ws_broker: Arc<ws::WsBroker>,
     pub rabbit_publisher: Option<Arc<mq_service::SharedRabbitPublisher>>,
+    pub redis_conn: SharedRedisConn,
 }
 
 impl AppContext {
@@ -38,12 +42,14 @@ impl AppContext {
         settings: Settings,
         ws_broker: Arc<ws::WsBroker>,
         rabbit_publisher: Option<Arc<mq_service::SharedRabbitPublisher>>,
+        redis_conn: SharedRedisConn,
     ) -> Self {
         Self {
             pool,
             settings,
             ws_broker,
             rabbit_publisher,
+            redis_conn,
         }
     }
 }
@@ -84,7 +90,27 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
             None
         }
     };
-    let app_context = AppContext::new(pool, settings.clone(), ws_broker, rabbit_publisher);
+    let redis_conn: SharedRedisConn = if let Some(ref url) = settings.redis_url {
+        match redis::Client::open(url.as_str()) {
+            Ok(client) => match client.get_multiplexed_async_connection().await {
+                Ok(conn) => {
+                    log::info!("[redis] Publish connection connected");
+                    Some(Arc::new(Mutex::new(conn)))
+                }
+                Err(e) => {
+                    log::warn!("[redis] Publish connection failed: {}", e);
+                    None
+                }
+            }
+            Err(e) => {
+                log::warn!("[redis] Client open failed: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let app_context = AppContext::new(pool, settings.clone(), ws_broker, rabbit_publisher, redis_conn);
 
     HttpServer::new(move || {
         App::new()

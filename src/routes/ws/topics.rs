@@ -68,6 +68,8 @@ pub enum TopicAuth {
     Denied(&'static str),
 }
 
+/// Authorize a topic for the authenticated user. Called only on Subscribe/Unsubscribe, not per message.
+/// DB lookups here are acceptable; for very high subscribe rates consider caching or moving the query into `web::block`.
 pub fn authorize_topic(
     topic: &str,
     authenticated_user_id: i64,
@@ -115,8 +117,23 @@ pub fn authorize_topic(
             }
             TopicAuth::Denied("notifications:user topic not implemented yet")
         }
-        TopicKind::Project { project_id: _ } => {
-            TopicAuth::Denied("project topic not implemented yet")
+        TopicKind::Project { project_id } => {
+            let mut conn = match pool.get() {
+                Ok(c) => c,
+                Err(_) => return TopicAuth::Denied("database unavailable"),
+            };
+            let exists: Option<i64> = crate::schema::projects::table
+                .filter(crate::schema::projects::id.eq(project_id))
+                .filter(crate::schema::projects::owner_user_id.eq(authenticated_user_id))
+                .select(crate::schema::projects::id)
+                .first::<i64>(&mut conn)
+                .optional()
+                .ok()
+                .flatten();
+            match exists {
+                Some(_) => TopicAuth::Allowed(kind.to_topic_string()),
+                None => TopicAuth::Denied("project not found or access denied"),
+            }
         }
     }
 }

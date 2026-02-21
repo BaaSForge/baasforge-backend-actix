@@ -1,25 +1,33 @@
-use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::WsBroker;
 use redis::AsyncCommands;
+use serde::Serialize;
 use std::sync::Arc;
 use tokio_stream::StreamExt as _;
 
-/// Redis channel name prefix for chat session streams. Channel = topic (e.g. `chat_session:1:5:10`).
 pub const CHAT_SESSION_CHANNEL_PREFIX: &str = "chat_session:";
+pub const PROJECT_CHANNEL_PREFIX: &str = "project:";
 
-pub async fn publish_chat_chunk_with_conn<C>(
+pub fn project_broadcast_channel(project_id: i64) -> String {
+    format!("{}{}", PROJECT_CHANNEL_PREFIX, project_id)
+}
+
+pub async fn publish_event_to_channel<C, E>(
     conn: &mut C,
-    topic: &str,
-    payload: ChatSessionNewMessageChunkPayload,
+    channel: &str,
+    event: &E,
 ) -> Result<(), redis::RedisError>
 where
     C: AsyncCommands + Send,
+    E: Serialize + ?Sized,
 {
-    let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
-    let msg = serde_json::to_string(&event).map_err(|e| {
-        redis::RedisError::from((redis::ErrorKind::InvalidClientConfig, "serialize", e.to_string()))
+    let msg = serde_json::to_string(event).map_err(|e| {
+        redis::RedisError::from((
+            redis::ErrorKind::InvalidClientConfig,
+            "serialize",
+            e.to_string(),
+        ))
     })?;
-    conn.publish::<_, _, ()>(topic, msg).await?;
+    conn.publish::<_, _, ()>(channel, msg).await?;
     Ok(())
 }
 
@@ -43,14 +51,21 @@ async fn run_redis_subscriber_loop(
 ) -> Result<(), redis::RedisError> {
     let client = redis::Client::open(redis_url)?;
     let mut pubsub = client.get_async_pubsub().await?;
+    // One connection can subscribe to many patterns; Redis delivers all matching messages on the same stream.
+    // Adding more psubscribe calls here is cheap (one command per pattern at startup) and does not require separate loops.
     pubsub.psubscribe(format!("{}*", CHAT_SESSION_CHANNEL_PREFIX)).await?;
+    pubsub.psubscribe(format!("{}*", PROJECT_CHANNEL_PREFIX)).await?;
 
     let mut stream = pubsub.on_message();
 
     while let Some(msg) = stream.next().await {
         let channel: String = msg.get_channel_name().to_string();
         let payload: String = msg.get_payload().map_err(|e| {
-            redis::RedisError::from((redis::ErrorKind::InvalidClientConfig, "payload", e.to_string()))
+            redis::RedisError::from((
+                redis::ErrorKind::InvalidClientConfig,
+                "payload",
+                e.to_string(),
+            ))
         })?;
         broker.broadcast_to_topic(&channel, &payload).await;
     }

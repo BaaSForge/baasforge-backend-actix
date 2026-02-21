@@ -2,6 +2,8 @@ use crate::libs::api_response::api_error;
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::chat_sessions::ChatSessionResponse;
+use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
+use crate::routes::ws::{project_broadcast_channel, publish_event_to_channel};
 use crate::models::projects::{
     FrameworkType, LanguageType, PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse,
     ProjectResponse, ProjectRuntimeResponse, ProjectRuntimeWithConnectedChatResponse,
@@ -221,10 +223,22 @@ pub async fn handle_delete_project(
     });
 
     match res {
-        Ok(_) => HttpResponse::Ok().json(api_success(
-            "Project and it's runtimes, units and releases has been deleted successfully",
-            json!({ "project_id": project_id }),
-        )),
+        Ok(_) => {
+            if let Some(ref redis) = context.redis_conn {
+                let channel = project_broadcast_channel(project_id);
+                let event = WsServerEvent::ProjectDeleted(ProjectDeletedPayload {
+                    project_id: project_id.to_string(),
+                });
+                let mut guard = redis.lock().await;
+                if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+                    log::warn!("[ws] Failed to broadcast project deleted to Redis: {}", e);
+                }
+            }
+            HttpResponse::Ok().json(api_success(
+                "Project and it's runtimes, units and releases has been deleted successfully",
+                json!({ "project_id": project_id }),
+            ))
+        }
         Err(Error::NotFound) => {
             HttpResponse::NotFound().json(api_error("Project not found", json!({})))
         }
