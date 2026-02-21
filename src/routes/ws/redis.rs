@@ -5,10 +5,10 @@ use std::sync::Arc;
 use tokio_stream::StreamExt as _;
 
 pub const CHAT_SESSION_CHANNEL_PREFIX: &str = "chat_session:";
-pub const PROJECT_CHANNEL_PREFIX: &str = "project:";
+pub const USER_CHANNEL_PREFIX: &str = "user:";
 
-pub fn project_broadcast_channel(project_id: i64) -> String {
-    format!("{}{}", PROJECT_CHANNEL_PREFIX, project_id)
+pub fn user_channel(user_id: i64) -> String {
+    format!("{}{}", USER_CHANNEL_PREFIX, user_id)
 }
 
 pub async fn publish_event_to_channel<C, E>(
@@ -51,10 +51,8 @@ async fn run_redis_subscriber_loop(
 ) -> Result<(), redis::RedisError> {
     let client = redis::Client::open(redis_url)?;
     let mut pubsub = client.get_async_pubsub().await?;
-    // One connection can subscribe to many patterns; Redis delivers all matching messages on the same stream.
-    // Adding more psubscribe calls here is cheap (one command per pattern at startup) and does not require separate loops.
     pubsub.psubscribe(format!("{}*", CHAT_SESSION_CHANNEL_PREFIX)).await?;
-    pubsub.psubscribe(format!("{}*", PROJECT_CHANNEL_PREFIX)).await?;
+    pubsub.psubscribe(format!("{}*", USER_CHANNEL_PREFIX)).await?;
 
     let mut stream = pubsub.on_message();
 

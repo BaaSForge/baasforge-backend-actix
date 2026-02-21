@@ -1,6 +1,6 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsServerEvent {
     ChatSessionNewMessageChunk(ChatSessionNewMessageChunkPayload),
@@ -11,13 +11,13 @@ pub enum WsServerEvent {
     Error { message: String },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectDeletedPayload {
     #[serde(rename = "projectId")]
     pub project_id: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RuntimeCreatedPayload {
     #[serde(rename = "projectId")]
     pub project_id: String,
@@ -25,7 +25,7 @@ pub struct RuntimeCreatedPayload {
     pub runtime_id: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatSessionNewMessageChunkPayload {
     pub topic: String,
     pub chunk_index: u32,

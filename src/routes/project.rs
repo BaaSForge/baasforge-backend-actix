@@ -3,7 +3,7 @@ use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::chat_sessions::ChatSessionResponse;
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
-use crate::routes::ws::{project_broadcast_channel, publish_event_to_channel};
+use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::models::projects::{
     FrameworkType, LanguageType, PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse,
     ProjectResponse, ProjectRuntimeResponse, ProjectRuntimeWithConnectedChatResponse,
@@ -241,10 +241,9 @@ pub async fn handle_delete_project(
     match res {
         Ok(_) => {
             if let Some(ref redis) = context.redis_conn {
-                let channel = project_broadcast_channel(project_id);
+                let channel = user_channel(access_payload.user_id);
                 let event = WsServerEvent::ProjectDeleted(ProjectDeletedPayload {
                     project_id: project_id.to_string(),
-                    owner_user_id: access_payload.user_id,
                 });
                 let mut guard = redis.lock().await;
                 if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {

@@ -9,7 +9,7 @@ pub enum TopicKind {
         chat_session_id: i64,
     },
     NotificationsUser { user_id: i64 },
-    Project { project_id: i64 },
+    User { user_id: i64 },
 }
 
 impl TopicKind {
@@ -39,12 +39,12 @@ impl TopicKind {
                 let user_id = i64::from_str(parts[2]).ok()?;
                 Some(TopicKind::NotificationsUser { user_id })
             }
-            "project" => {
+            "user" => {
                 if parts.len() != 2 {
                     return None;
                 }
-                let project_id = i64::from_str(parts[1]).ok()?;
-                Some(TopicKind::Project { project_id })
+                let user_id = i64::from_str(parts[1]).ok()?;
+                Some(TopicKind::User { user_id })
             }
             _ => None,
         }
@@ -58,7 +58,7 @@ impl TopicKind {
                 chat_session_id,
             } => format!("chat_session:{}:{}:{}", user_id, project_id, chat_session_id),
             TopicKind::NotificationsUser { user_id } => format!("notifications:user:{}", user_id),
-            TopicKind::Project { project_id } => format!("project:{}", project_id),
+            TopicKind::User { user_id } => format!("user:{}", user_id),
         }
     }
 }
@@ -117,23 +117,11 @@ pub fn authorize_topic(
             }
             TopicAuth::Denied("notifications:user topic not implemented yet")
         }
-        TopicKind::Project { project_id } => {
-            let mut conn = match pool.get() {
-                Ok(c) => c,
-                Err(_) => return TopicAuth::Denied("database unavailable"),
-            };
-            let exists: Option<i64> = crate::schema::projects::table
-                .filter(crate::schema::projects::id.eq(project_id))
-                .filter(crate::schema::projects::owner_user_id.eq(authenticated_user_id))
-                .select(crate::schema::projects::id)
-                .first::<i64>(&mut conn)
-                .optional()
-                .ok()
-                .flatten();
-            match exists {
-                Some(_) => TopicAuth::Allowed(kind.to_topic_string()),
-                None => TopicAuth::Denied("project not found or access denied"),
+        TopicKind::User { user_id } => {
+            if *user_id != authenticated_user_id {
+                return TopicAuth::Denied("topic user_id does not match authenticated user");
             }
+            TopicAuth::Allowed(kind.to_topic_string())
         }
     }
 }

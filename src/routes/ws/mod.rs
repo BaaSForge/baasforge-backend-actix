@@ -7,7 +7,7 @@ pub mod topics;
 pub use broker::{WsBroker};
 pub use handlers::handle_ws;
 pub use redis::{
-    project_broadcast_channel, publish_event_to_channel, run_redis_subscriber,
-    CHAT_SESSION_CHANNEL_PREFIX, PROJECT_CHANNEL_PREFIX,
+    publish_event_to_channel, run_redis_subscriber, user_channel,
+    CHAT_SESSION_CHANNEL_PREFIX, USER_CHANNEL_PREFIX,
 };
 pub use topics::TopicKind;
