@@ -11,7 +11,7 @@ use std::time::Duration;
 
 pub type DbPool = Pool<ConnectionManager<PgConnection>>;
 
-type PooledConn = diesel::r2d2::PooledConnection<ConnectionManager<PgConnection>>;
+pub type PooledConn = diesel::r2d2::PooledConnection<ConnectionManager<PgConnection>>;
 
 #[derive(Debug)]
 pub enum BlockingDbError {
@@ -53,6 +53,25 @@ where
 {
     let pool = pool.clone();
     match actix_web::web::block(move || {
+        let mut conn = pool.get().map_err(BlockingDbError::Pool)?;
+        f(&mut conn).map_err(BlockingDbError::Query)
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => Err(BlockingDbError::Blocking),
+    }
+}
+
+/// Same as `block_on_db` but for tokio runtimes (e.g. the chat_worker binary).
+/// Use this in async code that runs on tokio so blocking r2d2/Diesel work doesn't block worker threads.
+pub async fn block_on_db_tokio<F, R>(pool: &DbPool, f: F) -> Result<R, BlockingDbError>
+where
+    F: FnOnce(&mut PooledConn) -> Result<R, diesel::result::Error> + Send + 'static,
+    R: Send + 'static,
+{
+    let pool = pool.clone();
+    match tokio::task::spawn_blocking(move || {
         let mut conn = pool.get().map_err(BlockingDbError::Pool)?;
         f(&mut conn).map_err(BlockingDbError::Query)
     })

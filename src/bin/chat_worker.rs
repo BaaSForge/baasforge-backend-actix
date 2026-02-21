@@ -1,5 +1,5 @@
 use baal_backend_actix::configs::Settings;
-use baal_backend_actix::database::{establish_pool, DbPool};
+use baal_backend_actix::database::{block_on_db_tokio, establish_pool, DbPool, PooledConn};
 use baal_backend_actix::models::chat_messages::{
     ChatMessageInsert, ChatMessageRow, ChatMessageType, ChatSessionRoleType,
 };
@@ -21,17 +21,16 @@ use tokio_stream::StreamExt;
 use tracing::info;
 
 fn load_previous_session_messages(
-    pool: &DbPool,
+    conn: &mut PooledConn,
     session_id: i64,
     limit: i64,
 ) -> Result<Vec<(ChatSessionRoleType, Option<Value>)>, diesel::result::Error> {
-    let mut conn = pool.get().map_err(|e| diesel::result::Error::QueryBuilderError(Box::new(e)))?;
     let rows = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))
         .order(chat_messages::id.asc())
         .limit(limit)
         .select(ChatMessageRow::as_select())
-        .load::<ChatMessageRow>(&mut conn)?;
+        .load::<ChatMessageRow>(conn)?;
 
     let out = rows
         .into_iter()
@@ -278,7 +277,9 @@ async fn process_one(
     session_id: i64,
     user_text: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let session_messages = load_previous_session_messages(pool, session_id, 50)?;
+    let session_messages = block_on_db_tokio(pool, |conn| load_previous_session_messages(conn, session_id, 50))
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
     let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
     let ai_text = call_gpt_stream(
         credentials,
@@ -289,16 +290,19 @@ async fn process_one(
     )
     .await?;
 
-    let mut conn = pool.get().map_err(|e| format!("pool: {}", e))?;
     let insert = ChatMessageInsert {
         chat_session_id: session_id,
         role: ChatSessionRoleType::Ai,
         type_: ChatMessageType::Text,
         payload: Some(serde_json::to_value(ai_text.clone())?),
     };
-    diesel::insert_into(chat_messages::table)
-        .values(&insert)
-        .execute(&mut conn)?;
+    block_on_db_tokio(pool, move |conn| {
+        diesel::insert_into(chat_messages::table)
+            .values(&insert)
+            .execute(conn)
+    })
+    .await
+    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
     info!(project_id, session_id, "Processed and saved AI response");
     Ok(())
