@@ -30,6 +30,7 @@ pub struct Settings {
   pub port: String,
   pub app_environment: AppEnvironment,
   pub pg_database_url: String,
+  /// Per-process pool size. Total DB connections = (API_replicas + worker_replicas) × this. Keep under PostgreSQL max_connections.
   pub database_pool_size: u32,
   pub database_connection_timeout_secs: u64,
   pub auth_access_token_secret: String,
@@ -51,7 +52,7 @@ impl Settings {
     let database_pool_size = env::var("DATABASE_POOL_SIZE")
       .ok()
       .and_then(|s| s.parse().ok())
-      .unwrap_or(10);
+      .unwrap_or(2);
     let database_connection_timeout_secs = env::var("DATABASE_CONNECTION_TIMEOUT_SECS")
       .ok()
       .and_then(|s| s.parse().ok())

@@ -1,3 +1,7 @@
+//! When running multiple replicas (e.g. 30 API + 30 workers), each process has its own pool.
+//! Total PostgreSQL connections ≤ (API_replicas + worker_replicas) × max_size. Set max_size
+//! so this stays under PostgreSQL `max_connections` (or put PgBouncer in front of Postgres).
+
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use std::time::Duration;
