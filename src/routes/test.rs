@@ -1,3 +1,4 @@
+use crate::database;
 use crate::libs::api_response::api_error;
 use crate::models::server_clusters::ServerCluster;
 use crate::schema::server_clusters;
@@ -17,26 +18,24 @@ pub async fn handle_serve_chat_channel_ws_page() -> HttpResponse {
 }
 
 pub async fn handle_get_first_server_cluster(context: web::Data<AppContext>) -> HttpResponse {
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("[handle_get_first_server_cluster] Failed to get DB connection: {:?}", e);
+    let server_cluster = match database::block_on_db(&context.pool, |conn| {
+        server_clusters::table
+            .select(ServerCluster::as_select())
+            .first::<ServerCluster>(conn)
+            .optional()
+    })
+    .await
+    {
+        Ok(Some(cluster)) => cluster,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(api_error("No server cluster found", json!({})));
+        }
+        Err(_) => {
+            log::error!("[handle_get_first_server_cluster] DB/block error");
             return HttpResponse::ServiceUnavailable().json(api_error(
                 "Database temporarily unavailable",
                 json!({}),
             ));
-        }
-    };
-
-    let server_cluster = match server_clusters::table
-        .select(ServerCluster::as_select())
-        .first::<ServerCluster>(&mut conn)
-        .optional()
-        .expect("DB query failed")
-    {
-        Some(cluster) => cluster,
-        None => {
-            return HttpResponse::NotFound().json(api_error("No server cluster found", json!({})));
         }
     };
 
@@ -92,26 +91,24 @@ pub async fn handle_get_first_server_cluster(context: web::Data<AppContext>) -> 
 }
 
 pub async fn handle_get_first_server_cluster_nodes(context: web::Data<AppContext>) -> HttpResponse {
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("[handle_get_first_server_cluster_nodes] Failed to get DB connection: {:?}", e);
+    let server_cluster = match database::block_on_db(&context.pool, |conn| {
+        server_clusters::table
+            .select(ServerCluster::as_select())
+            .first::<ServerCluster>(conn)
+            .optional()
+    })
+    .await
+    {
+        Ok(Some(cluster)) => cluster,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(api_error("No server cluster found", json!({})));
+        }
+        Err(_) => {
+            log::error!("[handle_get_first_server_cluster_nodes] DB/block error");
             return HttpResponse::ServiceUnavailable().json(api_error(
                 "Database temporarily unavailable",
                 json!({}),
             ));
-        }
-    };
-
-    let server_cluster = match server_clusters::table
-        .select(ServerCluster::as_select())
-        .first::<ServerCluster>(&mut conn)
-        .optional()
-        .expect("DB query failed")
-    {
-        Some(cluster) => cluster,
-        None => {
-            return HttpResponse::NotFound().json(api_error("No server cluster found", json!({})));
         }
     };
 
@@ -216,26 +213,24 @@ pub async fn handle_deploy_hello_world_pod(context: web::Data<AppContext>) -> Ht
     use k8s_openapi::api::core::v1::{Container, Pod, PodSpec};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("[handle_deploy_hello_world_pod] Failed to get DB connection: {:?}", e);
+    let server_cluster = match database::block_on_db(&context.pool, |conn| {
+        server_clusters::table
+            .select(ServerCluster::as_select())
+            .first::<ServerCluster>(conn)
+            .optional()
+    })
+    .await
+    {
+        Ok(Some(cluster)) => cluster,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(api_error("No server cluster found", json!({})));
+        }
+        Err(_) => {
+            log::error!("[handle_deploy_hello_world_pod] DB/block error");
             return HttpResponse::ServiceUnavailable().json(api_error(
                 "Database temporarily unavailable",
                 json!({}),
             ));
-        }
-    };
-
-    let server_cluster = match server_clusters::table
-        .select(ServerCluster::as_select())
-        .first::<ServerCluster>(&mut conn)
-        .optional()
-        .expect("DB query failed")
-    {
-        Some(cluster) => cluster,
-        None => {
-            return HttpResponse::NotFound().json(api_error("No server cluster found", json!({})));
         }
     };
 

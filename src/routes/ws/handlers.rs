@@ -148,7 +148,7 @@ async fn handle_client_message(
     let msg: ClientMessage = serde_json::from_str(text).map_err(|e| format!("invalid JSON: {}", e))?;
     match msg {
         ClientMessage::Subscribe { topic } => {
-            let auth = topics::authorize_topic(&topic, user_id, pool);
+            let auth = topics::authorize_topic_async(&topic, user_id, pool).await;
             match auth {
                 topics::TopicAuth::Allowed(canonical_topic) => {
                     broker.subscribe(conn_id, canonical_topic.clone()).await;
@@ -169,7 +169,7 @@ async fn handle_client_message(
         }
         ClientMessage::Unsubscribe { topic } => {
             // Only allow unsubscribing from topics this user is allowed to subscribe to (defense in depth)
-            let auth = topics::authorize_topic(&topic, user_id, pool);
+            let auth = topics::authorize_topic_async(&topic, user_id, pool).await;
             match auth {
                 topics::TopicAuth::Allowed(canonical_topic) => {
                     broker.unsubscribe(conn_id, &canonical_topic).await;

@@ -1105,6 +1105,7 @@ dependencies = [
  "lapin",
  "log",
  "openai",
+ "r2d2",
  "redis 1.0.2",
  "regex",
  "reqwest 0.13.1",

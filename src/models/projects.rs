@@ -66,7 +66,7 @@ pub struct ProjectInsert {
     pub language: LanguageType,
 }
 
-#[derive(Serialize, Queryable, Selectable)]
+#[derive(Clone, Serialize, Queryable, Selectable)]
 #[diesel(table_name = crate::schema::projects)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectResponse {

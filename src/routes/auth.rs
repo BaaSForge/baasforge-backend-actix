@@ -1,3 +1,4 @@
+use crate::database;
 use crate::libs::api_response::{api_error, api_success};
 use crate::middlewares::auth::{AccessPayload, RefreshPayload};
 // use actix_web::HttpMessage;
@@ -88,10 +89,75 @@ pub async fn handle_google_auth_callback(
         }
     };
 
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("[handle_google_auth_callback] Failed to get DB connection: {:?}", e);
+    let callback_url = query.callback_url.clone();
+    let access_token_for_cookie = access_token.clone();
+    let refresh_token_for_cookie = refresh_token.clone();
+
+    let (_user, _is_just_signed_up) = match database::block_on_db(&context.pool, move |conn| {
+        let existing_user = users::table
+            .filter(platform.eq(PlatformType::Google))
+            .filter(id_in_platform.eq(id_in_platform_dto))
+            .first::<User>(conn)
+            .optional()?;
+
+        let (user, is_just_signed_up) = if let Some(u) = existing_user {
+            let updated = diesel::update(users::table.find(u.id))
+                .set((
+                    full_name.eq(Some(full_name_dto.to_string())),
+                    email_in_platform.eq(Some(email_dto.to_string())),
+                ))
+                .get_result::<User>(conn)?;
+            (updated, false)
+        } else {
+            let new_user = diesel::insert_into(users::table)
+                .values(&UserDTO {
+                    platform: PlatformType::Google,
+                    id_in_platform: id_in_platform_dto.to_string(),
+                    full_name: Some(full_name_dto.to_string()),
+                    email_in_platform: Some(email_dto.to_string()),
+                })
+                .get_result::<User>(conn)?;
+            (new_user, true)
+        };
+
+        let now = Utc::now();
+        let access_exp = now + Duration::minutes(ACCESS_TOKEN_EXPIRY_MINUTES as i64);
+        let refresh_exp = now + Duration::minutes(REFRESH_TOKEN_EXPIRY_MINUTES as i64);
+
+        let refresh_token_row = UserTokenInternal {
+            user_id: user.id,
+            token_type: UserTokenType::Refresh,
+            token: refresh_token,
+            expires_at: refresh_exp,
+            revoked: Some(false),
+            is_signup_token: is_just_signed_up,
+            refresh_token_id: None,
+        };
+        let refresh_token_id: i64 = diesel::insert_into(user_tokens::table)
+            .values(&refresh_token_row)
+            .returning(user_tokens::id)
+            .get_result(conn)?;
+
+        let access_token_row = UserTokenInternal {
+            user_id: user.id,
+            token_type: UserTokenType::Access,
+            token: access_token,
+            expires_at: access_exp,
+            revoked: Some(false),
+            is_signup_token: is_just_signed_up,
+            refresh_token_id: Some(refresh_token_id),
+        };
+        diesel::insert_into(user_tokens::table)
+            .values(&access_token_row)
+            .execute(conn)?;
+
+        Ok::<_, diesel::result::Error>((user, is_just_signed_up))
+    })
+    .await
+    {
+        Ok(x) => x,
+        Err(_) => {
+            log::error!("[handle_google_auth_callback] DB/block error");
             return HttpResponse::ServiceUnavailable().json(api_error(
                 "Database temporarily unavailable",
                 json!({}),
@@ -99,101 +165,34 @@ pub async fn handle_google_auth_callback(
         }
     };
 
-    let existing_user = users::table
-        .filter(platform.eq(PlatformType::Google))
-        .filter(id_in_platform.eq(id_in_platform_dto))
-        .first::<User>(&mut conn)
-        .optional()
-        .unwrap();
-
-    let mut is_just_signed_up = false;
-
-    let user: User = if let Some(u) = existing_user {
-        diesel::update(users::table.find(u.id))
-            .set((
-                full_name.eq(Some(full_name_dto.to_string())),
-                email_in_platform.eq(Some(email_dto.to_string())),
-            ))
-            .get_result(&mut conn)
-            .unwrap()
-    } else {
-        is_just_signed_up = true;
-
-        diesel::insert_into(users::table)
-            .values(&UserDTO {
-                platform: PlatformType::Google,
-                id_in_platform: id_in_platform_dto.to_string(),
-                full_name: Some(full_name_dto.to_string()),
-                email_in_platform: Some(email_dto.to_string()),
-            })
-            .get_result(&mut conn)
-            .unwrap()
-    };
-
-    let now = Utc::now();
-    let access_exp = now + Duration::minutes(ACCESS_TOKEN_EXPIRY_MINUTES as i64);
-    let refresh_exp = now + Duration::minutes(REFRESH_TOKEN_EXPIRY_MINUTES as i64);
-
-    let access_token_cookie = create_access_cookie(access_token.clone());
-    let refresh_token_cookie = create_refresh_cookie(refresh_token.clone());
-
-    let refresh_token_row = UserTokenInternal {
-        user_id: user.id,
-        token_type: UserTokenType::Refresh,
-        token: refresh_token,
-        expires_at: refresh_exp,
-        revoked: Some(false),
-        is_signup_token: is_just_signed_up,
-        refresh_token_id: None,
-    };
-    let refresh_token_id: i64 = diesel::insert_into(user_tokens::table)
-        .values(&refresh_token_row)
-        .returning(user_tokens::id)
-        .get_result(&mut conn)
-        .expect("Failed to insert refresh token");
-
-    let access_token_row = UserTokenInternal {
-        user_id: user.id,
-        token_type: UserTokenType::Access,
-        token: access_token,
-        expires_at: access_exp,
-        revoked: Some(false),
-        is_signup_token: is_just_signed_up,
-        refresh_token_id: Some(refresh_token_id),
-    };
-    diesel::insert_into(user_tokens::table)
-        .values(&access_token_row)
-        .execute(&mut conn)
-        .expect("Failed to insert access token");
+    let access_token_cookie = create_access_cookie(access_token_for_cookie);
+    let refresh_token_cookie = create_refresh_cookie(refresh_token_for_cookie);
 
     HttpResponse::Found()
-        .append_header(("Location", query.callback_url.clone()))
+        .append_header(("Location", callback_url))
         .cookie(access_token_cookie)
         .cookie(refresh_token_cookie)
         .finish()
 }
 
 pub async fn handle_logout(req: HttpRequest, context: web::Data<AppContext>) -> HttpResponse {
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("[handle_logout] Failed to get DB connection: {:?}", e);
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
-        }
-    };
-
     let access = req.cookie(ACCESS_TOKEN_COOKIE_KEY);
     let refresh = req.cookie(REFRESH_TOKEN_COOKIE_KEY);
 
-    if let (Some(a), Some(r)) = (access, refresh) {
-        diesel::update(user_tokens::table)
-            .filter(user_tokens::token.eq_any(vec![a.value().to_string(), r.value().to_string()]))
-            .set(user_tokens::revoked.eq(Some(true)))
-            .execute(&mut conn)
-            .ok();
+    let tokens: Vec<String> = match (access, refresh) {
+        (Some(a), Some(r)) => vec![a.value().to_string(), r.value().to_string()],
+        _ => vec![],
+    };
+
+    if !tokens.is_empty() {
+        let tokens_clone = tokens.clone();
+        let _ = database::block_on_db(&context.pool, move |conn| {
+            diesel::update(user_tokens::table)
+                .filter(user_tokens::token.eq_any(tokens_clone))
+                .set(user_tokens::revoked.eq(Some(true)))
+                .execute(conn)
+        })
+        .await;
     }
 
     let clear_access = create_clear_cookie(ACCESS_TOKEN_COOKIE_KEY);
@@ -215,12 +214,29 @@ pub async fn handle_refresh_token(
         .expect("RefreshPayload must exist to refresh token");
 
     let access = create_access_token(&context.settings).unwrap();
+    let access_for_cookie = access.clone();
     let exp = Utc::now() + Duration::minutes(ACCESS_TOKEN_EXPIRY_MINUTES as i64);
+    let user_id = refresh_payload.user_id;
+    let refresh_token_id = refresh_payload.db_token.id;
 
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("[handle_refresh_token] Failed to get DB connection: {:?}", e);
+    let _ = match database::block_on_db(&context.pool, move |conn| {
+        diesel::insert_into(user_tokens::table)
+            .values(&UserTokenInternal {
+                user_id,
+                token_type: UserTokenType::Access,
+                token: access,
+                expires_at: exp,
+                revoked: Some(false),
+                is_signup_token: false,
+                refresh_token_id: Some(refresh_token_id),
+            })
+            .execute(conn)
+    })
+    .await
+    {
+        Ok(_) => {}
+        Err(_) => {
+            log::error!("[handle_refresh_token] DB/block error");
             return HttpResponse::ServiceUnavailable().json(api_error(
                 "Database temporarily unavailable",
                 json!({}),
@@ -228,21 +244,8 @@ pub async fn handle_refresh_token(
         }
     };
 
-    diesel::insert_into(user_tokens::table)
-        .values(&UserTokenInternal {
-            user_id: refresh_payload.user_id,
-            token_type: UserTokenType::Access,
-            token: access.clone(),
-            expires_at: exp,
-            revoked: Some(false),
-            is_signup_token: false,
-            refresh_token_id: Some(refresh_payload.db_token.id),
-        })
-        .execute(&mut conn)
-        .unwrap();
-
     HttpResponse::Ok()
-        .cookie(create_access_cookie(access))
+        .cookie(create_access_cookie(access_for_cookie))
         .finish()
 }
 
@@ -265,54 +268,66 @@ pub async fn handle_revoke_tokens(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to revoke tokens");
 
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("[handle_revoke_tokens] Failed to get DB connection: {:?}", e);
+    let ids = body.token_ids.clone();
+    let user_id = refresh_payload.user_id;
+    let refresh_token = refresh_payload.db_token.token.clone();
+    let access_token = access_payload.db_token.token.clone();
+
+    enum RevokeOut {
+        Ok,
+        TokenMismatch,
+    }
+    let revoke_result = database::block_on_db(&context.pool, move |conn| {
+        let tokens: Vec<(i64, UserTokenType)> = user_tokens::table
+            .filter(user_tokens::id.eq_any(&ids))
+            .filter(user_tokens::user_id.eq(user_id))
+            .filter(user_tokens::token.ne(&refresh_token))
+            .filter(user_tokens::token.ne(&access_token))
+            .filter(user_tokens::revoked.eq(Some(false)))
+            .select((user_tokens::id, user_tokens::token_type))
+            .load::<(i64, UserTokenType)>(conn)?;
+
+        if tokens.len() != ids.len() {
+            return Ok(RevokeOut::TokenMismatch);
+        }
+
+        let mut revoke_ids: Vec<i64> = Vec::new();
+        for (token_id, token_type) in &tokens {
+            revoke_ids.push(*token_id);
+            if *token_type == UserTokenType::Refresh {
+                let access_ids: Vec<i64> = user_tokens::table
+                    .filter(user_tokens::refresh_token_id.eq(token_id))
+                    .select(user_tokens::id)
+                    .load(conn)
+                    .unwrap_or_default();
+                revoke_ids.extend(access_ids);
+            }
+        }
+
+        if !revoke_ids.is_empty() {
+            diesel::update(user_tokens::table.filter(user_tokens::id.eq_any(revoke_ids)))
+                .set(user_tokens::revoked.eq(Some(true)))
+                .execute(conn)?;
+        }
+        Ok(RevokeOut::Ok)
+    })
+    .await;
+
+    match revoke_result {
+        Ok(RevokeOut::Ok) => {}
+        Ok(RevokeOut::TokenMismatch) => {
+            return HttpResponse::BadRequest().json(api_error(
+                "One or more token IDs do not exist or don't belong to you or are already revoked; current access and refresh tokens cannot be revoked",
+                json!({}),
+            ));
+        }
+        Err(_) => {
+            log::error!("[handle_revoke_tokens] DB/block error");
             return HttpResponse::ServiceUnavailable().json(api_error(
                 "Database temporarily unavailable",
                 json!({}),
             ));
         }
-    };
-    let ids = &body.token_ids;
-
-    let tokens: Vec<(i64, UserTokenType)> = user_tokens::table
-        .filter(user_tokens::id.eq_any(ids))
-        .filter(user_tokens::user_id.eq(refresh_payload.user_id))
-        .filter(user_tokens::token.ne(&refresh_payload.db_token.token))
-        .filter(user_tokens::token.ne(&access_payload.db_token.token))
-        .filter(user_tokens::revoked.eq(Some(false)))
-        .select((user_tokens::id, user_tokens::token_type))
-        .load::<(i64, UserTokenType)>(&mut conn)
-        .unwrap();
-
-    if tokens.len() != ids.len() {
-        let api_result = api_error(
-            "One or more token IDs do not exist or don't belong to you or are already revoked; current access and refresh tokens cannot be revoked",
-            json!({}),
-        );
-        return HttpResponse::BadRequest().json(api_result);
-    }
-
-    let mut revoke_ids: Vec<i64> = Vec::new();
-    for (token_id, token_type) in &tokens {
-        revoke_ids.push(*token_id);
-        if *token_type == UserTokenType::Refresh {
-            let access_ids: Vec<i64> = user_tokens::table
-                .filter(user_tokens::refresh_token_id.eq(token_id))
-                .select(user_tokens::id)
-                .load(&mut conn)
-                .unwrap_or_default();
-            revoke_ids.extend(access_ids);
-        }
-    }
-
-    if !revoke_ids.is_empty() {
-        diesel::update(user_tokens::table.filter(user_tokens::id.eq_any(revoke_ids)))
-            .set(user_tokens::revoked.eq(Some(true)))
-            .execute(&mut conn)
-            .unwrap();
     }
 
     HttpResponse::Ok().finish()
@@ -343,27 +358,31 @@ pub async fn handle_list_tokens(
         vec![UserTokenType::Access, UserTokenType::Refresh],
         |t| vec![t],
     );
+    let user_id = access_payload.user_id;
+    let refresh_token = refresh_payload.db_token.token.clone();
+    let access_token = access_payload.db_token.token.clone();
 
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("[handle_list_tokens] Failed to get DB connection: {:?}", e);
+    let tokens = match database::block_on_db(&context.pool, move |conn| {
+        user_tokens::table
+            .filter(user_tokens::user_id.eq(user_id))
+            .filter(user_tokens::revoked.eq(Some(revoked_filter)))
+            .filter(user_tokens::token_type.eq_any(token_type_filter))
+            .filter(user_tokens::token.ne(&refresh_token))
+            .filter(user_tokens::token.ne(&access_token))
+            .select(UserTokenResponse::as_select())
+            .load::<UserTokenResponse>(conn)
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => {
+            log::error!("[handle_list_tokens] DB/block error");
             return HttpResponse::ServiceUnavailable().json(api_error(
                 "Database temporarily unavailable",
                 json!({}),
             ));
         }
     };
-
-    let tokens = user_tokens::table
-        .filter(user_tokens::user_id.eq(access_payload.user_id))
-        .filter(user_tokens::revoked.eq(Some(revoked_filter)))
-        .filter(user_tokens::token_type.eq_any(token_type_filter))
-        .filter(user_tokens::token.ne(&refresh_payload.db_token.token))
-        .filter(user_tokens::token.ne(&access_payload.db_token.token))
-        .select(UserTokenResponse::as_select())
-        .load::<UserTokenResponse>(&mut conn)
-        .unwrap_or_default();
 
     HttpResponse::Ok().json(api_success(
         "User tokens fetched successfully",
@@ -380,22 +399,25 @@ pub async fn handle_get_current_user(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to retrieve current user");
 
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("[handle_get_current_user] Failed to get DB connection: {:?}", e);
+    let user_id = access_payload.user_id;
+
+    let user = match database::block_on_db(&context.pool, move |conn| {
+        users::table
+            .find(user_id)
+            .first::<User>(conn)
+            .optional()
+    })
+    .await
+    {
+        Ok(u) => u,
+        Err(_) => {
+            log::error!("[handle_get_current_user] DB/block error");
             return HttpResponse::ServiceUnavailable().json(api_error(
                 "Database temporarily unavailable",
                 json!({}),
             ));
         }
     };
-
-    let user = users::table
-        .find(access_payload.user_id)
-        .first::<User>(&mut conn)
-        .optional()
-        .unwrap();
 
     match user {
         Some(u) => {

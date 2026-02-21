@@ -1,3 +1,4 @@
+use crate::database;
 use crate::libs::api_response::api_error;
 use crate::middlewares::auth::AccessPayload;
 use crate::routes::AppContext;
@@ -52,20 +53,18 @@ pub fn projects_owner_guard_middleware_factory() -> impl Fn(
                 .app_data::<web::Data<AppContext>>()
                 .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
 
-            let mut conn = app_context.pool.get().map_err(|e| {
-                log::error!("[projects_owner] Failed to get DB connection: {:?}", e);
+            let project_opt = database::block_on_db(&app_context.pool, move |conn| {
+                projects
+                    .filter(id.eq(project_id))
+                    .select((id, owner_user_id))
+                    .first::<(i64, i64)>(conn)
+                    .optional()
+            })
+            .await
+            .map_err(|e| {
+                log::error!("[projects_owner] DB/block error: {:?}", e);
                 actix_web::error::ErrorServiceUnavailable("Database temporarily unavailable")
             })?;
-
-            let project_opt = projects
-                .filter(id.eq(project_id))
-                .select((id, owner_user_id))
-                .first::<(i64, i64)>(&mut conn)
-                .optional()
-                .map_err(|e| {
-                    log::error!("[projects_owner] DB query failed: {:?}", e);
-                    actix_web::error::ErrorInternalServerError("Database error")
-                })?;
 
             match project_opt {
                 None => {

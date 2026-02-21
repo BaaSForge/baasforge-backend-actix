@@ -1,3 +1,4 @@
+use crate::database;
 use crate::middlewares::auth::AccessPayload;
 use crate::models::packages::Package;
 use crate::models::payments::PaymentResponse;
@@ -35,36 +36,29 @@ pub async fn handle_get_user_paid_package(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to get paid package");
 
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("[handle_get_user_paid_package] Failed to get DB connection: {:?}", e);
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
-        }
-    };
+    let user_id = access_payload.user_id;
 
-    let (payments_with_packages, largest_tier) =
-        match get_user_active_paid_packages(&mut conn, access_payload.user_id) {
+    let (payments_with_packages, largest_tier, previous_successful_payment_count) =
+        match database::block_on_db(&context.pool, move |conn| {
+            let (packages, largest_tier) = get_user_active_paid_packages(conn, user_id)?;
+            let count = payments::table
+                .filter(payments::user_id.eq(user_id))
+                .filter(payments::is_success.eq(true))
+                .count()
+                .get_result::<i64>(conn)?;
+            Ok::<_, diesel::result::Error>((packages, largest_tier, count))
+        })
+        .await
+        {
             Ok(t) => t,
             Err(e) => {
-                return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+                log::error!("[handle_get_user_paid_package] DB/block error: {}", e);
+                return HttpResponse::ServiceUnavailable().json(api_error(
+                    "Database temporarily unavailable",
+                    json!({}),
+                ));
             }
         };
-
-    let previous_successful_payment_count = match payments::table
-        .filter(payments::user_id.eq(access_payload.user_id))
-        .filter(payments::is_success.eq(true))
-        .count()
-        .get_result::<i64>(&mut conn)
-    {
-        Ok(count) => count,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
-        }
-    };
 
     let can_purchase_trial = previous_successful_payment_count == 0;
 
@@ -95,25 +89,23 @@ pub async fn handle_list_user_payments(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to list payments");
 
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
+    let user_id = access_payload.user_id;
+
+    let payments = match database::block_on_db(&context.pool, move |conn| {
+        payments::table
+            .filter(payments::user_id.eq(user_id))
+            .select(PaymentResponse::as_select())
+            .load::<PaymentResponse>(conn)
+    })
+    .await
+    {
+        Ok(p) => p,
         Err(e) => {
-            log::error!("[handle_list_user_payments] Failed to get DB connection: {:?}", e);
+            log::error!("[handle_list_user_payments] DB/block error: {}", e);
             return HttpResponse::ServiceUnavailable().json(api_error(
                 "Database temporarily unavailable",
                 json!({}),
             ));
-        }
-    };
-
-    let payments = match payments::table
-        .filter(payments::user_id.eq(access_payload.user_id))
-        .select(PaymentResponse::as_select())
-        .load::<PaymentResponse>(&mut conn)
-    {
-        Ok(p) => p,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
         }
     };
 

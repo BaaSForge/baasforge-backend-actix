@@ -1,3 +1,4 @@
+use crate::database;
 use crate::middlewares::auth::AccessPayload;
 use crate::models::payments::PaymentResponse;
 use crate::routes::AppContext;
@@ -43,18 +44,24 @@ pub fn paid_features_guard_middleware_factory(
                 .app_data::<web::Data<AppContext>>()
                 .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
 
-            let mut conn = app_context.pool.get().map_err(|e| {
-                log::error!("[paid_features_guard_middleware] Failed to get DB connection: {:?}", e);
-                actix_web::error::ErrorServiceUnavailable("Database temporarily unavailable")
-            })?;
-
-            let active_payments = payments::table
-                .filter(payments::user_id.eq(user_id))
-                .filter(payments::is_success.eq(true))
-                .filter(payments::expires_at.is_null().or(payments::expires_at.gt(Utc::now())))
-                .select(PaymentResponse::as_select())
-                .load::<PaymentResponse>(&mut conn)
-                .unwrap_or_default();
+            let active_payments = match database::block_on_db(&app_context.pool, move |conn| {
+                payments::table
+                    .filter(payments::user_id.eq(user_id))
+                    .filter(payments::is_success.eq(true))
+                    .filter(payments::expires_at.is_null().or(payments::expires_at.gt(Utc::now())))
+                    .select(PaymentResponse::as_select())
+                    .load::<PaymentResponse>(conn)
+            })
+            .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    log::error!("[paid_features_guard_middleware] DB/block error: {:?}", e);
+                    return Err(actix_web::error::ErrorServiceUnavailable(
+                        "Database temporarily unavailable",
+                    ));
+                }
+            };
 
             let missing_features = user_missing_paid_features(&active_payments, &required_features);
             let most_complete_needed_package = most_complete_needed_package(&missing_features);

@@ -1,3 +1,4 @@
+use crate::database;
 use crate::schema::user_tokens::{token, token_type};
 use crate::services::auth::{
     AccessClaims, RefreshClaims, decode_refresh_token, is_token_mature_enuogh,
@@ -71,26 +72,25 @@ where
         .app_data::<web::Data<AppContext>>()
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
 
-    let mut conn = app_context.pool.get().map_err(|e| {
-        log::error!("[auth] Failed to get DB connection: {:?}", e);
-        actix_web::error::ErrorServiceUnavailable("Database temporarily unavailable")
-    })?;
-
     let claims = decode_access_token(&token_str, &app_context.settings).map_err(|e| {
         log::warn!("[auth] Unauthorized: path={} reason=invalid_token decode_err={:?}", req.path(), e);
         actix_web::error::ErrorUnauthorized("Invalid token")
     })?;
 
-    let db_token: Option<UserToken> = user_tokens::table
-        .filter(token.eq(&token_str))
-        .filter(token_type.eq(UserTokenType::Access))
-        .select(UserToken::as_select())
-        .first::<UserToken>(&mut conn)
-        .optional()
-        .map_err(|e| {
-            log::error!("DB error: {:?}", e);
-            actix_web::error::ErrorInternalServerError("DB error")
-        })?;
+    let token_str = token_str.clone();
+    let db_token: Option<UserToken> = database::block_on_db(&app_context.pool, move |conn| {
+        user_tokens::table
+            .filter(token.eq(&token_str))
+            .filter(token_type.eq(UserTokenType::Access))
+            .select(UserToken::as_select())
+            .first::<UserToken>(conn)
+            .optional()
+    })
+    .await
+    .map_err(|e| {
+        log::error!("[auth] DB/block error: {:?}", e);
+        actix_web::error::ErrorServiceUnavailable("Database temporarily unavailable")
+    })?;
 
     let db_token = match db_token {
         Some(t) if !t.revoked.unwrap_or(false) => t,
@@ -133,24 +133,23 @@ where
         .app_data::<web::Data<AppContext>>()
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
 
-    let mut conn = app_context.pool.get().map_err(|e| {
-        log::error!("[auth] Failed to get DB connection: {:?}", e);
-        actix_web::error::ErrorServiceUnavailable("Database temporarily unavailable")
-    })?;
-
     let claims = decode_refresh_token(&token_str, &app_context.settings)
         .map_err(|_| actix_web::error::ErrorUnauthorized("Invalid refresh token"))?;
 
-    let db_token: Option<UserToken> = user_tokens::table
-        .filter(token.eq(&token_str))
-        .filter(token_type.eq(UserTokenType::Refresh))
-        .select(UserToken::as_select())
-        .first::<UserToken>(&mut conn)
-        .optional()
-        .map_err(|e| {
-            log::error!("DB error: {:?}", e);
-            actix_web::error::ErrorInternalServerError("DB error")
-        })?;
+    let token_str = token_str.clone();
+    let db_token: Option<UserToken> = database::block_on_db(&app_context.pool, move |conn| {
+        user_tokens::table
+            .filter(token.eq(&token_str))
+            .filter(token_type.eq(UserTokenType::Refresh))
+            .select(UserToken::as_select())
+            .first::<UserToken>(conn)
+            .optional()
+    })
+    .await
+    .map_err(|e| {
+        log::error!("[auth] DB/block error: {:?}", e);
+        actix_web::error::ErrorServiceUnavailable("Database temporarily unavailable")
+    })?;
 
     let db_token = match db_token {
         Some(t) if !t.revoked.unwrap_or(false) => t,

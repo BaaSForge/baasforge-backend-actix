@@ -1,3 +1,4 @@
+use crate::database;
 use crate::models::packages::Package;
 use crate::schema::packages;
 use crate::{libs::api_response::{api_error, api_success}, routes::AppContext};
@@ -6,23 +7,24 @@ use diesel::prelude::*;
 use serde_json::json;
 
 pub async fn handle_list_packages(context: web::Data<AppContext>) -> HttpResponse {
-    let mut conn = match context.pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("[handle_list_packages] Failed to get DB connection: {:?}", e);
+    let packages = match database::block_on_db(&context.pool, |conn| {
+        packages::table
+            .filter(packages::is_active.eq(true))
+            .order(packages::tier.asc())
+            .select(Package::as_select())
+            .load::<Package>(conn)
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => {
+            log::error!("[handle_list_packages] DB/block error");
             return HttpResponse::ServiceUnavailable().json(api_error(
                 "Database temporarily unavailable",
                 json!({}),
             ));
         }
     };
-
-    let packages = packages::table
-        .filter(packages::is_active.eq(true))
-        .order(packages::tier.asc())
-        .select(Package::as_select())
-        .load::<Package>(&mut conn)
-        .unwrap_or_default();
 
     HttpResponse::Ok().json(api_success("Packages fetched successfully", json!(packages)))
 }
