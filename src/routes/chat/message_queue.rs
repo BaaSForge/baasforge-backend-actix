@@ -1,8 +1,9 @@
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageType, ChatSessionRoleType};
-use crate::services::message_queue::{self, PublishError};
+use crate::services::message_queue::{self, PublishError, SharedRabbitPublisher};
 use lapin::{Connection, Consumer};
 use serde::Serialize;
 use std::io;
+use std::sync::Arc;
 
 pub const CHAT_SESSION_EXCHANGE: &str = "chat_session_exchange";
 pub const CHAT_WORK_QUEUE: &str = "chat_session_work_queue";
@@ -56,8 +57,8 @@ impl ChatSessionQueueMessage {
     }
 }
 
-pub async fn publish(
-    rabbit_url: &str,
+pub async fn publish_with_publisher(
+    publisher: &Arc<SharedRabbitPublisher>,
     project_id: i64,
     session_id: i64,
     message: &ChatSessionQueueMessage,
@@ -66,8 +67,8 @@ pub async fn publish(
         .validate()
         .map_err(|e| PublishError::Serialize(serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, e))))?;
     let payload = serde_json::to_vec(message).map_err(PublishError::Serialize)?;
-    message_queue::publish(
-        rabbit_url,
+    message_queue::publish_with_channel(
+        publisher.as_ref(),
         CHAT_SESSION_EXCHANGE,
         &chat_session_routing_key(project_id, session_id),
         &payload,

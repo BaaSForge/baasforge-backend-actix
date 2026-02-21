@@ -7,13 +7,14 @@ use tokio_stream::StreamExt as _;
 /// Redis channel name prefix for chat session streams. Channel = topic (e.g. `chat_session:1:5:10`).
 pub const CHAT_SESSION_CHANNEL_PREFIX: &str = "chat_session:";
 
-pub async fn publish_chat_chunk(
-    redis_url: &str,
+pub async fn publish_chat_chunk_with_conn<C>(
+    conn: &mut C,
     topic: &str,
     payload: ChatSessionNewMessageChunkPayload,
-) -> Result<(), redis::RedisError> {
-    let client = redis::Client::open(redis_url)?;
-    let mut conn = client.get_multiplexed_async_connection().await?;
+) -> Result<(), redis::RedisError>
+where
+    C: AsyncCommands + Send,
+{
     let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
     let msg = serde_json::to_string(&event).map_err(|e| {
         redis::RedisError::from((redis::ErrorKind::InvalidClientConfig, "serialize", e.to_string()))

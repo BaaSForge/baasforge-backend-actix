@@ -4,6 +4,7 @@ use lapin::{
 };
 use std::borrow::Borrow;
 use std::fmt;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum PublishError {
@@ -22,7 +23,7 @@ impl fmt::Display for PublishError {
 
 impl std::error::Error for PublishError {}
 
-pub async fn ensure_exchange(
+async fn ensure_exchange(
     rabbit_url: &str,
     exchange_name: &str,
 ) -> Result<(Connection, lapin::Channel), lapin::Error> {
@@ -44,19 +45,31 @@ pub async fn ensure_exchange(
     Ok((connection, channel))
 }
 
-/// Publishes a message to the exchange. Uses persistent delivery so messages
-/// survive broker restarts (important for work queues and at scale).
-pub async fn publish(
+pub struct SharedRabbitPublisher {
+    _connection: Connection,
+    channel: lapin::Channel,
+}
+
+pub async fn create_shared_publisher(
     rabbit_url: &str,
+    exchange_name: &str,
+) -> Result<Arc<SharedRabbitPublisher>, lapin::Error> {
+    let (connection, channel) = ensure_exchange(rabbit_url, exchange_name).await?;
+    Ok(Arc::new(SharedRabbitPublisher {
+        _connection: connection,
+        channel,
+    }))
+}
+
+pub async fn publish_with_channel(
+    publisher: &SharedRabbitPublisher,
     exchange_name: &str,
     routing_key: &str,
     payload: &[u8],
 ) -> Result<(), lapin::Error> {
-    let (_connection, channel) = ensure_exchange(rabbit_url, exchange_name).await?;
-
-    let props = BasicProperties::default().with_delivery_mode(2); // persistent
-
-    channel
+    let props = BasicProperties::default().with_delivery_mode(2);
+    publisher
+        .channel
         .basic_publish(
             exchange_name,
             routing_key,
@@ -66,7 +79,6 @@ pub async fn publish(
         )
         .await?
         .await?;
-
     Ok(())
 }
 

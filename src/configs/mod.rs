@@ -30,6 +30,8 @@ pub struct Settings {
   pub port: String,
   pub app_environment: AppEnvironment,
   pub pg_database_url: String,
+  pub database_pool_size: u32,
+  pub database_connection_timeout_secs: u64,
   pub auth_access_token_secret: String,
   pub auth_refresh_token_secret: String,
   pub rabbit_url: String,
@@ -46,6 +48,14 @@ impl Settings {
 
     let port = env::var("PORT").expect("PORT must be set");
     let pg_database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_pool_size = env::var("DATABASE_POOL_SIZE")
+      .ok()
+      .and_then(|s| s.parse().ok())
+      .unwrap_or(10);
+    let database_connection_timeout_secs = env::var("DATABASE_CONNECTION_TIMEOUT_SECS")
+      .ok()
+      .and_then(|s| s.parse().ok())
+      .unwrap_or(30);
     let auth_access_token_secret = env::var("AUTH_ACCESS_TOKEN_SECRET").expect("AUTH_ACCESS_TOKEN_SECRET must be set");
     let auth_refresh_token_secret = env::var("AUTH_REFRESH_TOKEN_SECRET").expect("AUTH_REFRESH_TOKEN_SECRET must be set");
     let rabbit_url = env::var("RABBIT_URL").expect("RABBIT_URL must be set");
@@ -56,6 +66,8 @@ impl Settings {
       port,
       app_environment,
       pg_database_url,
+      database_pool_size,
+      database_connection_timeout_secs,
       auth_access_token_secret,
       auth_refresh_token_secret,
       rabbit_url,

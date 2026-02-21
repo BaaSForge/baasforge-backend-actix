@@ -208,7 +208,16 @@ pub async fn handle_create_chat_session_message(
         ));
     }
 
-    let mut conn = context.pool.get().expect("DB conn");
+    let mut conn = match context.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("DB pool exhausted on create chat message: {}", e);
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Service is busy. Please try again shortly.",
+                json!({}),
+            ));
+        }
+    };
 
     match chat_sessions::table
         .filter(chat_sessions::id.eq(session_id))
@@ -252,9 +261,26 @@ pub async fn handle_create_chat_session_message(
         type_: message.type_.clone(),
         payload: message.payload.clone(),
     };
-    let rabbit_url = context.settings.rabbit_url.as_str();
-    if let Err(e) = chat_message_queue::publish(rabbit_url, project_id, session_id, &queue_message).await {
-        tracing::error!(%project_id, %session_id, "Failed to publish chat message to queue: {}", e);
+    let publish_result = if let Some(ref publisher) = context.rabbit_publisher {
+        chat_message_queue::publish_with_publisher(publisher, project_id, session_id, &queue_message).await
+    } else {
+        tracing::error!("No RabbitMQ publisher available on create chat message");
+        return HttpResponse::ServiceUnavailable().json(api_error(
+            "Service is busy. Please try again shortly.",
+            json!({}),
+        ));
+    };
+    if let Err(e) = publish_result {
+        tracing::error!(
+            %project_id,
+            %session_id,
+            "Failed to publish chat message to queue: {}",
+            e
+        );
+        return HttpResponse::ServiceUnavailable().json(api_error(
+            "Message was saved but the assistant pipeline is temporarily unavailable. Please try again.",
+            json!({ "detail": e.to_string() }),
+        ));
     }
 
     let response = ChatMessageWithFirstResponse {

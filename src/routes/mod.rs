@@ -19,6 +19,8 @@ use crate::middlewares::test::test_closed_stage_guard_middleware;
 use actix_web::Result;
 use actix_web::middleware::from_fn;
 use actix_web::web;
+use crate::routes::chat::message_queue;
+use crate::services::message_queue as mq_service;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -27,14 +29,21 @@ pub struct AppContext {
     pub pool: DbPool,
     pub settings: Settings,
     pub ws_broker: Arc<ws::WsBroker>,
+    pub rabbit_publisher: Option<Arc<mq_service::SharedRabbitPublisher>>,
 }
 
 impl AppContext {
-    pub fn new(pool: DbPool, settings: Settings, ws_broker: Arc<ws::WsBroker>) -> Self {
+    pub fn new(
+        pool: DbPool,
+        settings: Settings,
+        ws_broker: Arc<ws::WsBroker>,
+        rabbit_publisher: Option<Arc<mq_service::SharedRabbitPublisher>>,
+    ) -> Self {
         Self {
             pool,
             settings,
             ws_broker,
+            rabbit_publisher,
         }
     }
 }
@@ -48,12 +57,34 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
         .parse::<u16>()
         .expect("Failed to parse port number");
 
-    let pool = establish_pool(settings.pg_database_url.clone());
+    let pool = establish_pool(
+        settings.pg_database_url.clone(),
+        settings.database_pool_size,
+        settings.database_connection_timeout_secs,
+    );
     let ws_broker = Arc::new(ws::WsBroker::new());
     if let Some(ref redis_url) = settings.redis_url {
         ws::run_redis_subscriber(redis_url.clone(), ws_broker.clone());
     }
-    let app_context = AppContext::new(pool, settings.clone(), ws_broker);
+    let rabbit_publisher = match mq_service::create_shared_publisher(
+        &settings.rabbit_url,
+        message_queue::CHAT_SESSION_EXCHANGE,
+    )
+    .await
+    {
+        Ok(p) => {
+            log::info!("[rabbit] Shared publisher connected");
+            Some(p)
+        }
+        Err(e) => {
+            log::warn!(
+                "[rabbit] Failed to create shared publisher (will open a new connection per publish): {}",
+                e
+            );
+            None
+        }
+    };
+    let app_context = AppContext::new(pool, settings.clone(), ws_broker, rabbit_publisher);
 
     HttpServer::new(move || {
         App::new()

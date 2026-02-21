@@ -7,14 +7,16 @@ use baal_backend_actix::routes::chat::message_queue::{
     self as chat_message_queue, parse_chat_routing_key, ChatSessionQueueMessage,
 };
 use baal_backend_actix::routes::ws::events::ChatSessionNewMessageChunkPayload;
-use baal_backend_actix::routes::ws::publish_chat_chunk;
+use baal_backend_actix::routes::ws::publish_chat_chunk_with_conn;
 use baal_backend_actix::schema::{chat_messages};
 use diesel::prelude::*;
 use lapin::options::BasicAckOptions;
 use openai::chat::{ChatCompletionBuilder, ChatCompletionMessage, ChatCompletionMessageRole};
 use openai::Credentials;
+use redis::aio::MultiplexedConnection;
 use serde_json::Value;
-use tokio::sync::mpsc::Receiver;
+use std::sync::Arc;
+use tokio::sync::{mpsc::Receiver, Mutex};
 use tokio_stream::StreamExt;
 use tracing::info;
 
@@ -95,7 +97,7 @@ async fn call_gpt_stream(
     credentials: &Credentials,
     session_messages: &[(ChatSessionRoleType, Option<Value>)],
     user_text: &str,
-    redis_url: Option<&str>,
+    redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let messages = build_chat_messages(session_messages, user_text);
@@ -116,15 +118,16 @@ async fn call_gpt_stream(
             if let Some(ref content) = choice.delta.content {
                 if !content.is_empty() {
                     full_text.push_str(content);
-                    if let Some(redis_url) = redis_url {
+                    if let Some(ref conn) = redis_conn {
                         let payload = ChatSessionNewMessageChunkPayload::new(
                             topic.to_string(),
                             chunk_index,
                             content.clone(),
                             false,
                         );
+                        let mut guard = conn.lock().await;
                         if let Err(e) =
-                            publish_chat_chunk(redis_url, topic, payload).await
+                            publish_chat_chunk_with_conn(&mut *guard, topic, payload).await
                         {
                             tracing::warn!("Failed to publish chat chunk to Redis: {}", e);
                         }
@@ -135,14 +138,15 @@ async fn call_gpt_stream(
         }
     }
 
-    if let Some(redis_url) = redis_url {
+    if let Some(ref conn) = redis_conn {
         let payload = ChatSessionNewMessageChunkPayload::new(
             topic.to_string(),
             chunk_index,
             String::new(),
             true,
         );
-        if let Err(e) = publish_chat_chunk(redis_url, topic, payload).await {
+        let mut guard = conn.lock().await;
+        if let Err(e) = publish_chat_chunk_with_conn(&mut *guard, topic, payload).await {
             tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
         }
     }
@@ -164,7 +168,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     })?;
     let credentials = Credentials::new(openai_key, "");
 
-    let pool = establish_pool(settings.pg_database_url.clone());
+    let redis_url = settings.redis_url.as_deref().ok_or_else(|| {
+        Box::<dyn std::error::Error + Send + Sync>::from(
+            "REDIS_URL must be set for the chat worker (required for streaming chunks to WebSocket clients)",
+        )
+    })?;
+    let redis_client = redis::Client::open(redis_url)?;
+    let redis_conn = redis_client.get_multiplexed_async_connection().await?;
+    let redis_conn = Arc::new(Mutex::new(redis_conn));
+    info!("Connected to Redis for streaming chunks");
+
+    let pool = establish_pool(
+        settings.pg_database_url.clone(),
+        settings.database_pool_size,
+        settings.database_connection_timeout_secs,
+    );
     let rabbit_url = settings.rabbit_url.clone();
 
     info!("Connecting to RabbitMQ and creating work consumer...");
@@ -216,14 +234,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let pool = pool.clone();
         let credentials = credentials.clone();
-        let settings = settings.clone();
+        let redis_conn = redis_conn.clone();
 
         let acker: lapin::acker::Acker = delivery.acker.clone();
         tokio::spawn(async move {
             let result = process_one(
                 &pool,
                 &credentials,
-                &settings,
+                &redis_conn,
                 user_id,
                 project_id,
                 session_id,
@@ -252,7 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 async fn process_one(
     pool: &DbPool,
     credentials: &Credentials,
-    settings: &Settings,
+    redis_conn: &Arc<Mutex<MultiplexedConnection>>,
     user_id: i64,
     project_id: i64,
     session_id: i64,
@@ -264,7 +282,7 @@ async fn process_one(
         credentials,
         &session_messages,
         user_text,
-        settings.redis_url.as_deref(),
+        Some(redis_conn.clone()),
         &topic,
     )
     .await?;
