@@ -94,6 +94,7 @@ fn build_chat_messages(
 
 async fn call_gpt_stream(
     credentials: &Credentials,
+    model: &str,
     session_messages: &[(ChatSessionRoleType, Option<Value>)],
     user_text: &str,
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
@@ -102,7 +103,7 @@ async fn call_gpt_stream(
     let messages = build_chat_messages(session_messages, user_text);
 
     let mut rx: Receiver<openai::chat::ChatCompletionDelta> = ChatCompletionBuilder::default()
-        .model("gpt-4o-mini")
+        .model(model)
         .messages(messages)
         .credentials(credentials.clone())
         .create_stream()
@@ -185,6 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         settings.database_connection_timeout_secs,
     );
     let rabbit_url = settings.rabbit_url.clone();
+    let openai_model = settings.openai_model.clone();
 
     info!("Connecting to RabbitMQ and creating work consumer...");
     let (_connection, mut consumer): (lapin::Connection, lapin::Consumer) =
@@ -236,12 +238,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let pool = pool.clone();
         let credentials = credentials.clone();
         let redis_conn = redis_conn.clone();
+        let openai_model = openai_model.clone();
 
         let acker: lapin::acker::Acker = delivery.acker.clone();
         tokio::spawn(async move {
             let result = process_one(
                 &pool,
                 &credentials,
+                &openai_model,
                 &redis_conn,
                 user_id,
                 project_id,
@@ -271,6 +275,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 async fn process_one(
     pool: &DbPool,
     credentials: &Credentials,
+    openai_model: &str,
     redis_conn: &Arc<Mutex<MultiplexedConnection>>,
     user_id: i64,
     project_id: i64,
@@ -283,6 +288,7 @@ async fn process_one(
     let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
     let ai_text = call_gpt_stream(
         credentials,
+        openai_model,
         &session_messages,
         user_text,
         Some(redis_conn.clone()),

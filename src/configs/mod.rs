@@ -38,6 +38,7 @@ pub struct Settings {
   pub rabbit_url: String,
   pub redis_url: Option<String>,
   pub openai_api_key: Option<String>,
+  pub openai_model: String,
 }
 
 impl Settings {
@@ -62,6 +63,7 @@ impl Settings {
     let rabbit_url = env::var("RABBIT_URL").expect("RABBIT_URL must be set");
     let redis_url = env::var("REDIS_URL").ok();
     let openai_api_key = env::var("OPENAI_API_KEY").or_else(|_| env::var("OPENAI_KEY")).ok();
+    let openai_model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
 
     Ok(Settings {
       port,
@@ -74,6 +76,7 @@ impl Settings {
       rabbit_url,
       redis_url,
       openai_api_key,
+      openai_model,
     })
   }
 }
