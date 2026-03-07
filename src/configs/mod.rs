@@ -25,6 +25,39 @@ impl TryFrom<String> for AppEnvironment {
   }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmProvider {
+  OpenAi,
+  Gemini,
+}
+
+impl Default for LlmProvider {
+  fn default() -> Self {
+    LlmProvider::Gemini
+  }
+}
+
+impl std::fmt::Display for LlmProvider {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      LlmProvider::OpenAi => write!(f, "openai"),
+      LlmProvider::Gemini => write!(f, "gemini"),
+    }
+  }
+}
+
+impl TryFrom<String> for LlmProvider {
+  type Error = String;
+
+  fn try_from(s: String) -> Result<Self, Self::Error> {
+    match s.to_lowercase().as_str() {
+      "openai" => Ok(LlmProvider::OpenAi),
+      "gemini" => Ok(LlmProvider::Gemini),
+      _ => Err("Invalid LLM_PROVIDER. Must be 'openai' or 'gemini'".to_string()),
+    }
+  }
+}
+
 #[derive(Debug, Clone)]
 pub struct Settings {
   pub port: String,
@@ -39,6 +72,9 @@ pub struct Settings {
   pub redis_url: Option<String>,
   pub openai_api_key: Option<String>,
   pub openai_model: String,
+  pub gemini_api_key: Option<String>,
+  pub gemini_model: String,
+  pub llm_provider: LlmProvider,
 }
 
 impl Settings {
@@ -64,6 +100,10 @@ impl Settings {
     let redis_url = env::var("REDIS_URL").ok();
     let openai_api_key = env::var("OPENAI_API_KEY").or_else(|_| env::var("OPENAI_KEY")).ok();
     let openai_model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+    let gemini_api_key = env::var("GEMINI_API_KEY").ok();
+    let gemini_model = env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-flash-latest".to_string());
+    let llm_provider_str = env::var("LLM_PROVIDER").unwrap_or_else(|_| "gemini".to_string());
+    let llm_provider = LlmProvider::try_from(llm_provider_str)?;
 
     Ok(Settings {
       port,
@@ -77,6 +117,9 @@ impl Settings {
       redis_url,
       openai_api_key,
       openai_model,
+      gemini_api_key,
+      gemini_model,
+      llm_provider,
     })
   }
 }

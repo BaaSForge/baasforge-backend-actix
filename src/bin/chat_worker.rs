@@ -1,4 +1,4 @@
-use baal_backend_actix::configs::Settings;
+use baal_backend_actix::configs::{LlmProvider, Settings};
 use baal_backend_actix::database::{block_on_db_tokio, establish_pool, DbPool, PooledConn};
 use baal_backend_actix::models::chat_messages::{
     ChatMessageInsert, ChatMessageRow, ChatMessageType, ChatSessionRoleType,
@@ -8,11 +8,13 @@ use baal_backend_actix::routes::chat::message_queue::{
 };
 use baal_backend_actix::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use baal_backend_actix::routes::ws::publish_event_to_channel;
-use baal_backend_actix::schema::{chat_messages};
+use baal_backend_actix::schema::chat_messages;
 use diesel::prelude::*;
 use lapin::options::BasicAckOptions;
 use openai::chat::{ChatCompletionBuilder, ChatCompletionMessage, ChatCompletionMessageRole};
 use openai::Credentials;
+use gemini_rust::client::GenerationStream;
+use gemini_rust::Gemini;
 use redis::aio::MultiplexedConnection;
 use serde_json::Value;
 use std::sync::Arc;
@@ -92,6 +94,89 @@ fn build_chat_messages(
     messages
 }
 
+fn gemini_model_id(model: &str) -> String {
+    if model.starts_with("models/") {
+        model.to_string()
+    } else {
+        format!("models/{}", model)
+    }
+}
+
+async fn call_gemini_stream(
+    api_key: &str,
+    model: &str,
+    session_messages: &[(ChatSessionRoleType, Option<Value>)],
+    user_text: &str,
+    redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
+    topic: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let client = Gemini::with_model(api_key.to_string(), gemini_model_id(model))
+        .map_err(|e| format!("Gemini client: {}", e))?;
+
+    let mut request = client
+        .generate_content()
+        .with_system_prompt("You are a helpful assistant.");
+
+    for (role, payload) in session_messages {
+        let text = payload_to_string(payload);
+        if text.is_empty() {
+            continue;
+        }
+        request = match role {
+            ChatSessionRoleType::User => request.with_user_message(text),
+            ChatSessionRoleType::Ai => request.with_model_message(text),
+        };
+    }
+
+    let mut stream: GenerationStream = request
+        .with_user_message(user_text.to_string())
+        .execute_stream()
+        .await
+        .map_err(|e| format!("Gemini stream: {}", e))?;
+
+    let mut full_text = String::new();
+    let mut chunk_index: u32 = 0;
+
+    while let Some(chunk) =
+        futures::TryStreamExt::try_next(&mut stream).await.map_err(|e| format!("Gemini stream: {}", e))?
+    {
+        let text: String = chunk.text().to_string();
+        if !text.is_empty() {
+            full_text.push_str(&text);
+            if let Some(ref conn) = redis_conn {
+                let payload = ChatSessionNewMessageChunkPayload::new(
+                    topic.to_string(),
+                    chunk_index,
+                    text,
+                    false,
+                );
+                let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
+                let mut guard = conn.lock().await;
+                if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
+                    tracing::warn!("Failed to publish chat chunk to Redis: {}", e);
+                }
+                chunk_index += 1;
+            }
+        }
+    }
+
+    if let Some(ref conn) = redis_conn {
+        let payload = ChatSessionNewMessageChunkPayload::new(
+            topic.to_string(),
+            chunk_index,
+            String::new(),
+            true,
+        );
+        let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
+        let mut guard = conn.lock().await;
+        if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
+            tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
+        }
+    }
+
+    Ok(full_text)
+}
+
 async fn call_gpt_stream(
     credentials: &Credentials,
     model: &str,
@@ -163,12 +248,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let settings = Settings::new().map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
         e.to_string().into()
     })?;
-    let openai_key = settings.openai_api_key.as_deref().ok_or_else(|| {
-        Box::<dyn std::error::Error + Send + Sync>::from(
-            "OPENAI_API_KEY or OPENAI_KEY must be set for the chat worker",
-        )
-    })?;
-    let credentials = Credentials::new(openai_key, "");
+    let llm_provider = settings.llm_provider;
+    let (openai_credentials, openai_model, gemini_api_key, gemini_model) = match llm_provider {
+        LlmProvider::OpenAi => {
+            let key = settings.openai_api_key.as_deref().ok_or_else(|| {
+                Box::<dyn std::error::Error + Send + Sync>::from(
+                    "LLM_PROVIDER=openai but OPENAI_API_KEY (or OPENAI_KEY) is not set",
+                )
+            })?;
+            (
+                Some(Credentials::new(key, "")),
+                settings.openai_model.clone(),
+                None,
+                String::new(),
+            )
+        }
+        LlmProvider::Gemini => {
+            let key = settings.gemini_api_key.clone().ok_or_else(|| {
+                Box::<dyn std::error::Error + Send + Sync>::from(
+                    "LLM_PROVIDER=gemini but GEMINI_API_KEY is not set",
+                )
+            })?;
+            (
+                None,
+                String::new(),
+                Some(key),
+                settings.gemini_model.clone(),
+            )
+        }
+    };
+    info!(provider = %llm_provider, "Using LLM provider");
 
     let redis_url = settings.redis_url.as_deref().ok_or_else(|| {
         Box::<dyn std::error::Error + Send + Sync>::from(
@@ -186,7 +295,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         settings.database_connection_timeout_secs,
     );
     let rabbit_url = settings.rabbit_url.clone();
-    let openai_model = settings.openai_model.clone();
 
     info!("Connecting to RabbitMQ and creating work consumer...");
     let (_connection, mut consumer): (lapin::Connection, lapin::Consumer) =
@@ -236,16 +344,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         };
 
         let pool = pool.clone();
-        let credentials = credentials.clone();
         let redis_conn = redis_conn.clone();
+        let openai_credentials = openai_credentials.clone();
         let openai_model = openai_model.clone();
+        let gemini_api_key = gemini_api_key.clone();
+        let gemini_model = gemini_model.clone();
 
         let acker: lapin::acker::Acker = delivery.acker.clone();
         tokio::spawn(async move {
             let result = process_one(
                 &pool,
-                &credentials,
+                llm_provider,
+                openai_credentials.as_ref(),
                 &openai_model,
+                gemini_api_key.as_deref(),
+                &gemini_model,
                 &redis_conn,
                 user_id,
                 project_id,
@@ -274,8 +387,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 async fn process_one(
     pool: &DbPool,
-    credentials: &Credentials,
+    llm_provider: LlmProvider,
+    openai_credentials: Option<&Credentials>,
     openai_model: &str,
+    gemini_api_key: Option<&str>,
+    gemini_model: &str,
     redis_conn: &Arc<Mutex<MultiplexedConnection>>,
     user_id: i64,
     project_id: i64,
@@ -286,15 +402,36 @@ async fn process_one(
         .await
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
     let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
-    let ai_text = call_gpt_stream(
-        credentials,
-        openai_model,
-        &session_messages,
-        user_text,
-        Some(redis_conn.clone()),
-        &topic,
-    )
-    .await?;
+    let ai_text = match llm_provider {
+        LlmProvider::OpenAi => {
+            let credentials = openai_credentials.ok_or_else(|| {
+                Box::<dyn std::error::Error + Send + Sync>::from("OPENAI credentials not set")
+            })?;
+            call_gpt_stream(
+                credentials,
+                openai_model,
+                &session_messages,
+                user_text,
+                Some(redis_conn.clone()),
+                &topic,
+            )
+            .await?
+        }
+        LlmProvider::Gemini => {
+            let api_key = gemini_api_key.ok_or_else(|| {
+                Box::<dyn std::error::Error + Send + Sync>::from("GEMINI_API_KEY not set")
+            })?;
+            call_gemini_stream(
+                api_key,
+                gemini_model,
+                &session_messages,
+                user_text,
+                Some(redis_conn.clone()),
+                &topic,
+            )
+            .await?
+        }
+    };
 
     let insert = ChatMessageInsert {
         chat_session_id: session_id,

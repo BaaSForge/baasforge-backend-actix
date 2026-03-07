@@ -48,7 +48,7 @@ urlencoding = "2.1.3"
 
 # HTTP Requests (Axios equivalent)
 # Asynchronous HTTP client
-reqwest = { version = "0.13.1", features = ["json", "blocking"] }
+reqwest = { version = "0.13.1", features = ["json", "stream", "blocking"] }
 # Alternatively:
 # (simpler, but less feature-rich)
 ureq = "3.1.4"
@@ -90,7 +90,8 @@ rust-s3 = "0.37.1"
 # You'll likely need to build your own wrapper around the OpenAI API.  Here's a starting point:
 # Official OpenAI Rust client (for general API access)
 openai = "1.1.1"
-# You'll need to implement the message formatting, tool calling logic yourself.
+gemini-rust = "1.7"
+futures = "0.3"
 
 # Authentication (Passport equivalent)
 # For JWT creation and verification
