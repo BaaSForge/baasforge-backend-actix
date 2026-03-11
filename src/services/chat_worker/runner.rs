@@ -1,11 +1,11 @@
-use crate::configs::{LlmProvider, Settings};
+use crate::configs::Settings;
 use crate::database::establish_pool;
 use crate::routes::chat::message_queue::{
     self as chat_message_queue, parse_chat_routing_key, ChatSessionQueueMessage,
 };
+use crate::services::chat_worker::llm::build_llm_client;
 use crate::services::chat_worker::processor::process_one;
 use lapin::options::BasicAckOptions;
-use openai::Credentials;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
@@ -19,34 +19,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             e.to_string().into()
         })?;
     let llm_provider = settings.llm_provider;
-    let (openai_credentials, openai_model, gemini_api_key, gemini_model) = match llm_provider {
-        LlmProvider::OpenAi => {
-            let key = settings.openai_api_key.as_deref().ok_or_else(|| {
-                Box::<dyn std::error::Error + Send + Sync>::from(
-                    "LLM_PROVIDER=openai but OPENAI_API_KEY (or OPENAI_KEY) is not set",
-                )
-            })?;
-            (
-                Some(Credentials::new(key, "")),
-                settings.openai_model.clone(),
-                None,
-                String::new(),
-            )
-        }
-        LlmProvider::Gemini => {
-            let key = settings.gemini_api_key.clone().ok_or_else(|| {
-                Box::<dyn std::error::Error + Send + Sync>::from(
-                    "LLM_PROVIDER=gemini but GEMINI_API_KEY is not set",
-                )
-            })?;
-            (
-                None,
-                String::new(),
-                Some(key),
-                settings.gemini_model.clone(),
-            )
-        }
-    };
+    let llm_client = build_llm_client(&settings)?;
     info!(provider = %llm_provider, "Using LLM provider");
 
     let redis_url = settings.redis_url.as_deref().ok_or_else(|| {
@@ -115,20 +88,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         let pool = pool.clone();
         let redis_conn = redis_conn.clone();
-        let openai_credentials = openai_credentials.clone();
-        let openai_model = openai_model.clone();
-        let gemini_api_key = gemini_api_key.clone();
-        let gemini_model = gemini_model.clone();
+        let llm_client = llm_client.clone();
 
         let acker: lapin::acker::Acker = delivery.acker.clone();
         tokio::spawn(async move {
             let result = process_one(
                 &pool,
-                llm_provider,
-                openai_credentials.as_ref(),
-                &openai_model,
-                gemini_api_key.as_deref(),
-                &gemini_model,
+                &llm_client,
                 &redis_conn,
                 user_id,
                 project_id,

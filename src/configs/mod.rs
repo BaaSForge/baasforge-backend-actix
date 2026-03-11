@@ -31,12 +31,6 @@ pub enum LlmProvider {
   Gemini,
 }
 
-impl Default for LlmProvider {
-  fn default() -> Self {
-    LlmProvider::OpenAi
-  }
-}
-
 impl std::fmt::Display for LlmProvider {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
@@ -51,7 +45,7 @@ impl TryFrom<String> for LlmProvider {
 
   fn try_from(s: String) -> Result<Self, Self::Error> {
     match s.to_lowercase().trim() {
-      "" | "openai" => Ok(LlmProvider::OpenAi),
+      "openai" => Ok(LlmProvider::OpenAi),
       "gemini" => Ok(LlmProvider::Gemini),
       _ => Ok(LlmProvider::OpenAi),
     }
