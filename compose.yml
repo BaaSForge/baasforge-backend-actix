@@ -45,5 +45,10 @@ services:
       - "1100:1100"
     volumes:
       - ./nginx.dev.conf:/etc/nginx/nginx.conf:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -33,7 +33,7 @@ pub enum LlmProvider {
 
 impl Default for LlmProvider {
   fn default() -> Self {
-    LlmProvider::Gemini
+    LlmProvider::OpenAi
   }
 }
 
@@ -50,10 +50,10 @@ impl TryFrom<String> for LlmProvider {
   type Error = String;
 
   fn try_from(s: String) -> Result<Self, Self::Error> {
-    match s.to_lowercase().as_str() {
-      "openai" => Ok(LlmProvider::OpenAi),
+    match s.to_lowercase().trim() {
+      "" | "openai" => Ok(LlmProvider::OpenAi),
       "gemini" => Ok(LlmProvider::Gemini),
-      _ => Err("Invalid LLM_PROVIDER. Must be 'openai' or 'gemini'".to_string()),
+      _ => Ok(LlmProvider::OpenAi),
     }
   }
 }
@@ -102,7 +102,7 @@ impl Settings {
     let openai_model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
     let gemini_api_key = env::var("GEMINI_API_KEY").ok();
     let gemini_model = env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-flash-latest".to_string());
-    let llm_provider_str = env::var("LLM_PROVIDER").unwrap_or_else(|_| "gemini".to_string());
+    let llm_provider_str = env::var("LLM_PROVIDER").unwrap_or_default();
     let llm_provider = LlmProvider::try_from(llm_provider_str)?;
 
     Ok(Settings {
