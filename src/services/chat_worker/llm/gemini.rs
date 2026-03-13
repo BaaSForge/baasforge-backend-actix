@@ -1,6 +1,7 @@
 // TODO: we know that gpt and gemini dont support tool call and content in the same response,
 // so we can simplify this code
 use crate::models::chat_messages::ChatSessionRoleType;
+use crate::services::chat_worker::agent::BASE_SYSTEM_PROMPT;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::llm::GenerateOutcome;
@@ -40,9 +41,7 @@ pub async fn call_gemini_stream(
 
     let mut request = client
         .generate_content()
-        .with_system_prompt(
-            "You are a helpful assistant. When you use a tool, always include a brief text message to the user in the same response (before or after the tool call).",
-        );
+        .with_system_prompt(BASE_SYSTEM_PROMPT);
 
     for (role, payload) in session_messages {
         let text = payload_to_string(payload);

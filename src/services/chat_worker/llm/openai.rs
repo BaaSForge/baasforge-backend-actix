@@ -1,6 +1,7 @@
 // TODO: we know that gpt and gemini dont support tool call and content in the same response,
 // so we can simplify this code
 use crate::models::chat_messages::ChatSessionRoleType;
+use crate::services::chat_worker::agent::BASE_SYSTEM_PROMPT;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::llm::GenerateOutcome;
@@ -24,9 +25,7 @@ fn build_chat_messages(
 ) -> Vec<ChatCompletionMessage> {
     let mut messages: Vec<ChatCompletionMessage> = vec![ChatCompletionMessage {
         role: ChatCompletionMessageRole::System,
-        content: Some(
-            "You are a helpful assistant. When you use a tool, always include a brief text message to the user in the same response (before or after the tool call).".to_string(),
-        ),
+        content: Some(BASE_SYSTEM_PROMPT.to_string()),
         name: None,
         function_call: None,
         tool_call_id: None,
