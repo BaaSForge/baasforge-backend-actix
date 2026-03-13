@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 pub mod openai;
 pub mod gemini;
+pub mod tools;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
