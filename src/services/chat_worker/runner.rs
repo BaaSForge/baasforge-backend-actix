@@ -1,13 +1,18 @@
 use crate::configs::Settings;
-use crate::database::establish_pool;
+use crate::database::{block_on_db_tokio, establish_pool};
+use crate::models::chat_messages::ChatMessageStatus;
 use crate::routes::chat::message_queue::{
     self as chat_message_queue,
     chat_dead_letter_spec, chat_retry_policy,
     parse_chat_routing_key, ChatSessionQueueMessage,
 };
+use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, WsServerEvent};
+use crate::routes::ws::redis::publish_event_to_channel;
+use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::build_llm_client;
 use crate::services::chat_worker::processor::process_one;
 use crate::services::message_queue::{publish_to_dead_letter, publish_to_retry_delay};
+use diesel::prelude::*;
 use lapin::options::BasicAckOptions;
 use lapin::ConnectionProperties;
 use std::sync::Arc;
@@ -145,6 +150,42 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .await
                         {
                             tracing::error!("Failed to publish to dead letter: {}", dl_e);
+                        }
+                        let message_id_to_update = placeholder_ai_message_id;
+                        // Update placeholder message status to failed so client and API reflect it
+                        if let Err(db_e) = block_on_db_tokio(&pool, move |conn| {
+                            diesel::update(
+                                chat_messages::table
+                                    .filter(chat_messages::id.eq(message_id_to_update)),
+                            )
+                            .set(chat_messages::status.eq(ChatMessageStatus::Failed))
+                            .execute(conn)
+                        })
+                        .await
+                        {
+                            tracing::error!(
+                                "Failed to update message status to failed: {}",
+                                db_e
+                            );
+                        } else {
+                            // Notify clients subscribed to this chat session so they can update UI
+                            let topic =
+                                format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+                            let event = WsServerEvent::ChatSessionMessageStatusChange(
+                                ChatSessionMessageStatusChangePayload {
+                                    message_id: placeholder_ai_message_id,
+                                    status: ChatMessageStatus::Failed,
+                                },
+                            );
+                            let mut guard = redis_conn.lock().await;
+                            if let Err(redis_e) =
+                                publish_event_to_channel(&mut *guard, &topic, &event).await
+                            {
+                                tracing::warn!(
+                                    "Failed to publish message status change to Redis: {}",
+                                    redis_e
+                                );
+                            }
                         }
                     } else {
                         tracing::error!(

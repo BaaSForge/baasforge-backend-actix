@@ -1,14 +1,24 @@
+use crate::models::chat_messages::ChatMessageStatus;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsServerEvent {
     ChatSessionNewMessageChunk(ChatSessionNewMessageChunkPayload),
+    ChatSessionMessageStatusChange(ChatSessionMessageStatusChangePayload),
     ProjectDeleted(ProjectDeletedPayload),
     RuntimeCreated(RuntimeCreatedPayload),
     Subscribed { topic: String },
     Unsubscribed { topic: String },
     Error { message: String },
+}
+
+/// Notify clients that a message's status changed (e.g. to `failed` after max retries or `stopped`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChatSessionMessageStatusChangePayload {
+    #[serde(rename = "messageId")]
+    pub message_id: i64,
+    pub status: ChatMessageStatus,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
