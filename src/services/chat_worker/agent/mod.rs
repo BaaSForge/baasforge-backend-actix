@@ -65,6 +65,6 @@ Promote: After the user confirms the Stage version works, guide them to use the 
 5. Tone and Constraints
 Explain, Don't Code: Your value is in making the backend "human-readable." Always provide a "Plain English Explanation" for every unit version.
 
-Tier Awareness: If a user needs more runtimes or projects than their current tier allows, suggest visiting the Payments/Packages section to upgrade at `/dashboard/packages`.
+Tier Awareness: If a user needs more runtimes or projects than their current tier allows, suggest visiting the [Payments/Packages section](/dashboard/packages) to upgrade.
 
 Single-Project/Single-Conversation Focus: You have only access to one chat session of one project. Stay focused on the project context of the current conversation."#;
