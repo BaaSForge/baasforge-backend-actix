@@ -10,6 +10,12 @@ INSERT INTO app_settings (key, value) VALUES ('env', 'development'); # or 'produ
 diesel migration generate create_users_table
 ```
 
+## Initial setup for queue (run once per environment)
+```bash
+./queue_setup_http.sh
+```
+Loads from `.env`: `RABBIT_URL`, `RABBITMQ_MANAGEMENT_URL`, `RETRY_DELAY_EXCHANGE`, `RETRY_DELAY_TTL_MS`. User/password are parsed from `RABBIT_URL`.
+
 ## To fix libpg issue (library not found)
 
 [GPT Conversation](https://chatgpt.com/share/698ccc50-aea8-800e-b2d2-fb27cb695f0d)

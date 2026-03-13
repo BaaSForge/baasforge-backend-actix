@@ -63,6 +63,10 @@ pub struct Settings {
   pub auth_access_token_secret: String,
   pub auth_refresh_token_secret: String,
   pub rabbit_url: String,
+  /// Exchange used for retry delay: failed messages are published here, then after TTL are dead-lettered back to the original queue.
+  pub retry_delay_exchange: String,
+  /// TTL in milliseconds for messages in retry delay queues (e.g. 3000 = 3 seconds).
+  pub retry_delay_ttl_ms: u32,
   pub redis_url: Option<String>,
   pub openai_api_key: Option<String>,
   pub openai_model: String,
@@ -91,6 +95,11 @@ impl Settings {
     let auth_access_token_secret = env::var("AUTH_ACCESS_TOKEN_SECRET").expect("AUTH_ACCESS_TOKEN_SECRET must be set");
     let auth_refresh_token_secret = env::var("AUTH_REFRESH_TOKEN_SECRET").expect("AUTH_REFRESH_TOKEN_SECRET must be set");
     let rabbit_url = env::var("RABBIT_URL").expect("RABBIT_URL must be set");
+    let retry_delay_exchange = env::var("RETRY_DELAY_EXCHANGE").unwrap_or_else(|_| "retry_delay_exchange".to_string());
+    let retry_delay_ttl_ms = env::var("RETRY_DELAY_TTL_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3000);
     let redis_url = env::var("REDIS_URL").ok();
     let openai_api_key = env::var("OPENAI_API_KEY").or_else(|_| env::var("OPENAI_KEY")).ok();
     let openai_model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
@@ -108,6 +117,8 @@ impl Settings {
       auth_access_token_secret,
       auth_refresh_token_secret,
       rabbit_url,
+      retry_delay_exchange,
+      retry_delay_ttl_ms,
       redis_url,
       openai_api_key,
       openai_model,

@@ -5,7 +5,9 @@ use crate::routes::chat::message_queue::{
 };
 use crate::services::chat_worker::llm::build_llm_client;
 use crate::services::chat_worker::processor::process_one;
+use crate::services::message_queue::publish_to_retry_delay;
 use lapin::options::BasicAckOptions;
+use lapin::ConnectionProperties;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
@@ -38,10 +40,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         settings.database_connection_timeout_secs,
     );
     let rabbit_url = settings.rabbit_url.clone();
+    let retry_delay_exchange = settings.retry_delay_exchange.clone();
 
-    info!("Connecting to RabbitMQ and creating work consumer...");
-    let (_connection, mut consumer): (lapin::Connection, lapin::Consumer) =
-        chat_message_queue::create_chat_work_consumer(&rabbit_url).await?;
+    info!("Connecting to RabbitMQ...");
+    let connection =
+        lapin::Connection::connect(&rabbit_url, ConnectionProperties::default()).await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    let (_consumer_channel, mut consumer) =
+        chat_message_queue::create_chat_work_consumer_on_connection(&connection).await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    let retry_channel = connection.create_channel().await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     info!("Chat worker started. Consuming from work queue.");
 
     while let Some(delivery_result) = consumer.next().await {
@@ -92,8 +101,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let pool = pool.clone();
         let redis_conn = redis_conn.clone();
         let llm_client = llm_client.clone();
+        let acker = delivery.acker.clone();
+        let retry_channel = retry_channel.clone();
+        let retry_delay_exchange = retry_delay_exchange.clone();
+        let delivery_data = delivery.data.clone();
+        let retry_routing_key = routing_key.clone();
 
-        let acker: lapin::acker::Acker = delivery.acker.clone();
         tokio::spawn(async move {
             let result = process_one(
                 &pool,
@@ -107,13 +120,26 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
             .await;
 
-            if let Err(e) = &result {
-                tracing::error!(
-                    project_id,
-                    session_id,
-                    "Process message failed: {}",
-                    e
-                );
+            match &result {
+                Ok(()) => {}
+                Err(e) => {
+                    tracing::error!(
+                        project_id,
+                        session_id,
+                        "Process message failed, sending to retry delay: {}",
+                        e
+                    );
+                    if let Err(retry_e) = publish_to_retry_delay(
+                        &retry_channel,
+                        &retry_delay_exchange,
+                        &retry_routing_key,
+                        &delivery_data,
+                    )
+                    .await
+                    {
+                        tracing::error!("Failed to publish to retry delay: {}", retry_e);
+                    }
+                }
             }
 
             if acker.ack(BasicAckOptions::default()).await.is_err() {

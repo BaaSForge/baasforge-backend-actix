@@ -1,5 +1,5 @@
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageType, ChatSessionRoleType};
-use crate::services::message_queue::{self, PublishError, SharedRabbitPublisher};
+use crate::services::message_queue::{self, PublishError, RetryDelaySpec, SharedRabbitPublisher};
 use lapin::{Connection, Consumer};
 use serde::Serialize;
 use std::io;
@@ -8,6 +8,18 @@ use std::sync::Arc;
 pub const CHAT_SESSION_EXCHANGE: &str = "chat_session_exchange";
 pub const CHAT_WORK_QUEUE: &str = "chat_session_work_queue";
 pub const CHAT_WORK_QUEUE_BINDING: &str = "chat_session.#";
+
+/// Delay queue for chat work: failed messages go here, wait TTL (e.g. 3s), then are dead-lettered back to the chat work queue (original routing key preserved).
+pub const CHAT_RETRY_DELAY_QUEUE: &str = "delay_3s_chat_session_work_queue";
+
+pub fn chat_retry_delay_spec() -> RetryDelaySpec {
+    RetryDelaySpec {
+        delay_queue_name: CHAT_RETRY_DELAY_QUEUE.to_string(),
+        retry_binding_key: CHAT_WORK_QUEUE_BINDING.to_string(),
+        dead_letter_exchange: CHAT_SESSION_EXCHANGE.to_string(),
+        dead_letter_routing_key: None,
+    }
+}
 
 pub fn chat_session_routing_key(project_id: i64, session_id: i64) -> String {
     format!("chat_session.{}.{}", project_id, session_id)
@@ -79,11 +91,11 @@ pub async fn publish_with_publisher(
     .map_err(PublishError::Queue)
 }
 
-pub async fn create_chat_work_consumer(
-    rabbit_url: &str,
-) -> Result<(Connection, Consumer), lapin::Error> {
-    message_queue::create_work_consumer(
-        rabbit_url,
+pub async fn create_chat_work_consumer_on_connection(
+    connection: &Connection,
+) -> Result<(lapin::Channel, Consumer), lapin::Error> {
+    message_queue::create_work_consumer_on_connection(
+        connection,
         CHAT_SESSION_EXCHANGE,
         CHAT_WORK_QUEUE,
         CHAT_WORK_QUEUE_BINDING,

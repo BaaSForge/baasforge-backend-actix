@@ -1,3 +1,5 @@
+// TODO: we know that gpt and gemini dont support tool call and content in the same response,
+// so we can simplify this code
 use crate::models::chat_messages::ChatSessionRoleType;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::publish_event_to_channel;
