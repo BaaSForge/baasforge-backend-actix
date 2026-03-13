@@ -1,8 +1,8 @@
 use crate::database::{block_on_db_tokio, DbPool};
-use crate::models::chat_messages::{ChatMessageStatus};
+use crate::models::chat_messages::ChatMessageStatus;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_previous_session_messages;
-use crate::services::chat_worker::llm::LlmClient;
+use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient};
 use diesel::prelude::*;
 use redis::aio::MultiplexedConnection;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ pub async fn process_one(
     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
     let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
-    let ai_text = llm_client
+    let outcome = llm_client
         .generate(
             &session_messages,
             user_text,
@@ -36,19 +36,35 @@ pub async fn process_one(
         )
         .await?;
 
-    let payload = Some(serde_json::to_value(&ai_text)?);
-    block_on_db_tokio(pool, move |conn| {
-        diesel::update(chat_messages::table.filter(chat_messages::id.eq(placeholder_ai_message_id)))
-            .set((
-                chat_messages::payload.eq(payload),
-                chat_messages::status.eq(ChatMessageStatus::Completed),
-            ))
-            .execute(conn)
-    })
-    .await
-    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-
-    info!(project_id, session_id, "Processed and saved AI response");
+    match outcome {
+        GenerateOutcome::Stopped(_partial) => {
+            info!(
+                project_id,
+                session_id,
+                placeholder_ai_message_id,
+                "Streaming stopped by user, not updating message (already set to stopped)"
+            );
+            return Ok(());
+        }
+        GenerateOutcome::Completed(ai_text) => {
+            let payload = Some(serde_json::to_value(&ai_text)?);
+            block_on_db_tokio(pool, move |conn| {
+                diesel::update(
+                    chat_messages::table
+                        .filter(chat_messages::id.eq(placeholder_ai_message_id))
+                        .filter(chat_messages::status.ne(ChatMessageStatus::Stopped)),
+                )
+                .set((
+                    chat_messages::payload.eq(payload),
+                    chat_messages::status.eq(ChatMessageStatus::Completed),
+                ))
+                .execute(conn)
+            })
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+            info!(project_id, session_id, "Processed and saved AI response");
+        }
+    }
     Ok(())
 }
 

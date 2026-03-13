@@ -7,7 +7,7 @@ use crate::routes::chat::message_queue::{
     parse_chat_routing_key, ChatSessionQueueMessage,
 };
 use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, WsServerEvent};
-use crate::routes::ws::redis::publish_event_to_channel;
+use crate::routes::ws::redis::{is_message_stopped, publish_event_to_channel};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::build_llm_client;
 use crate::services::chat_worker::processor::process_one;
@@ -99,6 +99,21 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         // Placeholder is required; deserialization would have failed if missing (field is i64)
         let placeholder_ai_message_id = payload.placeholder_ai_message_id;
+
+        // If user already requested stop for this message, ack and skip so it is not picked by another consumer
+        {
+            let mut guard = redis_conn.lock().await;
+            if let Ok(true) = is_message_stopped(&mut *guard, placeholder_ai_message_id).await {
+                tracing::info!(
+                    project_id,
+                    session_id,
+                    placeholder_ai_message_id,
+                    "Message marked stopped in Redis, acking and skipping"
+                );
+                let _ = delivery.acker.ack(BasicAckOptions::default()).await;
+                continue;
+            }
+        }
 
         let retry_num = payload.retry_num;
         let pool = pool.clone();

@@ -2,7 +2,8 @@
 // so we can simplify this code
 use crate::models::chat_messages::ChatSessionRoleType;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
-use crate::routes::ws::publish_event_to_channel;
+use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
+use crate::services::chat_worker::llm::GenerateOutcome;
 use gemini_rust::client::GenerationStream;
 use gemini_rust::tools::model::{FunctionCallingMode, FunctionDeclaration};
 use gemini_rust::Gemini;
@@ -29,7 +30,7 @@ pub async fn call_gemini_stream(
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
     message_id: i64,
-) -> Result<String, BoxError> {
+) -> Result<GenerateOutcome, BoxError> {
     let client = Gemini::with_model(api_key.to_string(), gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
 
@@ -91,6 +92,10 @@ pub async fn call_gemini_stream(
         if !text.is_empty() {
             full_text.push_str(&text);
             if let Some(ref conn) = redis_conn {
+                let mut guard = conn.lock().await;
+                if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                    return Ok(GenerateOutcome::Stopped(full_text));
+                }
                 let payload = ChatSessionNewMessageChunkPayload::new(
                     topic.to_string(),
                     message_id,
@@ -99,7 +104,6 @@ pub async fn call_gemini_stream(
                     false,
                 );
                 let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
-                let mut guard = conn.lock().await;
                 if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
                     tracing::warn!("Failed to publish chat chunk to Redis: {}", e);
                 }
@@ -144,5 +148,5 @@ pub async fn call_gemini_stream(
         }
     }
 
-    Ok(full_text)
+    Ok(GenerateOutcome::Completed(full_text))
 }

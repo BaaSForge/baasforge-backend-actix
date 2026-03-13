@@ -72,6 +72,8 @@ pub struct Settings {
   pub retry_delay_ttl_ms: u32,
   /// Chat session queue: if a consumer doesn't ack within this time (seconds), RabbitMQ closes the channel and requeues (e.g. after crash). Used by queue_setup_http.sh for x-consumer-timeout.
   pub chat_consumer_timeout_secs: u64,
+  /// TTL in seconds for Redis keys that mark stopped message IDs (e.g. 600 = 10 minutes). Used when user stops generating so workers can skip or abort streaming for those messages.
+  pub stopped_messages_ids_cache_ttl_secs: u64,
   pub redis_url: String,
   pub openai_api_key: Option<String>,
   pub openai_model: String,
@@ -109,6 +111,10 @@ impl Settings {
       .expect("CHAT_CONSUMER_TIMEOUT_SECS must be set")
       .parse()
       .expect("CHAT_CONSUMER_TIMEOUT_SECS must be a valid u64");
+    let stopped_messages_ids_cache_ttl_secs: u64 = env::var("STOPPED_MESSAGES_IDS_CACHE_TTL_SECS")
+      .expect("STOPPED_MESSAGES_IDS_CACHE_TTL_SECS must be set")
+      .parse()
+      .expect("STOPPED_MESSAGES_IDS_CACHE_TTL_SECS must be a valid u64");
     let redis_url = env::var("REDIS_URL").expect("REDIS_URL must be set");
     let openai_api_key = env::var("OPENAI_API_KEY").or_else(|_| env::var("OPENAI_KEY")).ok();
     let openai_model = env::var("OPENAI_MODEL").expect("OPENAI_MODEL must be set");
@@ -129,6 +135,7 @@ impl Settings {
       retry_delay_exchange,
       retry_delay_ttl_ms,
       chat_consumer_timeout_secs,
+      stopped_messages_ids_cache_ttl_secs,
       redis_url,
       openai_api_key,
       openai_model,

@@ -2,7 +2,8 @@
 // so we can simplify this code
 use crate::models::chat_messages::ChatSessionRoleType;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
-use crate::routes::ws::publish_event_to_channel;
+use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
+use crate::services::chat_worker::llm::GenerateOutcome;
 use futures::StreamExt;
 use openai::Credentials;
 use openai::chat::{
@@ -267,11 +268,15 @@ async fn stream_content_to_redis(
     redis_conn: Option<&Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
     message_id: i64,
-) {
+) -> Result<(), ()> {
     if content.is_empty() {
-        return;
+        return Ok(());
     }
     if let Some(ref conn) = redis_conn {
+        let mut guard = conn.lock().await;
+        if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+            return Err(());
+        }
         let payload = ChatSessionNewMessageChunkPayload::new(
             topic.to_string(),
             message_id,
@@ -280,12 +285,12 @@ async fn stream_content_to_redis(
             false,
         );
         let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
-        let mut guard = conn.lock().await;
         if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
             tracing::warn!("Failed to publish chat chunk to Redis: {}", e);
         }
         *chunk_index += 1;
     }
+    Ok(())
 }
 
 pub async fn call_gpt_stream(
@@ -296,7 +301,7 @@ pub async fn call_gpt_stream(
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
     message_id: i64,
-) -> Result<String, BoxError> {
+) -> Result<GenerateOutcome, BoxError> {
     let messages = build_chat_messages(session_messages, user_text);
     let functions = tools::to_openai_functions();
     let mut full_text = String::new();
@@ -339,14 +344,18 @@ pub async fn call_gpt_stream(
             if let Some(ref content) = choice.delta.content {
                 if !content.is_empty() {
                     full_text.push_str(content);
-                    stream_content_to_redis(
+                    if stream_content_to_redis(
                         content,
                         &mut chunk_index,
                         redis_conn.as_ref(),
                         topic,
                         message_id,
                     )
-                    .await;
+                    .await
+                    .is_err()
+                    {
+                        return Ok(GenerateOutcome::Stopped(full_text));
+                    }
                 }
             }
             if let Some(ref tcs) = choice.delta.tool_calls {
@@ -502,5 +511,5 @@ pub async fn call_gpt_stream(
         }
     }
 
-    Ok(full_text)
+    Ok(GenerateOutcome::Completed(full_text))
 }

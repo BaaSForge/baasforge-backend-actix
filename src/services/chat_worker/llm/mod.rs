@@ -11,6 +11,13 @@ pub mod tools;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+/// Result of LLM generation: either completed fully or stopped by user (partial text).
+#[derive(Debug)]
+pub enum GenerateOutcome {
+    Completed(String),
+    Stopped(String),
+}
+
 pub(crate) fn payload_to_string(payload: &Option<Value>) -> String {
     match payload {
         Some(v) => v.as_str().map(String::from).unwrap_or_else(|| v.to_string()),
@@ -38,7 +45,7 @@ impl LlmClient {
         redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
         topic: &str,
         message_id: i64,
-    ) -> Result<String, BoxError> {
+    ) -> Result<GenerateOutcome, BoxError> {
         match self {
             LlmClient::OpenAi { credentials, model } => {
                 openai::call_gpt_stream(

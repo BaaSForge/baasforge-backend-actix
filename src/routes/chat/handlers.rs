@@ -12,6 +12,7 @@ use crate::models::chat_sessions::{
 use crate::models::projects::PlatformEnvironmentType;
 use crate::models::projects::{ProjectRuntimeResponse, ProjectUnitResponse};
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
+use crate::routes::ws::set_stopped_message_id;
 use crate::routes::AppContext;
 // use crate::services::message_queue as mq_service;
 use crate::schema::chat_messages;
@@ -345,6 +346,118 @@ pub async fn handle_create_chat_session_message(
     HttpResponse::Ok().json(api_success(
         "Chat message created successfully",
         json!(response),
+    ))
+}
+
+pub async fn handle_stop_generating(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(i64, i64)>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to stop generating");
+
+    let (project_id, session_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+    let ttl_secs = context.settings.stopped_messages_ids_cache_ttl_secs;
+    let session_id_for_update = session_id;
+
+    enum StopOut {
+        NotFound,
+        Ok(Vec<i64>),
+    }
+
+    let generating_message_ids = match database::block_on_db(&context.pool, move |conn| {
+        let session_exists: Option<i64> = chat_sessions::table
+            .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(chat_sessions::id.eq(session_id))
+            .filter(chat_sessions::project_id.eq(project_id))
+            .select(chat_sessions::id)
+            .first(conn)
+            .optional()?;
+        if session_exists.is_none() {
+            return Ok(StopOut::NotFound);
+        }
+        let ids: Vec<i64> = chat_messages::table
+            .filter(chat_messages::chat_session_id.eq(session_id))
+            .filter(chat_messages::status.eq(ChatMessageStatus::Generating))
+            .select(chat_messages::id)
+            .load::<i64>(conn)?;
+        Ok(StopOut::Ok(ids))
+    })
+    .await
+    {
+        Ok(StopOut::NotFound) => {
+            return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
+        }
+        Ok(StopOut::Ok(ids)) => ids,
+        Err(database::BlockingDbError::Query(e)) => {
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            tracing::error!("[handle_stop_generating] DB/block error");
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    };
+
+    if generating_message_ids.is_empty() {
+        return HttpResponse::Ok().json(api_success(
+            "No generating messages to stop",
+            json!({ "stopped_count": 0, "stopped_message_ids": [] }),
+        ));
+    }
+
+    let update_result = database::block_on_db(&context.pool, move |conn| {
+        diesel::update(
+            chat_messages::table
+                .filter(chat_messages::chat_session_id.eq(session_id_for_update))
+                .filter(chat_messages::status.eq(ChatMessageStatus::Generating)),
+        )
+        .set(chat_messages::status.eq(ChatMessageStatus::Stopped))
+        .execute(conn)
+    })
+    .await;
+
+    match update_result {
+        Ok(_) => {}
+        Err(database::BlockingDbError::Query(e)) => {
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            tracing::error!("[handle_stop_generating] DB/block error on update");
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Database temporarily unavailable",
+                json!({}),
+            ));
+        }
+    }
+
+    if let Some(ref redis_conn) = context.redis_conn {
+        let mut guard = redis_conn.lock().await;
+        for &message_id in &generating_message_ids {
+            if let Err(e) = set_stopped_message_id(&mut *guard, message_id, ttl_secs).await {
+                tracing::warn!(
+                    message_id,
+                    "Failed to set stopped message id in Redis: {}",
+                    e
+                );
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(api_success(
+        "Generating stopped",
+        json!({
+            "stopped_count": generating_message_ids.len(),
+            "stopped_message_ids": generating_message_ids,
+        }),
     ))
 }
 
