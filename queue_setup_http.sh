@@ -43,10 +43,14 @@ curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
   "$MGMT/api/exchanges/$VHOST/chat_session_exchange" \
   -d '{"type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}}'
 
-echo "Declaring chat_session_work_queue (durable)..."
+# x-consumer-timeout: if a consumer doesn't ack within this time (ms), broker closes the channel and requeues (e.g. after crash). From CHAT_CONSUMER_TIMEOUT_SECS (default 60).
+# Note: if the queue already exists without this argument, you must delete and recreate it for the argument to apply.
+CHAT_CONSUMER_TIMEOUT_SECS="${CHAT_CONSUMER_TIMEOUT_SECS:-60}"
+CHAT_CONSUMER_TIMEOUT_MS=$((CHAT_CONSUMER_TIMEOUT_SECS * 1000))
+echo "Declaring chat_session_work_queue (durable, consumer_timeout=${CHAT_CONSUMER_TIMEOUT_SECS}s)..."
 curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
   "$MGMT/api/queues/$VHOST/chat_session_work_queue" \
-  -d '{"durable":true,"auto_delete":false,"arguments":{}}'
+  -d "{\"durable\":true,\"auto_delete\":false,\"arguments\":{\"x-consumer-timeout\":${CHAT_CONSUMER_TIMEOUT_MS}}}"
 
 echo "Binding chat_session_work_queue to chat_session_exchange with routing_key chat_session.#..."
 curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \

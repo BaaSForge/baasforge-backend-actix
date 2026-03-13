@@ -31,12 +31,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let llm_client = build_llm_client(&settings)?;
     info!(provider = %llm_provider, "Using LLM provider");
 
-    let redis_url = settings.redis_url.as_deref().ok_or_else(|| {
-        Box::<dyn std::error::Error + Send + Sync>::from(
-            "REDIS_URL must be set for the chat worker (required for streaming chunks to WebSocket clients)",
-        )
-    })?;
-    let redis_client = redis::Client::open(redis_url)?;
+    let redis_client = redis::Client::open(settings.redis_url.as_str())?;
     let redis_conn = redis_client.get_multiplexed_async_connection().await?;
     let redis_conn = Arc::new(Mutex::new(redis_conn));
     info!("Connected to Redis for streaming chunks");

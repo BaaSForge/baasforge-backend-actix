@@ -69,9 +69,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
         settings.database_connection_timeout_secs,
     );
     let ws_broker = Arc::new(ws::WsBroker::new());
-    if let Some(ref redis_url) = settings.redis_url {
-        ws::run_redis_subscriber(redis_url.clone(), ws_broker.clone());
-    }
+    ws::run_redis_subscriber(settings.redis_url.clone(), ws_broker.clone());
     let rabbit_publisher = match mq_service::create_shared_publisher(
         &settings.rabbit_url,
         message_queue::CHAT_SESSION_EXCHANGE,
@@ -90,25 +88,21 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
             None
         }
     };
-    let redis_conn: SharedRedisConn = if let Some(ref url) = settings.redis_url {
-        match redis::Client::open(url.as_str()) {
-            Ok(client) => match client.get_multiplexed_async_connection().await {
-                Ok(conn) => {
-                    log::info!("[redis] Publish connection connected");
-                    Some(Arc::new(Mutex::new(conn)))
-                }
-                Err(e) => {
-                    log::warn!("[redis] Publish connection failed: {}", e);
-                    None
-                }
+    let redis_conn: SharedRedisConn = match redis::Client::open(settings.redis_url.as_str()) {
+        Ok(client) => match client.get_multiplexed_async_connection().await {
+            Ok(conn) => {
+                log::info!("[redis] Publish connection connected");
+                Some(Arc::new(Mutex::new(conn)))
             }
             Err(e) => {
-                log::warn!("[redis] Client open failed: {}", e);
+                log::warn!("[redis] Publish connection failed: {}", e);
                 None
             }
+        },
+        Err(e) => {
+            log::warn!("[redis] Client open failed: {}", e);
+            None
         }
-    } else {
-        None
     };
     let app_context = AppContext::new(pool, settings.clone(), ws_broker, rabbit_publisher, redis_conn);
 

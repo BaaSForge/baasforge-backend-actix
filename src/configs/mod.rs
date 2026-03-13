@@ -1,5 +1,8 @@
+//! Application configuration loaded from environment variables.
+//! All settings must be set via .env (or the environment); there are no defaults.
+
 use dotenv::dotenv;
-use std::{env};
+use std::env;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppEnvironment {
@@ -47,7 +50,7 @@ impl TryFrom<String> for LlmProvider {
     match s.to_lowercase().trim() {
       "openai" => Ok(LlmProvider::OpenAi),
       "gemini" => Ok(LlmProvider::Gemini),
-      _ => Ok(LlmProvider::Gemini),
+      _ => Err("Invalid LLM_PROVIDER. Must be 'openai' or 'gemini'".to_string()),
     }
   }
 }
@@ -67,7 +70,9 @@ pub struct Settings {
   pub retry_delay_exchange: String,
   /// TTL in milliseconds for messages in retry delay queues (e.g. 3000 = 3 seconds).
   pub retry_delay_ttl_ms: u32,
-  pub redis_url: Option<String>,
+  /// Chat session queue: if a consumer doesn't ack within this time (seconds), RabbitMQ closes the channel and requeues (e.g. after crash). Used by queue_setup_http.sh for x-consumer-timeout.
+  pub chat_consumer_timeout_secs: u64,
+  pub redis_url: String,
   pub openai_api_key: Option<String>,
   pub openai_model: String,
   pub gemini_api_key: Option<String>,
@@ -79,33 +84,37 @@ impl Settings {
   pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
     dotenv().ok();
 
-    let app_env_str = env::var("APP_ENV").unwrap_or_else(|_| "staging".to_string());
+    let app_env_str = env::var("APP_ENV").expect("APP_ENV must be set");
     let app_environment = AppEnvironment::try_from(app_env_str)?;
 
     let port = env::var("PORT").expect("PORT must be set");
     let pg_database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let database_pool_size = env::var("DATABASE_POOL_SIZE")
-      .ok()
-      .and_then(|s| s.parse().ok())
-      .unwrap_or(2);
-    let database_connection_timeout_secs = env::var("DATABASE_CONNECTION_TIMEOUT_SECS")
-      .ok()
-      .and_then(|s| s.parse().ok())
-      .unwrap_or(30);
+    let database_pool_size: u32 = env::var("DATABASE_POOL_SIZE")
+      .expect("DATABASE_POOL_SIZE must be set")
+      .parse()
+      .expect("DATABASE_POOL_SIZE must be a valid u32");
+    let database_connection_timeout_secs: u64 = env::var("DATABASE_CONNECTION_TIMEOUT_SECS")
+      .expect("DATABASE_CONNECTION_TIMEOUT_SECS must be set")
+      .parse()
+      .expect("DATABASE_CONNECTION_TIMEOUT_SECS must be a valid u64");
     let auth_access_token_secret = env::var("AUTH_ACCESS_TOKEN_SECRET").expect("AUTH_ACCESS_TOKEN_SECRET must be set");
     let auth_refresh_token_secret = env::var("AUTH_REFRESH_TOKEN_SECRET").expect("AUTH_REFRESH_TOKEN_SECRET must be set");
     let rabbit_url = env::var("RABBIT_URL").expect("RABBIT_URL must be set");
-    let retry_delay_exchange = env::var("RETRY_DELAY_EXCHANGE").unwrap_or_else(|_| "retry_delay_exchange".to_string());
-    let retry_delay_ttl_ms = env::var("RETRY_DELAY_TTL_MS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(3000);
-    let redis_url = env::var("REDIS_URL").ok();
+    let retry_delay_exchange = env::var("RETRY_DELAY_EXCHANGE").expect("RETRY_DELAY_EXCHANGE must be set");
+    let retry_delay_ttl_ms: u32 = env::var("RETRY_DELAY_TTL_MS")
+      .expect("RETRY_DELAY_TTL_MS must be set")
+      .parse()
+      .expect("RETRY_DELAY_TTL_MS must be a valid u32");
+    let chat_consumer_timeout_secs: u64 = env::var("CHAT_CONSUMER_TIMEOUT_SECS")
+      .expect("CHAT_CONSUMER_TIMEOUT_SECS must be set")
+      .parse()
+      .expect("CHAT_CONSUMER_TIMEOUT_SECS must be a valid u64");
+    let redis_url = env::var("REDIS_URL").expect("REDIS_URL must be set");
     let openai_api_key = env::var("OPENAI_API_KEY").or_else(|_| env::var("OPENAI_KEY")).ok();
-    let openai_model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+    let openai_model = env::var("OPENAI_MODEL").expect("OPENAI_MODEL must be set");
     let gemini_api_key = env::var("GEMINI_API_KEY").ok();
-    let gemini_model = env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-flash-latest".to_string());
-    let llm_provider_str = env::var("LLM_PROVIDER").unwrap_or_default();
+    let gemini_model = env::var("GEMINI_MODEL").expect("GEMINI_MODEL must be set");
+    let llm_provider_str = env::var("LLM_PROVIDER").expect("LLM_PROVIDER must be set");
     let llm_provider = LlmProvider::try_from(llm_provider_str)?;
 
     Ok(Settings {
@@ -119,6 +128,7 @@ impl Settings {
       rabbit_url,
       retry_delay_exchange,
       retry_delay_ttl_ms,
+      chat_consumer_timeout_secs,
       redis_url,
       openai_api_key,
       openai_model,
