@@ -1,6 +1,6 @@
 use crate::database::{block_on_db_tokio, DbPool};
 use crate::models::chat_messages::{
-    ChatMessageInsert, ChatMessageType, ChatSessionRoleType,
+    ChatMessageInsert, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_previous_session_messages;
@@ -41,6 +41,7 @@ pub async fn process_one(
         role: ChatSessionRoleType::Ai,
         type_: ChatMessageType::Text,
         payload: Some(serde_json::to_value(ai_text.clone())?),
+        status: ChatMessageStatus::Completed,
     };
 
     block_on_db_tokio(pool, move |conn| {

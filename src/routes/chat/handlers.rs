@@ -3,7 +3,8 @@ use crate::libs::api_response::{api_error, api_success};
 use crate::middlewares::auth::AccessPayload;
 use crate::models::chat_messages::{
     ChatMessageCreateBody, ChatMessageInsert, ChatMessageResponse,
-    ChatMessageRow, ChatMessageType, ChatMessageWithFirstResponse, ChatSessionRoleType,
+    ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatMessageWithFirstResponse,
+    ChatSessionRoleType,
 };
 use crate::models::chat_sessions::{
     ChatSessionInsert, ChatSessionResponse, ChatSessionWithProjectRuntimeResponse,
@@ -247,6 +248,7 @@ pub async fn handle_create_chat_session_message(
         role: ChatSessionRoleType::User,
         type_: body.type_.clone(),
         payload: body.payload.clone(),
+        status: ChatMessageStatus::Completed,
     };
 
     let (message, is_first) = match database::block_on_db(&context.pool, move |conn| {

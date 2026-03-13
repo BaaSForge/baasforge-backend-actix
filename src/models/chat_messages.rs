@@ -30,6 +30,17 @@ pub enum ChatMessageType {
     GeneratingSucceed,
 }
 
+#[derive(Debug, DbEnum, Serialize, Clone, Deserialize, PartialEq)]
+#[ExistingTypePath = "crate::schema::sql_types::ChatMessageStatus"]
+#[DbValueStyle = "snake_case"]
+#[serde(rename_all = "snake_case")]
+pub enum ChatMessageStatus {
+    Generating,
+    Failed,
+    Stopped,
+    Completed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ChatMessagePayload {
@@ -88,6 +99,7 @@ pub struct ChatMessageRow {
     #[diesel(column_name = type_)]
     pub type_: ChatMessageType,
     pub payload: Option<Value>,
+    pub status: ChatMessageStatus,
     pub created_at: DateTime<Utc>,
 }
 
@@ -100,6 +112,7 @@ impl From<ChatMessageRow> for ChatMessageResponse {
             role: row.role,
             type_: row.type_,
             payload,
+            status: row.status,
             created_at: row.created_at,
         }
     }
@@ -113,6 +126,7 @@ pub struct ChatMessageResponse {
     #[serde(rename = "type")]
     pub type_: ChatMessageType,
     pub payload: Option<ChatMessagePayload>,
+    pub status: ChatMessageStatus,
     pub created_at: DateTime<Utc>,
 }
 
@@ -146,4 +160,5 @@ pub struct ChatMessageInsert {
     pub role: ChatSessionRoleType,
     pub type_: ChatMessageType,
     pub payload: Option<Value>,
+    pub status: ChatMessageStatus,
 }
