@@ -47,7 +47,7 @@ impl TryFrom<String> for LlmProvider {
     match s.to_lowercase().trim() {
       "openai" => Ok(LlmProvider::OpenAi),
       "gemini" => Ok(LlmProvider::Gemini),
-      _ => Ok(LlmProvider::OpenAi),
+      _ => Ok(LlmProvider::Gemini),
     }
   }
 }
