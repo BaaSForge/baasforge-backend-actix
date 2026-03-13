@@ -312,6 +312,7 @@ pub async fn handle_create_chat_session_message(
         type_: message.type_.clone(),
         payload: message.payload.clone(),
         placeholder_ai_message_id,
+        retry_num: 0,
     };
     let publish_result = if let Some(ref publisher) = context.rabbit_publisher {
         chat_message_queue::publish_with_publisher(publisher, project_id, session_id, &queue_message).await

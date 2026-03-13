@@ -14,8 +14,8 @@ else
   exit 1
 fi
 
-if [ -z "$RABBITMQ_MANAGEMENT_URL" ] || [ -z "$RETRY_DELAY_EXCHANGE" ] || [ -z "$RETRY_DELAY_TTL_MS" ]; then
-  echo ".env must set RABBITMQ_MANAGEMENT_URL, RETRY_DELAY_EXCHANGE, RETRY_DELAY_TTL_MS" >&2
+if [ -z "$RABBITMQ_MANAGEMENT_URL" ] || [ -z "$RETRY_DELAY_EXCHANGE" ]; then
+  echo ".env must set RABBITMQ_MANAGEMENT_URL, RETRY_DELAY_EXCHANGE" >&2
   exit 1
 fi
 
@@ -34,28 +34,56 @@ fi
 VHOST="%2F"
 MGMT="$RABBITMQ_MANAGEMENT_URL"
 RETRY_EXCHANGE="$RETRY_DELAY_EXCHANGE"
-TTL_MS="$RETRY_DELAY_TTL_MS"
 AUTH="-u ${USER}:${PASS}"
 
 echo "Using Management API at $MGMT (vhost /)"
+# Chat work exchange (main) and work queue — API publishes here, worker consumes from work queue
 echo "Declaring chat_session_exchange (topic, durable)..."
 curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
   "$MGMT/api/exchanges/$VHOST/chat_session_exchange" \
   -d '{"type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}}'
 
+echo "Declaring chat_session_work_queue (durable)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/queues/$VHOST/chat_session_work_queue" \
+  -d '{"durable":true,"auto_delete":false,"arguments":{}}'
+
+echo "Binding chat_session_work_queue to chat_session_exchange with routing_key chat_session.#..."
+curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
+  "$MGMT/api/bindings/$VHOST/e/chat_session_exchange/q/chat_session_work_queue" \
+  -d '{"routing_key":"chat_session.#"}'
+
+# Retry delay exchange (failed messages go here with per-message TTL, then DLX back to chat_session_exchange)
 echo "Declaring $RETRY_EXCHANGE (topic, durable)..."
 curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
   "$MGMT/api/exchanges/$VHOST/$RETRY_EXCHANGE" \
   -d '{"type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}}'
 
-echo "Declaring delay queue delay_3s_chat_session_work_queue (TTL ${TTL_MS}ms, no x-dead-letter-routing-key so original key is preserved)..."
+# Retry delay queue: no queue-level TTL (per-message expiration only). DLX back to chat_session_exchange.
+echo "Declaring retry_delay_chat_session_work_queue (per-message TTL only, DLX to chat_session_exchange)..."
 curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
-  "$MGMT/api/queues/$VHOST/delay_3s_chat_session_work_queue" \
-  -d "{\"durable\":true,\"auto_delete\":false,\"arguments\":{\"x-message-ttl\":${TTL_MS},\"x-dead-letter-exchange\":\"chat_session_exchange\"}}"
+  "$MGMT/api/queues/$VHOST/retry_delay_chat_session_work_queue" \
+  -d '{"durable":true,"auto_delete":false,"arguments":{"x-dead-letter-exchange":"chat_session_exchange"}}'
 
-echo "Binding queue to $RETRY_EXCHANGE with routing_key chat_session.#..."
+echo "Binding retry_delay_chat_session_work_queue to $RETRY_EXCHANGE with routing_key chat_session.#..."
 curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
-  "$MGMT/api/bindings/$VHOST/e/$RETRY_EXCHANGE/q/delay_3s_chat_session_work_queue" \
+  "$MGMT/api/bindings/$VHOST/e/$RETRY_EXCHANGE/q/retry_delay_chat_session_work_queue" \
+  -d '{"routing_key":"chat_session.#"}'
+
+# Dead letter: messages that exceeded max retries (no TTL; process/log later)
+echo "Declaring chat_session_dead_letter_exchange (topic, durable)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/exchanges/$VHOST/chat_session_dead_letter_exchange" \
+  -d '{"type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}}'
+
+echo "Declaring chat_session_dead_letter_queue (durable, no TTL)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/queues/$VHOST/chat_session_dead_letter_queue" \
+  -d '{"durable":true,"auto_delete":false,"arguments":{}}'
+
+echo "Binding chat_session_dead_letter_queue to chat_session_dead_letter_exchange with routing_key chat_session.#..."
+curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
+  "$MGMT/api/bindings/$VHOST/e/chat_session_dead_letter_exchange/q/chat_session_dead_letter_queue" \
   -d '{"routing_key":"chat_session.#"}'
 
 echo "Queue setup done (HTTP API)."

@@ -1,11 +1,13 @@
 use crate::configs::Settings;
 use crate::database::establish_pool;
 use crate::routes::chat::message_queue::{
-    self as chat_message_queue, parse_chat_routing_key, ChatSessionQueueMessage,
+    self as chat_message_queue,
+    chat_dead_letter_spec, chat_retry_policy,
+    parse_chat_routing_key, ChatSessionQueueMessage,
 };
 use crate::services::chat_worker::llm::build_llm_client;
 use crate::services::chat_worker::processor::process_one;
-use crate::services::message_queue::publish_to_retry_delay;
+use crate::services::message_queue::{publish_to_dead_letter, publish_to_retry_delay};
 use lapin::options::BasicAckOptions;
 use lapin::ConnectionProperties;
 use std::sync::Arc;
@@ -98,6 +100,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Placeholder is required; deserialization would have failed if missing (field is i64)
         let placeholder_ai_message_id = payload.placeholder_ai_message_id;
 
+        let retry_num = payload.retry_num;
         let pool = pool.clone();
         let redis_conn = redis_conn.clone();
         let llm_client = llm_client.clone();
@@ -106,6 +109,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let retry_delay_exchange = retry_delay_exchange.clone();
         let delivery_data = delivery.data.clone();
         let retry_routing_key = routing_key.clone();
+        let retry_policy = chat_retry_policy();
+        let dead_letter_spec = chat_dead_letter_spec();
 
         tokio::spawn(async move {
             let result = process_one(
@@ -123,21 +128,77 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             match &result {
                 Ok(()) => {}
                 Err(e) => {
-                    tracing::error!(
-                        project_id,
-                        session_id,
-                        "Process message failed, sending to retry delay: {}",
-                        e
-                    );
-                    if let Err(retry_e) = publish_to_retry_delay(
-                        &retry_channel,
-                        &retry_delay_exchange,
-                        &retry_routing_key,
-                        &delivery_data,
-                    )
-                    .await
-                    {
-                        tracing::error!("Failed to publish to retry delay: {}", retry_e);
+                    if retry_policy.should_dead_letter(retry_num) {
+                        tracing::error!(
+                            project_id,
+                            session_id,
+                            retry_num,
+                            "Process message failed after max retries, sending to dead letter: {}",
+                            e
+                        );
+                        if let Err(dl_e) = publish_to_dead_letter(
+                            &retry_channel,
+                            &dead_letter_spec.exchange_name,
+                            &retry_routing_key,
+                            &delivery_data,
+                        )
+                        .await
+                        {
+                            tracing::error!("Failed to publish to dead letter: {}", dl_e);
+                        }
+                    } else {
+                        tracing::error!(
+                            project_id,
+                            session_id,
+                            retry_num,
+                            "Process message failed, sending to retry delay: {}",
+                            e
+                        );
+                        let next_retry_num = retry_num + 1;
+                        let mut payload_for_retry: ChatSessionQueueMessage =
+                            match serde_json::from_slice(&delivery_data) {
+                                Ok(p) => p,
+                                Err(parse_e) => {
+                                    tracing::error!("Failed to parse message for retry: {}", parse_e);
+                                    if let Err(dl_e) = publish_to_dead_letter(
+                                        &retry_channel,
+                                        &dead_letter_spec.exchange_name,
+                                        &retry_routing_key,
+                                        &delivery_data,
+                                    )
+                                    .await
+                                    {
+                                        tracing::error!("Failed to publish to dead letter: {}", dl_e);
+                                    }
+                                    if acker.ack(BasicAckOptions::default()).await.is_err() {
+                                        tracing::warn!("Failed to ack delivery");
+                                    }
+                                    return;
+                                }
+                            };
+                        payload_for_retry.retry_num = next_retry_num;
+                        let payload_bytes = match serde_json::to_vec(&payload_for_retry) {
+                            Ok(b) => b,
+                            Err(ser_e) => {
+                                tracing::error!("Failed to serialize message for retry: {}", ser_e);
+                                if acker.ack(BasicAckOptions::default()).await.is_err() {
+                                    tracing::warn!("Failed to ack delivery");
+                                }
+                                return;
+                            }
+                        };
+                        if let Err(retry_e) = publish_to_retry_delay(
+                            &retry_channel,
+                            &retry_delay_exchange,
+                            &retry_routing_key,
+                            &payload_bytes,
+                            retry_num,
+                            &retry_policy,
+                        )
+                        .await
+                        {
+                            tracing::error!("Failed to publish to retry delay: {}", retry_e);
+                        }
                     }
                 }
             }
