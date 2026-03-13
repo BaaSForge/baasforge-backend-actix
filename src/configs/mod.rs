@@ -1,7 +1,9 @@
 //! Application configuration loaded from environment variables.
 //! All settings must be set via .env (or the environment); there are no defaults.
+//! Load order: .env first (base), then .env.local overrides if present.
 
-use dotenv::dotenv;
+use dotenvy::from_filename_override;
+use dotenvy::from_filename;
 use std::env;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,7 +86,8 @@ pub struct Settings {
 
 impl Settings {
   pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-    dotenv().ok();
+    from_filename(".env").ok();
+    from_filename_override(".env.local").ok();
 
     let app_env_str = env::var("APP_ENV").expect("APP_ENV must be set");
     let app_environment = AppEnvironment::try_from(app_env_str)?;

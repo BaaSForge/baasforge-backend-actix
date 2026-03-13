@@ -3,6 +3,8 @@
 # Run once per environment. Creates the exchanges/queues the API and chat worker expect.
 # Requires: curl. Loads all settings from .env (no defaults in this script).
 
+# IMPORTANT: This file only imports .env file, not .env.local overrides.
+
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/.env" ]; then

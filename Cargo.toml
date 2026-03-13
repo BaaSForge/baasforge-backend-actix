@@ -105,9 +105,9 @@ ring = "0.17.14"
 # For reading and writing cookies
 cookie = "0.18.1"
 
-# .env File Reading (dotenv equivalent)
-# Reads environment variables from a .env file
-dotenv = "0.15.0"
+# .env File Reading (.env then .env.local with override)
+# Loads .env first, then .env.local overrides (dotenvy supports from_filename_override)
+dotenvy = "0.15"
 
 # Password Hashing (bcryptjs equivalent)
 # Secure password hashing
