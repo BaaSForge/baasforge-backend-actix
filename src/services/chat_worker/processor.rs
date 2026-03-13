@@ -1,7 +1,5 @@
 use crate::database::{block_on_db_tokio, DbPool};
-use crate::models::chat_messages::{
-    ChatMessageInsert, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
-};
+use crate::models::chat_messages::{ChatMessageStatus};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_previous_session_messages;
 use crate::services::chat_worker::llm::LlmClient;
@@ -19,6 +17,7 @@ pub async fn process_one(
     project_id: i64,
     session_id: i64,
     user_text: &str,
+    placeholder_ai_message_id: i64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let session_messages = block_on_db_tokio(pool, move |conn| {
         load_previous_session_messages(conn, session_id, 50)
@@ -33,20 +32,17 @@ pub async fn process_one(
             user_text,
             Some(redis_conn.clone()),
             &topic,
+            placeholder_ai_message_id,
         )
         .await?;
 
-    let insert = ChatMessageInsert {
-        chat_session_id: session_id,
-        role: ChatSessionRoleType::Ai,
-        type_: ChatMessageType::Text,
-        payload: Some(serde_json::to_value(ai_text.clone())?),
-        status: ChatMessageStatus::Completed,
-    };
-
+    let payload = Some(serde_json::to_value(&ai_text)?);
     block_on_db_tokio(pool, move |conn| {
-        diesel::insert_into(chat_messages::table)
-            .values(&insert)
+        diesel::update(chat_messages::table.filter(chat_messages::id.eq(placeholder_ai_message_id)))
+            .set((
+                chat_messages::payload.eq(payload),
+                chat_messages::status.eq(ChatMessageStatus::Completed),
+            ))
             .execute(conn)
     })
     .await

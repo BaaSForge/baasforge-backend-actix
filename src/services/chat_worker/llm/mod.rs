@@ -37,6 +37,7 @@ impl LlmClient {
         user_text: &str,
         redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
         topic: &str,
+        message_id: i64,
     ) -> Result<String, BoxError> {
         match self {
             LlmClient::OpenAi { credentials, model } => {
@@ -47,6 +48,7 @@ impl LlmClient {
                     user_text,
                     redis_conn,
                     topic,
+                    message_id,
                 )
                 .await
             }
@@ -58,6 +60,7 @@ impl LlmClient {
                     user_text,
                     redis_conn,
                     topic,
+                    message_id,
                 )
                 .await
             }

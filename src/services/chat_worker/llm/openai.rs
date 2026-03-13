@@ -264,6 +264,7 @@ async fn stream_content_to_redis(
     chunk_index: &mut u32,
     redis_conn: Option<&Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
+    message_id: i64,
 ) {
     if content.is_empty() {
         return;
@@ -271,6 +272,7 @@ async fn stream_content_to_redis(
     if let Some(ref conn) = redis_conn {
         let payload = ChatSessionNewMessageChunkPayload::new(
             topic.to_string(),
+            message_id,
             *chunk_index,
             content.to_string(),
             false,
@@ -291,6 +293,7 @@ pub async fn call_gpt_stream(
     user_text: &str,
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
+    message_id: i64,
 ) -> Result<String, BoxError> {
     let messages = build_chat_messages(session_messages, user_text);
     let functions = tools::to_openai_functions();
@@ -334,8 +337,14 @@ pub async fn call_gpt_stream(
             if let Some(ref content) = choice.delta.content {
                 if !content.is_empty() {
                     full_text.push_str(content);
-                    stream_content_to_redis(content, &mut chunk_index, redis_conn.as_ref(), topic)
-                        .await;
+                    stream_content_to_redis(
+                        content,
+                        &mut chunk_index,
+                        redis_conn.as_ref(),
+                        topic,
+                        message_id,
+                    )
+                    .await;
                 }
             }
             if let Some(ref tcs) = choice.delta.tool_calls {
@@ -479,6 +488,7 @@ pub async fn call_gpt_stream(
     if let Some(ref conn) = redis_conn {
         let payload = ChatSessionNewMessageChunkPayload::new(
             topic.to_string(),
+            message_id,
             chunk_index,
             String::new(),
             true,

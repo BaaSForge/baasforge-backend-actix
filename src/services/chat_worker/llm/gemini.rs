@@ -26,6 +26,7 @@ pub async fn call_gemini_stream(
     user_text: &str,
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
+    message_id: i64,
 ) -> Result<String, BoxError> {
     let client = Gemini::with_model(api_key.to_string(), gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
@@ -90,6 +91,7 @@ pub async fn call_gemini_stream(
             if let Some(ref conn) = redis_conn {
                 let payload = ChatSessionNewMessageChunkPayload::new(
                     topic.to_string(),
+                    message_id,
                     chunk_index,
                     text,
                     false,
@@ -128,6 +130,7 @@ pub async fn call_gemini_stream(
     if let Some(ref conn) = redis_conn {
         let payload = ChatSessionNewMessageChunkPayload::new(
             topic.to_string(),
+            message_id,
             chunk_index,
             String::new(),
             true,

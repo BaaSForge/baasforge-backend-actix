@@ -4,7 +4,7 @@ use crate::middlewares::auth::AccessPayload;
 use crate::models::chat_messages::{
     ChatMessageCreateBody, ChatMessageInsert, ChatMessageResponse,
     ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatMessageWithFirstResponse,
-    ChatSessionRoleType,
+    CreateChatMessageResponse, ChatSessionRoleType,
 };
 use crate::models::chat_sessions::{
     ChatSessionInsert, ChatSessionResponse, ChatSessionWithProjectRuntimeResponse,
@@ -243,7 +243,7 @@ pub async fn handle_create_chat_session_message(
         ));
     }
 
-    let insert = ChatMessageInsert {
+    let user_insert = ChatMessageInsert {
         chat_session_id: session_id,
         role: ChatSessionRoleType::User,
         type_: body.type_.clone(),
@@ -251,7 +251,15 @@ pub async fn handle_create_chat_session_message(
         status: ChatMessageStatus::Completed,
     };
 
-    let (message, is_first) = match database::block_on_db(&context.pool, move |conn| {
+    let placeholder_insert = ChatMessageInsert {
+        chat_session_id: session_id,
+        role: ChatSessionRoleType::Ai,
+        type_: ChatMessageType::Text,
+        payload: None,
+        status: ChatMessageStatus::Generating,
+    };
+
+    let (message, is_first, placeholder_ai_message_id, placeholder_message) = match database::block_on_db(&context.pool, move |conn| {
         let session_check: Option<i64> = chat_sessions::table
             .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
@@ -264,19 +272,25 @@ pub async fn handle_create_chat_session_message(
             return Err(diesel::result::Error::NotFound);
         }
         let row: ChatMessageRow = diesel::insert_into(chat_messages::table)
-            .values(&insert)
+            .values(&user_insert)
             .returning(ChatMessageRow::as_select())
             .get_result(conn)?;
         let message = ChatMessageResponse::from(row);
+        let placeholder_row: ChatMessageRow = diesel::insert_into(chat_messages::table)
+            .values(&placeholder_insert)
+            .returning(ChatMessageRow::as_select())
+            .get_result(conn)?;
+        let placeholder_ai_message_id = placeholder_row.id;
+        let placeholder_message = ChatMessageResponse::from(placeholder_row);
         let count: i64 = chat_messages::table
             .filter(chat_messages::chat_session_id.eq(session_id))
             .count()
             .get_result(conn)?;
-        Ok((message, count == 1))
+        Ok((message, count == 2, placeholder_ai_message_id, placeholder_message))
     })
     .await
     {
-        Ok((msg, first)) => (msg, first),
+        Ok((msg, first, placeholder_id, placeholder_msg)) => (msg, first, placeholder_id, placeholder_msg),
         Err(database::BlockingDbError::Query(diesel::result::Error::NotFound)) => {
             return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
         }
@@ -297,6 +311,7 @@ pub async fn handle_create_chat_session_message(
         role: ChatSessionRoleType::User,
         type_: message.type_.clone(),
         payload: message.payload.clone(),
+        placeholder_ai_message_id,
     };
     let publish_result = if let Some(ref publisher) = context.rabbit_publisher {
         chat_message_queue::publish_with_publisher(publisher, project_id, session_id, &queue_message).await
@@ -320,9 +335,10 @@ pub async fn handle_create_chat_session_message(
         ));
     }
 
-    let response = ChatMessageWithFirstResponse {
+    let response = CreateChatMessageResponse {
         inner: message,
         is_first,
+        placeholder_message,
     };
 
     HttpResponse::Ok().json(api_success(

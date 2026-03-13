@@ -86,6 +86,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         };
 
+        // Placeholder is required; deserialization would have failed if missing (field is i64)
+        let placeholder_ai_message_id = payload.placeholder_ai_message_id;
+
         let pool = pool.clone();
         let redis_conn = redis_conn.clone();
         let llm_client = llm_client.clone();
@@ -100,6 +103,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 project_id,
                 session_id,
                 &user_text,
+                placeholder_ai_message_id,
             )
             .await;
 

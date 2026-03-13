@@ -137,6 +137,14 @@ pub struct ChatMessageWithFirstResponse {
     pub is_first: bool,
 }
 
+#[derive(Serialize)]
+pub struct CreateChatMessageResponse {
+    #[serde(flatten)]
+    pub inner: ChatMessageResponse,
+    pub is_first: bool,
+    pub placeholder_message: ChatMessageResponse,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ChatMessageCreateBody {
     #[serde(rename = "type")]

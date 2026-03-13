@@ -30,6 +30,8 @@ pub struct ChatSessionQueueMessage {
     #[serde(rename = "type")]
     pub type_: ChatMessageType,
     pub payload: Option<ChatMessagePayload>,
+    /// ID of the placeholder AI message row (status=generating). Required; message is not processed without it.
+    pub placeholder_ai_message_id: i64,
 }
 
 impl ChatSessionQueueMessage {

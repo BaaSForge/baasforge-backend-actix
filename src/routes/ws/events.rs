@@ -28,15 +28,24 @@ pub struct RuntimeCreatedPayload {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatSessionNewMessageChunkPayload {
     pub topic: String,
+    /// ID of the placeholder message this chunk belongs to (client appends content to this message).
+    pub message_id: i64,
     pub chunk_index: u32,
     pub content: String,
     pub done: bool,
 }
 
 impl ChatSessionNewMessageChunkPayload {
-    pub fn new(topic: String, chunk_index: u32, content: String, done: bool) -> Self {
+    pub fn new(
+        topic: String,
+        message_id: i64,
+        chunk_index: u32,
+        content: String,
+        done: bool,
+    ) -> Self {
         Self {
             topic,
+            message_id,
             chunk_index,
             content,
             done,
