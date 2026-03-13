@@ -244,6 +244,54 @@ pub async fn handle_create_chat_session_message(
         ));
     }
 
+    // Reject if there is already a message being generated in this chat session
+    match database::block_on_db(&context.pool, {
+        let session_id = session_id;
+        move |conn| {
+            let session_check: Option<i64> = chat_sessions::table
+                .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+                .filter(projects::owner_user_id.eq(user_id))
+                .filter(chat_sessions::id.eq(session_id))
+                .filter(chat_sessions::project_id.eq(project_id))
+                .select(chat_sessions::id)
+                .first::<i64>(conn)
+                .optional()?;
+            if session_check.is_none() {
+                return Err(diesel::result::Error::NotFound);
+            }
+            let generating_count: i64 = chat_messages::table
+                .filter(chat_messages::chat_session_id.eq(session_id))
+                .filter(chat_messages::role.eq(ChatSessionRoleType::Ai))
+                .filter(chat_messages::status.eq(ChatMessageStatus::Generating))
+                .count()
+                .get_result(conn)?;
+            Ok(generating_count > 0)
+        }
+    })
+    .await
+    {
+        Ok(true) => {
+            return HttpResponse::Conflict().json(api_error(
+                "A message is already being generated in this chat. Please wait for it to finish.",
+                json!({}),
+            ));
+        }
+        Ok(false) => {}
+        Err(database::BlockingDbError::Query(diesel::result::Error::NotFound)) => {
+            return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
+        }
+        Err(database::BlockingDbError::Query(e)) => {
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            tracing::error!("DB block error on create chat message (generating check)");
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Service is busy. Please try again shortly.",
+                json!({}),
+            ));
+        }
+    };
+
     let user_insert = ChatMessageInsert {
         chat_session_id: session_id,
         role: ChatSessionRoleType::User,
