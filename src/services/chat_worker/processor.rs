@@ -37,14 +37,26 @@ pub async fn process_one(
         .await?;
 
     match outcome {
-        GenerateOutcome::Stopped(_partial) => {
+        GenerateOutcome::Stopped(partial) => {
+            let payload = Some(serde_json::to_value(&partial)?);
+            block_on_db_tokio(pool, move |conn| {
+                diesel::update(
+                    chat_messages::table.filter(chat_messages::id.eq(placeholder_ai_message_id)),
+                )
+                .set((
+                    chat_messages::payload.eq(payload),
+                    chat_messages::status.eq(ChatMessageStatus::Stopped),
+                ))
+                .execute(conn)
+            })
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
             info!(
                 project_id,
                 session_id,
                 placeholder_ai_message_id,
-                "Streaming stopped by user, not updating message (already set to stopped)"
+                "Streaming stopped by user, saved partial content to DB"
             );
-            return Ok(());
         }
         GenerateOutcome::Completed(ai_text) => {
             let payload = Some(serde_json::to_value(&ai_text)?);
