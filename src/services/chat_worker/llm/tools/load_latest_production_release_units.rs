@@ -5,15 +5,13 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ToolFetchRelevantUnitsArgs {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query: Option<String>,
+    pub query: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum ToolFetchRelevantUnitsPayload {
-    Args(ToolFetchRelevantUnitsArgs),
-    Units(Vec<ProjectUnitResponse>),
+pub struct ToolFetchRelevantUnitsPayload {
+    pub args: ToolFetchRelevantUnitsArgs,
+    pub units: Vec<ProjectUnitResponse>,
 }
 use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, ChatSessionMessageUpdatedPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
@@ -34,18 +32,20 @@ pub const MESSAGE_TYPE: ChatMessageType = ChatMessageType::ToolFetchRelevantUnit
 pub fn payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError> {
     let args = serde_json::from_value::<ToolFetchRelevantUnitsArgs>(args).unwrap_or_default();
     Ok(ChatMessagePayload::ToolFetchRelevantUnits(
-        ToolFetchRelevantUnitsPayload::Args(args),
+        ToolFetchRelevantUnitsPayload {
+            args,
+            units: vec![],
+        },
     ))
 }
 
-/// Schema for load_latest_production_release_units: optional args the LLM can pass.
 fn params_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Optional search query to filter or find relevant units in the latest production release, it can be a sentence or some keywords or whatever a vector similarity search can handle."
+                "description": "Required search query to filter or find relevant units in the latest production release, it can be a sentence or some keywords or whatever a vector similarity search can handle."
             }
         }
     })
@@ -74,13 +74,13 @@ pub async fn handler(
     user_id: Uuid,
     payload: Option<Value>,
 ) {
-    let query = payload
+    let existing = payload
         .as_ref()
-        .and_then(|v| serde_json::from_value::<ToolFetchRelevantUnitsPayload>(v.clone()).ok())
-        .and_then(|p| match p { ToolFetchRelevantUnitsPayload::Args(a) => a.query, _ => None });
-
+        .and_then(|v| serde_json::from_value::<ToolFetchRelevantUnitsPayload>(v.clone()).ok());
+    let args = existing.as_ref().map(|p| p.args.clone()).unwrap_or_default();
+    let query_owned = args.query.clone();
     let units = match block_on_db_tokio(&pool, move |conn| {
-        load_units_for_latest_production_release(conn, project_id, query.as_deref())
+        load_units_for_latest_production_release(conn, project_id, &query_owned)
     })
     .await
     {
@@ -105,7 +105,11 @@ pub async fn handler(
             return;
         }
     };
-    let payload_value = match serde_json::to_value(&units) {
+    let full_payload = ToolFetchRelevantUnitsPayload {
+        args,
+        units,
+    };
+    let payload_value = match serde_json::to_value(&full_payload) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!("Failed to serialize units for message: {}", e);

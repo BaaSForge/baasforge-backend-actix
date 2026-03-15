@@ -8,7 +8,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::models::projects::ProjectUnitResponse;
-use crate::services::chat_worker::llm::tools::ToolFetchRelevantUnitsPayload;
+use crate::services::chat_worker::llm::tools::{ToolFetchRelevantUnitsPayload, ToolLoadLatestReleasesPayload};
 
 #[derive(Debug, DbEnum, Serialize, Clone, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::ChatSessionRoleType"]
@@ -28,6 +28,7 @@ pub enum ChatMessageType {
     Units,
     Unit,
     ToolFetchRelevantUnits,
+    ToolLoadLatestReleases,
     ToolLogDebug,
     ToolLogMessage,
     Generating,
@@ -53,6 +54,7 @@ pub enum ChatMessagePayload {
     Unit(ProjectUnitResponse),
     Units(Vec<ProjectUnitResponse>),
     ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
+    ToolLoadLatestReleases(ToolLoadLatestReleasesPayload),
     ToolLogDebug(Value),
     ToolLogMessage(Value),
     Generating(Option<Value>),
@@ -81,6 +83,10 @@ impl ChatMessagePayload {
             ChatMessageType::ToolFetchRelevantUnits => {
                 let p = serde_json::from_value::<ToolFetchRelevantUnitsPayload>(v)?;
                 ChatMessagePayload::ToolFetchRelevantUnits(p)
+            }
+            ChatMessageType::ToolLoadLatestReleases => {
+                let p = serde_json::from_value::<ToolLoadLatestReleasesPayload>(v)?;
+                ChatMessagePayload::ToolLoadLatestReleases(p)
             }
             ChatMessageType::ToolLogDebug => ChatMessagePayload::ToolLogDebug(v),
             ChatMessageType::ToolLogMessage => ChatMessagePayload::ToolLogMessage(v),

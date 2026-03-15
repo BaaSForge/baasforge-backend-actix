@@ -15,9 +15,11 @@
 mod log_debug;
 mod log_message;
 mod load_latest_production_release_units;
+mod load_latest_releases;
 
 /// Re-exported for use in [`crate::models::chat_messages::ChatMessagePayload`].
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
+pub use load_latest_releases::ToolLoadLatestReleasesPayload;
 
 use crate::database::DbPool;
 use crate::libs::ids::new_uuid;
@@ -80,6 +82,11 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             load_latest_production_release_units::MESSAGE_TYPE,
             load_latest_production_release_units::payload_from_args,
         ),
+        (
+            load_latest_releases::TOOL_NAME,
+            load_latest_releases::MESSAGE_TYPE,
+            load_latest_releases::payload_from_args,
+        ),
         (log_debug::TOOL_NAME, log_debug::MESSAGE_TYPE, log_debug::payload_from_args),
         (log_message::TOOL_NAME, log_message::MESSAGE_TYPE, log_message::payload_from_args),
     ]
@@ -140,6 +147,7 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
         log_message::spec(),
         log_debug::spec(),
         load_latest_production_release_units::spec(),
+        load_latest_releases::spec(),
     ]
 }
 
@@ -241,6 +249,10 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
             (
                 load_latest_production_release_units::MESSAGE_TYPE,
                 wrap_handler_with_payload(load_latest_production_release_units::handler),
+            ),
+            (
+                load_latest_releases::MESSAGE_TYPE,
+                wrap_handler_with_payload(load_latest_releases::handler),
             ),
             (log_debug::MESSAGE_TYPE, wrap_handler_no_payload(log_debug::handler)),
             (log_message::MESSAGE_TYPE, wrap_handler_no_payload(log_message::handler)),

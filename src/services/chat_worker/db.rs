@@ -1,7 +1,7 @@
 use crate::database::PooledConn;
 use crate::models::chat_messages::{ChatMessageRow, ChatMessageStatus, ChatSessionRoleType};
-use crate::models::projects::{ProjectUnitResponse};
-use crate::schema::{chat_messages, project_units};
+use crate::models::projects::{ProjectReleaseResponse, ProjectUnitResponse};
+use crate::schema::{chat_messages, project_releases, project_units};
 use diesel::prelude::*;
 use serde_json::Value;
 use uuid::Uuid;
@@ -32,11 +32,10 @@ pub fn load_previous_session_messages(
 pub fn load_units_for_latest_production_release(
     conn: &mut PooledConn,
     project_id: Uuid,
-    query: Option<&str>,
+    query: &str,
 ) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
-    if let Some(q) = query {
-        println!("load_units_for_latest_production_release query: {}", q);
-    }
+    println!("load_units_for_latest_production_release query: {}", query);
+
     // let live_version: Option<String> = project_runtimes::table
     //     .filter(project_runtimes::project_id.eq(project_id))
     //     .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Prod))
@@ -83,4 +82,18 @@ pub fn load_units_for_latest_production_release(
         // .filter(project_units::id.eq_any(&unit_ids))
         .select(ProjectUnitResponse::as_select())
         .load::<ProjectUnitResponse>(conn)
+}
+
+pub fn load_latest_releases(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    limit: i64,
+) -> Result<Vec<ProjectReleaseResponse>, diesel::result::Error> {
+    let limit = limit.clamp(1, 100);
+    project_releases::table
+        .filter(project_releases::project_id.eq(project_id))
+        .order(project_releases::created_at.desc())
+        .limit(limit)
+        .select(ProjectReleaseResponse::as_select())
+        .load::<ProjectReleaseResponse>(conn)
 }

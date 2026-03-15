@@ -123,7 +123,7 @@ pub struct ProjectRuntimeWithConnectedChatResponse {
     pub connected_chat_session: Option<ChatSessionResponse>,
 }
 
-#[derive(Serialize, Queryable, Selectable)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Queryable, Selectable)]
 #[diesel(table_name = crate::schema::project_releases)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectReleaseResponse {
