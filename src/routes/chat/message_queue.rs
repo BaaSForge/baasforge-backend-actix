@@ -58,8 +58,8 @@ pub struct ChatSessionQueueMessage {
     #[serde(rename = "type")]
     pub type_: ChatMessageType,
     pub payload: Option<ChatMessagePayload>,
-    /// ID of the placeholder AI message row (status=generating). Required; message is not processed without it.
-    pub placeholder_ai_message_id: Uuid,
+    /// UUIDv7 for the AI response message. Worker creates the message with this id when first consumed if not exists.
+    pub response_message_id: Uuid,
     /// Retry attempt count. 0 = first attempt; incremented each time the message is sent to the retry delay queue.
     #[serde(default)]
     pub retry_num: u32,

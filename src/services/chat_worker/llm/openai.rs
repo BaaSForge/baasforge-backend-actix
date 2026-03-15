@@ -4,7 +4,7 @@ use crate::models::chat_messages::ChatSessionRoleType;
 use crate::services::chat_worker::agent::BASE_SYSTEM_PROMPT;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
-use crate::services::chat_worker::llm::GenerateOutcome;
+use crate::services::chat_worker::llm::{GenerateOutcome, OnFirstChunk};
 use futures::StreamExt;
 use openai::Credentials;
 use openai::chat::{
@@ -300,11 +300,13 @@ pub async fn call_gpt_stream(
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
     message_id: uuid::Uuid,
+    mut on_first_content_chunk: Option<Box<dyn OnFirstChunk>>,
 ) -> Result<GenerateOutcome, BoxError> {
     let messages = build_chat_messages(session_messages, user_text);
     let functions = tools::to_openai_functions();
     let mut full_text = String::new();
     let mut chunk_index: u32 = 0;
+    let mut message_created = false;
 
     let mut rx = stream_openai_tools(credentials, model, messages, functions)
         .await
@@ -342,6 +344,10 @@ pub async fn call_gpt_stream(
             }
             if let Some(ref content) = choice.delta.content {
                 if !content.is_empty() {
+                    if let Some(cb) = on_first_content_chunk.take() {
+                        cb.call_once().await?;
+                    }
+                    message_created = true;
                     full_text.push_str(content);
                     if stream_content_to_redis(
                         content,
@@ -495,18 +501,20 @@ pub async fn call_gpt_stream(
         tracing::info!("OpenAI: stream ended with no completion (merged was None)");
     }
 
-    if let Some(ref conn) = redis_conn {
-        let payload = ChatSessionNewMessageChunkPayload::new(
-            topic.to_string(),
-            message_id,
-            chunk_index,
-            String::new(),
-            true,
-        );
-        let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
-        let mut guard = conn.lock().await;
-        if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
-            tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
+    if message_created {
+        if let Some(ref conn) = redis_conn {
+            let payload = ChatSessionNewMessageChunkPayload::new(
+                topic.to_string(),
+                message_id,
+                chunk_index,
+                String::new(),
+                true,
+            );
+            let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
+            let mut guard = conn.lock().await;
+            if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
+                tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
+            }
         }
     }
 

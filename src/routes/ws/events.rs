@@ -1,4 +1,4 @@
-use crate::models::chat_messages::ChatMessageStatus;
+use crate::models::chat_messages::{ChatMessageResponse, ChatMessageStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -6,12 +6,18 @@ use uuid::Uuid;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsServerEvent {
     ChatSessionNewMessageChunk(ChatSessionNewMessageChunkPayload),
+    ChatSessionMessageCreated(ChatSessionMessageCreatedPayload),
     ChatSessionMessageStatusChange(ChatSessionMessageStatusChangePayload),
     ProjectDeleted(ProjectDeletedPayload),
     RuntimeCreated(RuntimeCreatedPayload),
     Subscribed { topic: String },
     Unsubscribed { topic: String },
     Error { message: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChatSessionMessageCreatedPayload {
+    pub message: ChatMessageResponse,
 }
 
 /// Notify clients that a message's status changed (e.g. to `failed` after max retries or `stopped`).

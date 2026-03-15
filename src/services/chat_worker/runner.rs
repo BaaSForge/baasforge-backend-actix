@@ -1,12 +1,14 @@
 use crate::configs::Settings;
 use crate::database::{block_on_db_tokio, establish_pool};
-use crate::models::chat_messages::ChatMessageStatus;
+use crate::models::chat_messages::{
+    ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
+};
 use crate::routes::chat::message_queue::{
     self as chat_message_queue,
     chat_dead_letter_spec, chat_retry_policy,
     parse_chat_routing_key, ChatSessionQueueMessage,
 };
-use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, WsServerEvent};
+use crate::routes::ws::events::{ChatSessionMessageCreatedPayload, ChatSessionMessageStatusChangePayload, WsServerEvent};
 use crate::routes::ws::redis::{is_message_stopped, publish_event_to_channel};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::build_llm_client;
@@ -19,6 +21,54 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tracing::info;
+use uuid::Uuid;
+
+use crate::database::DbPool;
+
+/// Ensures the AI response message row exists (inserts if missing) and publishes
+/// ChatSessionMessageCreated to Redis. Used when the first streaming chunk arrives
+/// so we avoid creating empty messages when the AI only calls tools.
+pub async fn ensure_ai_message_created_and_publish(
+    pool: &DbPool,
+    redis_conn: &Arc<Mutex<redis::aio::MultiplexedConnection>>,
+    session_id: Uuid,
+    response_message_id: Uuid,
+    user_id: Uuid,
+    project_id: Uuid,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let inserted_row = block_on_db_tokio(pool, move |conn| {
+        let row = diesel::insert_into(chat_messages::table)
+            .values((
+                chat_messages::id.eq(response_message_id),
+                chat_messages::chat_session_id.eq(session_id),
+                chat_messages::role.eq(ChatSessionRoleType::Ai),
+                chat_messages::type_.eq(ChatMessageType::Text),
+                chat_messages::payload.eq(None::<serde_json::Value>),
+                chat_messages::status.eq(ChatMessageStatus::Generating),
+            ))
+            .on_conflict(chat_messages::id)
+            .do_nothing()
+            .returning(ChatMessageRow::as_returning())
+            .get_result(conn);
+        match row {
+            Ok(r) => Ok(Some(r)),
+            Err(diesel::result::Error::NotFound) => Ok(None),
+            Err(e) => Err(e),
+        }
+    })
+    .await?;
+
+    if let Some(row) = inserted_row {
+        let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+        let created_message = ChatMessageResponse::from(row);
+        let event = WsServerEvent::ChatSessionMessageCreated(ChatSessionMessageCreatedPayload {
+            message: created_message,
+        });
+        let mut guard = redis_conn.lock().await;
+        publish_event_to_channel(&mut *guard, &topic, &event).await?;
+    }
+    Ok(())
+}
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
@@ -97,23 +147,25 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         };
 
-        // Placeholder is required; deserialization would have failed if missing (field is Uuid)
-        let placeholder_ai_message_id = payload.placeholder_ai_message_id;
+        let response_message_id = payload.response_message_id;
 
         // If user already requested stop for this message, ack and skip so it is not picked by another consumer
         {
             let mut guard = redis_conn.lock().await;
-            if let Ok(true) = is_message_stopped(&mut *guard, placeholder_ai_message_id).await {
+            if let Ok(true) = is_message_stopped(&mut *guard, response_message_id).await {
                 tracing::info!(
                     %project_id,
                     %session_id,
-                    %placeholder_ai_message_id,
+                    %response_message_id,
                     "Message marked stopped in Redis, acking and skipping"
                 );
                 let _ = delivery.acker.ack(BasicAckOptions::default()).await;
                 continue;
             }
         }
+
+        // For TEXT (streaming) messages we do not create the AI message row here.
+        // The processor will create it when the first streaming chunk arrives, so we avoid empty messages (e.g. when the AI only calls tools).
 
         let retry_num = payload.retry_num;
         let pool = pool.clone();
@@ -136,7 +188,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 project_id,
                 session_id,
                 &user_text,
-                placeholder_ai_message_id,
+                response_message_id,
             )
             .await;
 
@@ -161,7 +213,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         {
                             tracing::error!("Failed to publish to dead letter: {}", dl_e);
                         }
-                        let message_id_to_update = placeholder_ai_message_id;
+                        let message_id_to_update = response_message_id;
                         // Update placeholder message status to failed so client and API reflect it
                         if let Err(db_e) = block_on_db_tokio(&pool, move |conn| {
                             diesel::update(
@@ -183,7 +235,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
                             let event = WsServerEvent::ChatSessionMessageStatusChange(
                                 ChatSessionMessageStatusChangePayload {
-                                    message_id: placeholder_ai_message_id,
+                                    message_id: response_message_id,
                                     status: ChatMessageStatus::Failed,
                                 },
                             );

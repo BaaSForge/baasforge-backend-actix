@@ -119,7 +119,7 @@ impl From<ChatMessageRow> for ChatMessageResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatMessageResponse {
     pub id: Uuid,
     pub chat_session_id: Uuid,
@@ -136,14 +136,6 @@ pub struct ChatMessageWithFirstResponse {
     #[serde(flatten)]
     pub inner: ChatMessageResponse,
     pub is_first: bool,
-}
-
-#[derive(Serialize)]
-pub struct CreateChatMessageResponse {
-    #[serde(flatten)]
-    pub inner: ChatMessageResponse,
-    pub is_first: bool,
-    pub placeholder_message: ChatMessageResponse,
 }
 
 #[derive(Debug, Deserialize)]

@@ -2,6 +2,8 @@ use crate::configs::{LlmProvider, Settings};
 use crate::models::chat_messages::ChatSessionRoleType;
 use redis::aio::MultiplexedConnection;
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -11,6 +13,41 @@ pub mod gemini;
 pub mod tools;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// Callback invoked when the first non-empty streaming chunk is about to be sent.
+/// Used to create the AI message row and publish ChatSessionMessageCreated so we
+/// avoid empty messages when the AI only calls tools.
+pub trait OnFirstChunk: Send {
+    fn call_once(
+        self: Box<Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send>>;
+}
+
+/// Wraps an async closure so it can be used as [`OnFirstChunk`].
+pub struct OnFirstChunkFn<F>(Option<F>);
+
+impl<F, Fut> OnFirstChunkFn<F>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = Result<(), BoxError>> + Send + 'static,
+{
+    pub fn new(f: F) -> Box<dyn OnFirstChunk> {
+        Box::new(OnFirstChunkFn(Some(f)))
+    }
+}
+
+impl<F, Fut> OnFirstChunk for OnFirstChunkFn<F>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = Result<(), BoxError>> + Send + 'static,
+{
+    fn call_once(
+        self: Box<Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send>> {
+        let f = self.0.expect("OnFirstChunkFn called once");
+        Box::pin(f())
+    }
+}
 
 /// Result of LLM generation: either completed fully or stopped by user (partial text).
 #[derive(Debug)]
@@ -46,6 +83,7 @@ impl LlmClient {
         redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
         topic: &str,
         message_id: Uuid,
+        on_first_content_chunk: Option<Box<dyn OnFirstChunk>>,
     ) -> Result<GenerateOutcome, BoxError> {
         match self {
             LlmClient::OpenAi { credentials, model } => {
@@ -57,6 +95,7 @@ impl LlmClient {
                     redis_conn,
                     topic,
                     message_id,
+                    on_first_content_chunk,
                 )
                 .await
             }
@@ -69,6 +108,7 @@ impl LlmClient {
                     redis_conn,
                     topic,
                     message_id,
+                    on_first_content_chunk,
                 )
                 .await
             }

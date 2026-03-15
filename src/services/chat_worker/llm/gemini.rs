@@ -4,7 +4,7 @@ use crate::models::chat_messages::ChatSessionRoleType;
 use crate::services::chat_worker::agent::BASE_SYSTEM_PROMPT;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
-use crate::services::chat_worker::llm::GenerateOutcome;
+use crate::services::chat_worker::llm::{GenerateOutcome, OnFirstChunk};
 use gemini_rust::client::GenerationStream;
 use gemini_rust::tools::model::{FunctionCallingMode, FunctionDeclaration};
 use gemini_rust::Gemini;
@@ -32,6 +32,7 @@ pub async fn call_gemini_stream(
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
     message_id: Uuid,
+    mut on_first_content_chunk: Option<Box<dyn OnFirstChunk>>,
 ) -> Result<GenerateOutcome, BoxError> {
     let client = Gemini::with_model(api_key.to_string(), gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
@@ -39,6 +40,7 @@ pub async fn call_gemini_stream(
     let declarations: Vec<FunctionDeclaration> = tools::to_gemini_declarations();
     let mut full_text = String::new();
     let mut chunk_index: u32 = 0;
+    let mut message_created = false;
 
     let mut request = client
         .generate_content()
@@ -90,6 +92,10 @@ pub async fn call_gemini_stream(
         }
         let text: String = chunk.text().to_string();
         if !text.is_empty() {
+            if let Some(cb) = on_first_content_chunk.take() {
+                cb.call_once().await.map_err(|e| format!("on_first_content_chunk: {}", e))?;
+            }
+            message_created = true;
             full_text.push_str(&text);
             if let Some(ref conn) = redis_conn {
                 let mut guard = conn.lock().await;
@@ -133,18 +139,20 @@ pub async fn call_gemini_stream(
         tracing::info!("Gemini: no tool calls in any stream chunk (function_call_count=0)");
     }
 
-    if let Some(ref conn) = redis_conn {
-        let payload = ChatSessionNewMessageChunkPayload::new(
-            topic.to_string(),
-            message_id,
-            chunk_index,
-            String::new(),
-            true,
-        );
-        let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
-        let mut guard = conn.lock().await;
-        if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
-            tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
+    if message_created {
+        if let Some(ref conn) = redis_conn {
+            let payload = ChatSessionNewMessageChunkPayload::new(
+                topic.to_string(),
+                message_id,
+                chunk_index,
+                String::new(),
+                true,
+            );
+            let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
+            let mut guard = conn.lock().await;
+            if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
+                tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
+            }
         }
     }
 
