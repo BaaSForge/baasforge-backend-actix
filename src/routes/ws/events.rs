@@ -8,6 +8,7 @@ pub enum WsServerEvent {
     ChatSessionNewMessageChunk(ChatSessionNewMessageChunkPayload),
     ChatSessionMessageCreated(ChatSessionMessageCreatedPayload),
     ChatSessionMessageStatusChange(ChatSessionMessageStatusChangePayload),
+    ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload),
     ProjectDeleted(ProjectDeletedPayload),
     RuntimeCreated(RuntimeCreatedPayload),
     Subscribed { topic: String },
@@ -26,6 +27,11 @@ pub struct ChatSessionMessageStatusChangePayload {
     #[serde(rename = "messageId")]
     pub message_id: Uuid,
     pub status: ChatMessageStatus,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChatSessionMessageUpdatedPayload {
+    pub message: ChatMessageResponse,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

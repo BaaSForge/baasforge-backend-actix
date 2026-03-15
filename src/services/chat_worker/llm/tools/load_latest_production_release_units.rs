@@ -1,5 +1,5 @@
 use crate::database::{block_on_db_tokio, DbPool};
-use crate::models::chat_messages::{ChatMessagePayload, ChatMessageStatus, ChatMessageType};
+use crate::models::chat_messages::{ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType};
 use crate::models::projects::ProjectUnitResponse;
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +15,7 @@ pub enum ToolFetchRelevantUnitsPayload {
     Args(ToolFetchRelevantUnitsArgs),
     Units(Vec<ProjectUnitResponse>),
 }
-use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, WsServerEvent};
+use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, ChatSessionMessageUpdatedPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_units_for_latest_production_release;
@@ -112,7 +112,7 @@ pub async fn handler(
             return;
         }
     };
-    if let Err(e) = block_on_db_tokio(&pool, move |conn| {
+    let updated_row = match block_on_db_tokio(&pool, move |conn| {
         diesel::update(
             chat_messages::table.filter(chat_messages::id.eq(message_id)),
         )
@@ -120,26 +120,28 @@ pub async fn handler(
             chat_messages::payload.eq(Some(payload_value)),
             chat_messages::status.eq(ChatMessageStatus::Completed),
         ))
-        .execute(conn)
+        .returning(ChatMessageRow::as_returning())
+        .get_result(conn)
     })
     .await
     {
-        tracing::error!(
-            %message_id,
-            "Failed to update load_latest_production_release_units message: {}",
-            e
-        );
-        return;
-    }
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!(
+                %message_id,
+                "Failed to update load_latest_production_release_units message: {}",
+                e
+            );
+            return;
+        }
+    };
     let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
-    let event = WsServerEvent::ChatSessionMessageStatusChange(
-        ChatSessionMessageStatusChangePayload {
-            message_id,
-            status: ChatMessageStatus::Completed,
-        },
-    );
+    let message: ChatMessageResponse = updated_row.into();
+    let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+        message,
+    });
     let mut guard = redis_conn.lock().await;
     if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &event).await {
-        tracing::warn!("Failed to publish message status change to Redis: {}", e);
+        tracing::warn!("Failed to publish message updated to Redis: {}", e);
     }
 }
