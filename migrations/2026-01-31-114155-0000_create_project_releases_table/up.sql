@@ -1,6 +1,6 @@
 CREATE TABLE project_releases (
-    id BIGSERIAL PRIMARY KEY,
-    project_id BIGINT NOT NULL REFERENCES projects(id),
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
+    project_id UUID NOT NULL REFERENCES projects(id),
     version VARCHAR(50) NOT NULL,
     units_metadata JSONB
 );

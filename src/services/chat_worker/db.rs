@@ -3,10 +3,11 @@ use crate::models::chat_messages::{ChatMessageRow, ChatMessageStatus, ChatSessio
 use crate::schema::chat_messages;
 use diesel::prelude::*;
 use serde_json::Value;
+use uuid::Uuid;
 
 pub fn load_previous_session_messages(
     conn: &mut PooledConn,
-    session_id: i64,
+    session_id: Uuid,
     limit: i64,
 ) -> Result<Vec<(ChatSessionRoleType, Option<Value>)>, diesel::result::Error> {
     let rows = chat_messages::table

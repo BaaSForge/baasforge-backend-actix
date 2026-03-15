@@ -26,12 +26,13 @@ use chrono::Utc;
 use diesel::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 // use tokio_stream::StreamExt as _;
 
 pub async fn handle_list_project_chat_sessions(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<i64>,
+    path: web::Path<Uuid>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -72,7 +73,7 @@ pub async fn handle_list_project_chat_sessions(
 pub async fn handle_get_project_chat_session(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(i64, i64)>,
+    path: web::Path<(Uuid, Uuid)>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -137,14 +138,14 @@ const MAX_MESSAGES_PAGE_SIZE: i64 = 100;
 
 #[derive(Debug, Deserialize)]
 pub struct ListChatMessagesQuery {
-    pub before_id: Option<i64>,
+    pub before_id: Option<Uuid>,
     pub limit: Option<i64>,
 }
 
 pub async fn handle_list_chat_session_messages(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(i64, i64)>,
+    path: web::Path<(Uuid, Uuid)>,
     query: web::Query<ListChatMessagesQuery>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
@@ -183,12 +184,13 @@ pub async fn handle_list_chat_session_messages(
             .unwrap_or_default();
         let messages: Vec<ChatMessageResponse> = rows.into_iter().map(ChatMessageResponse::from).collect();
 
-        let oldest_id: Option<i64> = chat_messages::table
+        // UUID doesn't support min() in Diesel; get oldest by created_at
+        let oldest_id: Option<Uuid> = chat_messages::table
             .filter(chat_messages::chat_session_id.eq(session_id))
-            .select(diesel::dsl::min(chat_messages::id))
-            .get_result(conn)
-            .ok()
-            .flatten();
+            .order(chat_messages::created_at.asc())
+            .select(chat_messages::id)
+            .first(conn)
+            .optional()?;
 
         Ok::<_, diesel::result::Error>(messages
             .into_iter()
@@ -219,7 +221,7 @@ pub async fn handle_list_chat_session_messages(
 pub async fn handle_create_chat_session_message(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(i64, i64)>,
+    path: web::Path<(Uuid, Uuid)>,
     body: web::Json<ChatMessageCreateBody>,
 ) -> HttpResponse {
     let user_id = req
@@ -248,13 +250,13 @@ pub async fn handle_create_chat_session_message(
     match database::block_on_db(&context.pool, {
         let session_id = session_id;
         move |conn| {
-            let session_check: Option<i64> = chat_sessions::table
+            let session_check: Option<Uuid> = chat_sessions::table
                 .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
                 .filter(projects::owner_user_id.eq(user_id))
                 .filter(chat_sessions::id.eq(session_id))
                 .filter(chat_sessions::project_id.eq(project_id))
                 .select(chat_sessions::id)
-                .first::<i64>(conn)
+                .first::<Uuid>(conn)
                 .optional()?;
             if session_check.is_none() {
                 return Err(diesel::result::Error::NotFound);
@@ -309,13 +311,13 @@ pub async fn handle_create_chat_session_message(
     };
 
     let (message, is_first, placeholder_ai_message_id, placeholder_message) = match database::block_on_db(&context.pool, move |conn| {
-        let session_check: Option<i64> = chat_sessions::table
+        let session_check: Option<Uuid> = chat_sessions::table
             .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(chat_sessions::id.eq(session_id))
             .filter(chat_sessions::project_id.eq(project_id))
             .select(chat_sessions::id)
-            .first::<i64>(conn)
+            .first::<Uuid>(conn)
             .optional()?;
         if session_check.is_none() {
             return Err(diesel::result::Error::NotFound);
@@ -400,7 +402,7 @@ pub async fn handle_create_chat_session_message(
 pub async fn handle_stop_generating(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(i64, i64)>,
+    path: web::Path<(Uuid, Uuid)>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -415,11 +417,11 @@ pub async fn handle_stop_generating(
 
     enum StopOut {
         NotFound,
-        Ok(Vec<i64>),
+        Ok(Vec<Uuid>),
     }
 
     let generating_message_ids = match database::block_on_db(&context.pool, move |conn| {
-        let session_exists: Option<i64> = chat_sessions::table
+        let session_exists: Option<Uuid> = chat_sessions::table
             .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(chat_sessions::id.eq(session_id))
@@ -430,11 +432,11 @@ pub async fn handle_stop_generating(
         if session_exists.is_none() {
             return Ok(StopOut::NotFound);
         }
-        let ids: Vec<i64> = chat_messages::table
+        let ids: Vec<Uuid> = chat_messages::table
             .filter(chat_messages::chat_session_id.eq(session_id))
             .filter(chat_messages::status.eq(ChatMessageStatus::Generating))
             .select(chat_messages::id)
-            .load::<i64>(conn)?;
+            .load::<Uuid>(conn)?;
         Ok(StopOut::Ok(ids))
     })
     .await
@@ -489,10 +491,10 @@ pub async fn handle_stop_generating(
 
     if let Some(ref redis_conn) = context.redis_conn {
         let mut guard = redis_conn.lock().await;
-        for &message_id in &generating_message_ids {
-            if let Err(e) = set_stopped_message_id(&mut *guard, message_id, ttl_secs).await {
+        for message_id in &generating_message_ids {
+            if let Err(e) = set_stopped_message_id(&mut *guard, *message_id, ttl_secs).await {
                 tracing::warn!(
-                    message_id,
+                    %message_id,
                     "Failed to set stopped message id in Redis: {}",
                     e
                 );
@@ -512,7 +514,7 @@ pub async fn handle_stop_generating(
 pub async fn handle_list_chat_session_draft_units(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(i64, i64)>,
+    path: web::Path<(Uuid, Uuid)>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -530,7 +532,7 @@ pub async fn handle_list_chat_session_draft_units(
             .filter(chat_sessions::id.eq(session_id))
             .filter(chat_sessions::project_id.eq(project_id))
             .select(chat_sessions::id)
-            .first::<i64>(conn)
+            .first::<Uuid>(conn)
             .optional()?;
         if session_exists.is_none() {
             return Err(diesel::result::Error::NotFound);
@@ -565,7 +567,7 @@ pub async fn handle_list_chat_session_draft_units(
 pub async fn handle_create_project_chat_session(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<i64>,
+    path: web::Path<Uuid>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -608,13 +610,13 @@ pub async fn handle_create_project_chat_session(
 
 #[derive(Debug, Deserialize)]
 pub struct AttachStageRuntimeBody {
-    pub project_runtime_id: i64,
+    pub project_runtime_id: Uuid,
 }
 
 pub async fn handle_attach_chat_session_stage_runtime(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(i64, i64)>,
+    path: web::Path<(Uuid, Uuid)>,
     body: web::Json<AttachStageRuntimeBody>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
@@ -641,12 +643,12 @@ pub async fn handle_attach_chat_session_stage_runtime(
             .filter(project_runtimes::id.eq(project_runtime_id))
             .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Stage))
             .select(project_runtimes::id)
-            .get_result::<i64>(conn)
+            .get_result::<Uuid>(conn)
             .optional()?;
         if _runtime.is_none() {
             return Ok(AttachOut::RuntimeNotFound);
         }
-        let session_row: Option<(i64, Option<i64>)> = chat_sessions::table
+        let session_row: Option<(Uuid, Option<Uuid>)> = chat_sessions::table
             .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(chat_sessions::id.eq(session_id))
@@ -711,13 +713,13 @@ pub async fn handle_attach_chat_session_stage_runtime(
 
 #[derive(Debug, Deserialize)]
 pub struct DetachStageRuntimeBody {
-    pub project_runtime_id: i64,
+    pub project_runtime_id: Uuid,
 }
 
 pub async fn handle_detach_chat_session_stage_runtime(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(i64, i64)>,
+    path: web::Path<(Uuid, Uuid)>,
     body: web::Json<DetachStageRuntimeBody>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
@@ -737,7 +739,7 @@ pub async fn handle_detach_chat_session_stage_runtime(
         Ok(ChatSessionResponse),
     }
     let updated = match database::block_on_db(&context.pool, move |conn| {
-        let session_row: Option<(i64, Option<i64>)> = chat_sessions::table
+        let session_row: Option<(Uuid, Option<Uuid>)> = chat_sessions::table
             .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(chat_sessions::id.eq(session_id))
@@ -761,7 +763,7 @@ pub async fn handle_detach_chat_session_stage_runtime(
                 .filter(chat_sessions::id.eq(session_id))
                 .filter(chat_sessions::project_id.eq(project_id)),
         )
-        .set(chat_sessions::stage_project_runtime_id.eq(Option::<i64>::None))
+        .set(chat_sessions::stage_project_runtime_id.eq(Option::<Uuid>::None))
         .returning(ChatSessionResponse::as_select())
         .get_result::<ChatSessionResponse>(conn)?;
         Ok(DetachOut::Ok(u))

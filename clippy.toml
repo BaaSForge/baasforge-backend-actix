@@ -1,0 +1,12 @@
+# Disallow creating UUIDs with the uuid crate; all new IDs must use crate::libs::ids::new_uuid() (uuidv7).
+# allow-invalid = true for methods not in current uuid build (e.g. v7) so config stays valid; they are still disallowed if ever reachable.
+disallowed-methods = [
+    { path = "uuid::Uuid::new_v4", reason = "use crate::libs::ids::new_uuid() for UUID v7", replacement = "crate::libs::ids::new_uuid" },
+    { path = "uuid::Uuid::now_v7", reason = "use crate::libs::ids::new_uuid() for consistent ID generation", replacement = "crate::libs::ids::new_uuid", allow-invalid = true },
+    { path = "uuid::Uuid::new_v7", reason = "use crate::libs::ids::new_uuid() for consistent ID generation", replacement = "crate::libs::ids::new_uuid", allow-invalid = true },
+    { path = "uuid::Uuid::nil", reason = "do not create nil UUIDs; use Option<Uuid> or a sentinel if needed" },
+    { path = "uuid::Uuid::from_bytes", reason = "use crate::libs::ids::new_uuid() for new IDs, or Uuid::parse_str for parsing", replacement = "crate::libs::ids::new_uuid" },
+    { path = "uuid::Uuid::from_u128", reason = "use crate::libs::ids::new_uuid() for new IDs", replacement = "crate::libs::ids::new_uuid" },
+    { path = "uuid::Uuid::from_fields", reason = "use crate::libs::ids::new_uuid() for new IDs", replacement = "crate::libs::ids::new_uuid" },
+    { path = "uuid::Uuid::from_uuid_bytes", reason = "use crate::libs::ids::new_uuid() for new IDs", replacement = "crate::libs::ids::new_uuid", allow-invalid = true },
+]

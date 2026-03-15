@@ -1,6 +1,7 @@
 use diesel::Insertable;
 use diesel::Queryable;
 use serde::Serialize;
+use uuid::Uuid;
 
 #[derive(Debug, diesel_derive_enum::DbEnum, Serialize)]
 #[ExistingTypePath = "crate::schema::sql_types::PlatformType"]
@@ -14,7 +15,7 @@ pub enum PlatformType {
 #[derive(Debug, Queryable, Serialize)]
 #[diesel(table_name = crate::schema::users)]
 pub struct User {
-    pub id: i64,
+    pub id: Uuid,
     #[allow(dead_code)]
     pub platform: PlatformType,
     #[allow(dead_code)]

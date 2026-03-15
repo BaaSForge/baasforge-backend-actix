@@ -8,16 +8,17 @@ use redis::aio::MultiplexedConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
+use uuid::Uuid;
 
 pub async fn process_one(
     pool: &DbPool,
     llm_client: &LlmClient,
     redis_conn: &Arc<Mutex<MultiplexedConnection>>,
-    user_id: i64,
-    project_id: i64,
-    session_id: i64,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
     user_text: &str,
-    placeholder_ai_message_id: i64,
+    placeholder_ai_message_id: Uuid,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let session_messages = block_on_db_tokio(pool, move |conn| {
         load_previous_session_messages(conn, session_id, 50)
@@ -29,7 +30,7 @@ pub async fn process_one(
         let stage_project_runtime_id = chat_sessions::table
             .filter(chat_sessions::id.eq(session_id))
             .select(chat_sessions::stage_project_runtime_id)
-            .get_result::<Option<i64>>(conn)?;
+            .get_result::<Option<Uuid>>(conn)?;
         Ok(ToolContext {
             stage_runtime_connected: stage_project_runtime_id.is_some(),
         })
@@ -65,9 +66,9 @@ pub async fn process_one(
             .await
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
             info!(
-                project_id,
-                session_id,
-                placeholder_ai_message_id,
+                %project_id,
+                %session_id,
+                %placeholder_ai_message_id,
                 "Streaming stopped by user, saved partial content to DB"
             );
         }
@@ -87,7 +88,7 @@ pub async fn process_one(
             })
             .await
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-            info!(project_id, session_id, "Processed and saved AI response");
+            info!(%project_id, %session_id, "Processed and saved AI response");
         }
     }
     Ok(())

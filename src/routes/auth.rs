@@ -1,5 +1,6 @@
 use crate::database;
 use crate::libs::api_response::{api_error, api_success};
+use crate::libs::ids::new_uuid;
 use crate::middlewares::auth::{AccessPayload, RefreshPayload};
 // use actix_web::HttpMessage;
 use crate::models::user_tokens::{UserTokenInternal, UserTokenResponse, UserTokenType};
@@ -18,6 +19,7 @@ use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 
 // pub async fn get_user_token(req: HttpRequest) -> Result<HttpResponse, ApiError> {
 //   let user_token = req.cookie("token");
@@ -133,10 +135,10 @@ pub async fn handle_google_auth_callback(
             is_signup_token: is_just_signed_up,
             refresh_token_id: None,
         };
-        let refresh_token_id: i64 = diesel::insert_into(user_tokens::table)
+        let refresh_token_id: Uuid = diesel::insert_into(user_tokens::table)
             .values(&refresh_token_row)
             .returning(user_tokens::id)
-            .get_result(conn)?;
+            .get_result::<Uuid>(conn)?;
 
         let access_token_row = UserTokenInternal {
             user_id: user.id,
@@ -251,7 +253,7 @@ pub async fn handle_refresh_token(
 
 #[derive(Deserialize)]
 pub struct RevokeTokensRequest {
-    token_ids: Vec<i64>,
+    token_ids: Vec<uuid::Uuid>,
 }
 
 pub async fn handle_revoke_tokens(
@@ -278,24 +280,24 @@ pub async fn handle_revoke_tokens(
         TokenMismatch,
     }
     let revoke_result = database::block_on_db(&context.pool, move |conn| {
-        let tokens: Vec<(i64, UserTokenType)> = user_tokens::table
+        let tokens: Vec<(uuid::Uuid, UserTokenType)> = user_tokens::table
             .filter(user_tokens::id.eq_any(&ids))
             .filter(user_tokens::user_id.eq(user_id))
             .filter(user_tokens::token.ne(&refresh_token))
             .filter(user_tokens::token.ne(&access_token))
             .filter(user_tokens::revoked.eq(Some(false)))
             .select((user_tokens::id, user_tokens::token_type))
-            .load::<(i64, UserTokenType)>(conn)?;
+            .load::<(uuid::Uuid, UserTokenType)>(conn)?;
 
         if tokens.len() != ids.len() {
             return Ok(RevokeOut::TokenMismatch);
         }
 
-        let mut revoke_ids: Vec<i64> = Vec::new();
+        let mut revoke_ids: Vec<uuid::Uuid> = Vec::new();
         for (token_id, token_type) in &tokens {
             revoke_ids.push(*token_id);
             if *token_type == UserTokenType::Refresh {
-                let access_ids: Vec<i64> = user_tokens::table
+                let access_ids: Vec<uuid::Uuid> = user_tokens::table
                     .filter(user_tokens::refresh_token_id.eq(token_id))
                     .select(user_tokens::id)
                     .load(conn)

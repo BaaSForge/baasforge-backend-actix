@@ -6,6 +6,7 @@ use diesel::Selectable;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use uuid::Uuid;
 
 #[derive(Debug, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::FrameworkType"]
@@ -60,7 +61,7 @@ pub enum ProjectUnitType {
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectInsert {
     pub framework: FrameworkType,
-    pub owner_user_id: i64,
+    pub owner_user_id: Uuid,
     pub name: String,
     pub slug: String,
     pub language: LanguageType,
@@ -70,7 +71,7 @@ pub struct ProjectInsert {
 #[diesel(table_name = crate::schema::projects)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectResponse {
-    pub id: i64,
+    pub id: Uuid,
     pub framework: FrameworkType,
     pub name: String,
     pub slug: String,
@@ -81,15 +82,15 @@ pub struct ProjectResponse {
 #[diesel(table_name = crate::schema::project_units)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectUnitResponse {
-    pub id: i64,
-    pub project_id: i64,
+    pub id: Uuid,
+    pub project_id: Uuid,
     pub code: Option<String>,
     pub explanation: Option<String>,
     pub version: String,
-    pub parent_unit_id: Option<i64>,
+    pub parent_unit_id: Option<Uuid>,
     pub unit_type: ProjectUnitType,
     pub is_draft: bool,
-    pub chat_session_id: Option<i64>,
+    pub chat_session_id: Option<Uuid>,
 }
 
 
@@ -97,17 +98,17 @@ pub struct ProjectUnitResponse {
 #[diesel(table_name = crate::schema::project_runtimes)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectRuntimeResponse {
-    pub id: i64,
-    pub project_id: i64,
+    pub id: Uuid,
+    pub project_id: Uuid,
     pub name: Option<String>,
     pub slug: Option<String>,
     pub environment: PlatformEnvironmentType,
-    pub db_cluster_id: Option<i64>,
+    pub db_cluster_id: Option<Uuid>,
     pub db_cluster_deployment_metadata: Option<Value>,
     pub db_cluster_deployment_status: Option<DeploymentStatusType>,
     pub db_cluster_deployment_is_healthy: Option<bool>,
     pub db_cluster_deployment_last_health: Option<DateTime<Utc>>,
-    pub server_cluster_id: Option<i64>,
+    pub server_cluster_id: Option<Uuid>,
     pub server_cluster_deployment_metadata: Option<Value>,
     pub server_cluster_deployment_status: Option<DeploymentStatusType>,
     pub server_cluster_deployment_is_healthy: Option<bool>,
@@ -126,8 +127,8 @@ pub struct ProjectRuntimeWithConnectedChatResponse {
 #[diesel(table_name = crate::schema::project_releases)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectReleaseResponse {
-    pub id: i64,
-    pub project_id: i64,
+    pub id: Uuid,
+    pub project_id: Uuid,
     pub version: String,
     pub notes: Option<String>,
     pub units_metadata: Option<Value>,

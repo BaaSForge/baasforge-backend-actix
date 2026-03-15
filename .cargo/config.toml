@@ -1,0 +1,8 @@
+# Run `cargo build` through Clippy so both compiler and lint rules (e.g. UUID v7) run together.
+# Requires: rustup component add clippy
+# If build scripts fail (e.g. version detection), run: CARGO_BUILD_RUSTC_WRAPPER= cargo build
+[build]
+rustc-wrapper = "clippy-driver"
+
+[alias]
+lint = "clippy"

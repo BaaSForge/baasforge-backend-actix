@@ -4,10 +4,11 @@ use crate::schema::{packages, payments};
 use chrono::Utc;
 use diesel::prelude::*;
 use serde::Serialize;
+use uuid::Uuid;
 
 pub fn get_user_active_paid_packages<C>(
     conn: &mut C,
-    user_id: i64,
+    user_id: Uuid,
 ) -> Result<(Vec<(PaymentResponse, Package)>, i32), diesel::result::Error>
 where
     C: diesel::connection::Connection<Backend = diesel::pg::Pg>

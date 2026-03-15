@@ -1,8 +1,8 @@
 CREATE TYPE user_token_type AS ENUM ('access', 'refresh');
 
 CREATE TABLE user_tokens (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id),
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
+    user_id UUID NOT NULL REFERENCES users(id),
     token_type user_token_type NOT NULL,
     token TEXT NOT NULL UNIQUE,
     expires_at TIMESTAMPTZ NOT NULL,

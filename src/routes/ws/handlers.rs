@@ -140,7 +140,7 @@ impl Drop for WsConnectionGuard {
 async fn handle_client_message(
     broker: &WsBroker,
     conn_id: ConnectionId,
-    user_id: i64,
+    user_id: uuid::Uuid,
     pool: &crate::database::DbPool,
     text: &str,
     session: &mut actix_ws::Session,

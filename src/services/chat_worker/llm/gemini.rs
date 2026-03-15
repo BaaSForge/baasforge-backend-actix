@@ -11,6 +11,7 @@ use gemini_rust::Gemini;
 use redis::aio::MultiplexedConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 use super::{payload_to_string, tools, BoxError};
 use serde_json::Value;
@@ -30,7 +31,7 @@ pub async fn call_gemini_stream(
     user_text: &str,
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
-    message_id: i64,
+    message_id: Uuid,
     tool_context: Option<&tools::ToolContext>,
 ) -> Result<GenerateOutcome, BoxError> {
     let client = Gemini::with_model(api_key.to_string(), gemini_model_id(model))

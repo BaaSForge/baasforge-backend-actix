@@ -6,6 +6,7 @@ use lapin::{Connection, Consumer};
 use serde::Serialize;
 use std::io;
 use std::sync::Arc;
+use uuid::Uuid;
 
 pub const CHAT_SESSION_EXCHANGE: &str = "chat_session_exchange";
 pub const CHAT_WORK_QUEUE: &str = "chat_session_work_queue";
@@ -36,15 +37,15 @@ pub fn chat_dead_letter_spec() -> DeadLetterSpec {
     }
 }
 
-pub fn chat_session_routing_key(project_id: i64, session_id: i64) -> String {
+pub fn chat_session_routing_key(project_id: Uuid, session_id: Uuid) -> String {
     format!("chat_session.{}.{}", project_id, session_id)
 }
 
-pub fn parse_chat_routing_key(routing_key: &str) -> Option<(i64, i64)> {
+pub fn parse_chat_routing_key(routing_key: &str) -> Option<(Uuid, Uuid)> {
     let rest = routing_key.strip_prefix("chat_session.")?;
     let mut parts = rest.split('.');
-    let project_id: i64 = parts.next()?.parse().ok()?;
-    let session_id: i64 = parts.next()?.parse().ok()?;
+    let project_id = parts.next().and_then(|s| Uuid::parse_str(s).ok())?;
+    let session_id = parts.next().and_then(|s| Uuid::parse_str(s).ok())?;
     Some((project_id, session_id))
 }
 
@@ -52,13 +53,13 @@ pub fn parse_chat_routing_key(routing_key: &str) -> Option<(i64, i64)> {
 #[serde(rename_all = "snake_case")]
 pub struct ChatSessionQueueMessage {
     #[serde(default)]
-    pub user_id: Option<i64>,
+    pub user_id: Option<Uuid>,
     pub role: ChatSessionRoleType,
     #[serde(rename = "type")]
     pub type_: ChatMessageType,
     pub payload: Option<ChatMessagePayload>,
     /// ID of the placeholder AI message row (status=generating). Required; message is not processed without it.
-    pub placeholder_ai_message_id: i64,
+    pub placeholder_ai_message_id: Uuid,
     /// Retry attempt count. 0 = first attempt; incremented each time the message is sent to the retry delay queue.
     #[serde(default)]
     pub retry_num: u32,
@@ -73,7 +74,7 @@ impl ChatSessionQueueMessage {
     }
 
     // TODO: We may need to remove this logic and handle it inside ChatMessagePayload
-    pub fn as_user_text_message(&self) -> Option<(i64, String)> {
+    pub fn as_user_text_message(&self) -> Option<(Uuid, String)> {
         if !matches!(self.role, ChatSessionRoleType::User) {
             return None;
         }
@@ -91,8 +92,8 @@ impl ChatSessionQueueMessage {
 
 pub async fn publish_with_publisher(
     publisher: &Arc<SharedRabbitPublisher>,
-    project_id: i64,
-    session_id: i64,
+    project_id: Uuid,
+    session_id: Uuid,
     message: &ChatSessionQueueMessage,
 ) -> Result<(), PublishError> {
     message

@@ -1,14 +1,14 @@
 use diesel::prelude::*;
-use std::str::FromStr;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TopicKind {
     ChatSession {
-        user_id: i64,
-        project_id: i64,
-        chat_session_id: i64,
+        user_id: Uuid,
+        project_id: Uuid,
+        chat_session_id: Uuid,
     },
-    User { user_id: i64 },
+    User { user_id: Uuid },
 }
 
 impl TopicKind {
@@ -22,9 +22,9 @@ impl TopicKind {
                 if parts.len() != 4 {
                     return None;
                 }
-                let user_id = i64::from_str(parts[1]).ok()?;
-                let project_id = i64::from_str(parts[2]).ok()?;
-                let chat_session_id = i64::from_str(parts[3]).ok()?;
+                let user_id = Uuid::parse_str(parts[1]).ok()?;
+                let project_id = Uuid::parse_str(parts[2]).ok()?;
+                let chat_session_id = Uuid::parse_str(parts[3]).ok()?;
                 Some(TopicKind::ChatSession {
                     user_id,
                     project_id,
@@ -35,7 +35,7 @@ impl TopicKind {
                 if parts.len() != 2 {
                     return None;
                 }
-                let user_id = i64::from_str(parts[1]).ok()?;
+                let user_id = Uuid::parse_str(parts[1]).ok()?;
                 Some(TopicKind::User { user_id })
             }
             _ => None,
@@ -61,7 +61,7 @@ pub enum TopicAuth {
 
 pub async fn authorize_topic_async(
     topic: &str,
-    authenticated_user_id: i64,
+    authenticated_user_id: Uuid,
     pool: &crate::database::DbPool,
 ) -> TopicAuth {
     let kind = match TopicKind::parse(topic) {
@@ -91,7 +91,7 @@ pub async fn authorize_topic_async(
                     .filter(crate::schema::chat_sessions::project_id.eq(project_id))
                     .filter(crate::schema::chat_sessions::id.eq(chat_session_id))
                     .select(crate::schema::chat_sessions::id)
-                    .first::<i64>(conn)
+                    .first::<Uuid>(conn)
                     .optional()
             })
             .await

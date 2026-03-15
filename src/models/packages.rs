@@ -2,12 +2,13 @@ use diesel::Insertable;
 use diesel::Queryable;
 use diesel::Selectable;
 use serde::Serialize;
+use uuid::Uuid;
 
 #[derive(Serialize, Queryable, Selectable, Insertable)]
 #[diesel(table_name = crate::schema::packages)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct Package {
-    pub id: i64,
+    pub id: Uuid,
     pub title: String,
     pub slug: String,
     pub tier: i32,

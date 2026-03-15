@@ -26,6 +26,7 @@ use diesel::result::Error;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 #[derive(Clone, Deserialize)]
 pub struct ProjectRequest {
@@ -133,7 +134,7 @@ pub async fn handle_create_project(
 pub async fn handle_get_project(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<i64>,
+    path: web::Path<Uuid>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -178,7 +179,7 @@ pub struct ProjectPatchRequest {
 pub async fn handle_patch_project(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<i64>,
+    path: web::Path<Uuid>,
     body: web::Json<ProjectPatchRequest>,
 ) -> HttpResponse {
     let extensions = req.extensions();
@@ -213,7 +214,7 @@ pub async fn handle_patch_project(
             .filter(projects::name.eq(&name))
             .filter(projects::id.ne(project_id))
             .select(projects::id)
-            .first::<i64>(conn)
+            .first::<Uuid>(conn)
             .optional()?;
         if exists.is_some() {
             return Ok(PatchOut::NameExists);
@@ -250,7 +251,7 @@ pub async fn handle_patch_project(
 pub async fn handle_delete_project(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<i64>,
+    path: web::Path<Uuid>,
 ) -> HttpResponse {
     // TODO: add messages to queue to detach runtimes
     // TODO: create a saga which removes rows exactly when all side systems are detached successfully
@@ -267,7 +268,7 @@ pub async fn handle_delete_project(
 
     let res = database::block_on_db(&context.pool, move |conn| {
         conn.transaction::<_, Error, _>(|conn| {
-        let session_ids: Vec<i64> = chat_sessions::table
+        let session_ids: Vec<Uuid> = chat_sessions::table
             .filter(chat_sessions::project_id.eq(project_id))
             .select(chat_sessions::id)
             .load(conn)?;
@@ -381,7 +382,7 @@ pub async fn handle_list_projects(
 pub async fn handle_list_project_non_draft_units(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<i64>,
+    path: web::Path<Uuid>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -427,7 +428,7 @@ pub struct ListProjectRuntimesQuery {
 pub async fn handle_list_project_runtimes_with_connected_chat_sessions(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<i64>,
+    path: web::Path<Uuid>,
     query: web::Query<ListProjectRuntimesQuery>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
@@ -459,8 +460,8 @@ pub async fn handle_list_project_runtimes_with_connected_chat_sessions(
             .select(ProjectRuntimeResponse::as_select())
             .load::<ProjectRuntimeResponse>(conn)
             .unwrap_or_default();
-        let runtime_ids: Vec<i64> = runtimes.iter().map(|r| r.id).collect();
-        let connected_sessions: HashMap<i64, ChatSessionResponse> = if runtime_ids.is_empty() {
+        let runtime_ids: Vec<Uuid> = runtimes.iter().map(|r| r.id).collect();
+        let connected_sessions: HashMap<Uuid, ChatSessionResponse> = if runtime_ids.is_empty() {
             HashMap::new()
         } else {
             chat_sessions::table
@@ -504,7 +505,7 @@ pub async fn handle_list_project_runtimes_with_connected_chat_sessions(
 pub async fn handle_list_project_releases(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<i64>,
+    path: web::Path<Uuid>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -545,7 +546,7 @@ pub async fn handle_list_project_releases(
 pub async fn handle_list_project_release_units(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(i64, String)>,
+    path: web::Path<(Uuid, String)>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -558,16 +559,20 @@ pub async fn handle_list_project_release_units(
     let user_id = access_payload.user_id;
 
     // TODO: retrieve units ids from release metadata
-    let units_ids_from_release_metadata = [1, 2, 3, 4];
+    let units_ids_from_release_metadata: Vec<Uuid> = vec![];
 
     let units = match database::block_on_db(&context.pool, move |conn| {
-        project_units::table
+        let ids = units_ids_from_release_metadata;
+        if ids.is_empty() {
+            return Ok::<_, diesel::result::Error>(vec![]);
+        }
+        Ok(project_units::table
             .inner_join(projects::table.on(project_units::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(project_units::project_id.eq(project_id))
-            .filter(project_units::id.eq_any(&units_ids_from_release_metadata))
+            .filter(project_units::id.eq_any(&ids))
             .select(ProjectUnitResponse::as_select())
-            .load::<ProjectUnitResponse>(conn)
+            .load::<ProjectUnitResponse>(conn)?)
     })
     .await
     {

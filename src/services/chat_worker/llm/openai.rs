@@ -266,7 +266,7 @@ async fn stream_content_to_redis(
     chunk_index: &mut u32,
     redis_conn: Option<&Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
-    message_id: i64,
+    message_id: uuid::Uuid,
 ) -> Result<(), ()> {
     if content.is_empty() {
         return Ok(());
@@ -299,7 +299,7 @@ pub async fn call_gpt_stream(
     user_text: &str,
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
-    message_id: i64,
+    message_id: uuid::Uuid,
     tool_context: Option<&tools::ToolContext>,
 ) -> Result<GenerateOutcome, BoxError> {
     let messages = build_chat_messages(session_messages, user_text);

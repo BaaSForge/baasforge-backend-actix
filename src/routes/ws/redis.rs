@@ -3,20 +3,21 @@ use redis::AsyncCommands;
 use serde::Serialize;
 use std::sync::Arc;
 use tokio_stream::StreamExt as _;
+use uuid::Uuid;
 
 pub const CHAT_SESSION_CHANNEL_PREFIX: &str = "chat_session:";
 pub const USER_CHANNEL_PREFIX: &str = "user:";
 /// Redis key prefix for marking a message as stopped (user requested stop generating). Key = prefix + message_id, TTL set by config.
 pub const REDIS_KEY_STOPPED_MESSAGE_PREFIX: &str = "chat:stopped_message:";
 
-pub fn redis_key_stopped_message(message_id: i64) -> String {
+pub fn redis_key_stopped_message(message_id: Uuid) -> String {
     format!("{}{}", REDIS_KEY_STOPPED_MESSAGE_PREFIX, message_id)
 }
 
 /// Mark a message ID as stopped in Redis with the given TTL (seconds). Used by the stop-generating endpoint.
 pub async fn set_stopped_message_id<C>(
     conn: &mut C,
-    message_id: i64,
+    message_id: Uuid,
     ttl_secs: u64,
 ) -> Result<(), redis::RedisError>
 where
@@ -27,7 +28,7 @@ where
 }
 
 /// Check if a message ID is marked as stopped in Redis. Used by chat workers before and during streaming.
-pub async fn is_message_stopped<C>(conn: &mut C, message_id: i64) -> Result<bool, redis::RedisError>
+pub async fn is_message_stopped<C>(conn: &mut C, message_id: Uuid) -> Result<bool, redis::RedisError>
 where
     C: AsyncCommands + Send,
 {
@@ -36,7 +37,7 @@ where
     Ok(exists)
 }
 
-pub fn user_channel(user_id: i64) -> String {
+pub fn user_channel(user_id: Uuid) -> String {
     format!("{}{}", USER_CHANNEL_PREFIX, user_id)
 }
 

@@ -19,19 +19,20 @@ use actix_web::{
 };
 use diesel::prelude::*;
 use serde_json::json;
+use uuid::Uuid;
 
 pub struct AccessPayload {
     #[allow(unused)]
     pub claims: AccessClaims,
     #[allow(unused)]
-    pub user_id: i64,
+    pub user_id: Uuid,
     pub db_token: UserToken,
 }
 
 pub struct RefreshPayload {
     #[allow(unused)]
     pub claims: RefreshClaims,
-    pub user_id: i64,
+    pub user_id: Uuid,
     pub db_token: UserToken,
 }
 

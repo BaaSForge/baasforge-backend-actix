@@ -4,6 +4,7 @@ use redis::aio::MultiplexedConnection;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 pub mod openai;
 pub mod gemini;
@@ -44,7 +45,7 @@ impl LlmClient {
         user_text: &str,
         redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
         topic: &str,
-        message_id: i64,
+        message_id: Uuid,
         tool_context: Option<&crate::services::chat_worker::llm::tools::ToolContext>,
     ) -> Result<GenerateOutcome, BoxError> {
         match self {

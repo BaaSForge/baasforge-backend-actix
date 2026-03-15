@@ -5,6 +5,7 @@ use diesel::Selectable;
 use diesel_derive_enum::DbEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::models::projects::ProjectUnitResponse;
 
@@ -93,8 +94,8 @@ impl ChatMessagePayload {
 #[diesel(table_name = crate::schema::chat_messages)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ChatMessageRow {
-    pub id: i64,
-    pub chat_session_id: i64,
+    pub id: Uuid,
+    pub chat_session_id: Uuid,
     pub role: ChatSessionRoleType,
     #[diesel(column_name = type_)]
     pub type_: ChatMessageType,
@@ -120,8 +121,8 @@ impl From<ChatMessageRow> for ChatMessageResponse {
 
 #[derive(Debug, Serialize)]
 pub struct ChatMessageResponse {
-    pub id: i64,
-    pub chat_session_id: i64,
+    pub id: Uuid,
+    pub chat_session_id: Uuid,
     pub role: ChatSessionRoleType,
     #[serde(rename = "type")]
     pub type_: ChatMessageType,
@@ -164,7 +165,7 @@ impl ChatMessageCreateBody {
 #[diesel(table_name = crate::schema::chat_messages)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ChatMessageInsert {
-    pub chat_session_id: i64,
+    pub chat_session_id: Uuid,
     pub role: ChatSessionRoleType,
     pub type_: ChatMessageType,
     pub payload: Option<Value>,

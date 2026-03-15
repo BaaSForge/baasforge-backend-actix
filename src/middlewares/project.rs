@@ -10,6 +10,7 @@ use actix_web::web;
 use actix_web::{HttpMessage, HttpResponse, dev::ServiceRequest, middleware::Next};
 use diesel::prelude::*;
 use regex::Regex;
+use uuid::Uuid;
 
 pub fn projects_owner_guard_middleware_factory() -> impl Fn(
     ServiceRequest,
@@ -30,10 +31,10 @@ pub fn projects_owner_guard_middleware_factory() -> impl Fn(
             };
 
             let path = req.path();
-            let re = Regex::new(r".*/platform/projects/(\d+)(/.*)?$").unwrap();
+            let re = Regex::new(r".*/platform/projects/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(/.*)?$").unwrap();
             let captures = re.captures(path);
             let project_id = if let Some(caps) = captures {
-                caps.get(1).unwrap().as_str().parse::<i64>().ok()
+                caps.get(1).and_then(|m| Uuid::parse_str(m.as_str()).ok())
             } else {
                 None
             };
@@ -57,7 +58,7 @@ pub fn projects_owner_guard_middleware_factory() -> impl Fn(
                 projects
                     .filter(id.eq(project_id))
                     .select((id, owner_user_id))
-                    .first::<(i64, i64)>(conn)
+                    .first::<(Uuid, Uuid)>(conn)
                     .optional()
             })
             .await

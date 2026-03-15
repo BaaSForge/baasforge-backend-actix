@@ -4,14 +4,15 @@ use diesel::Insertable;
 use diesel::Queryable;
 use diesel::Selectable;
 use serde::Serialize;
+use uuid::Uuid;
 
 #[derive(Insertable)]
 #[diesel(table_name = crate::schema::payments)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct PaymentInsert {
-    pub user_id: i64,
+    pub user_id: Uuid,
     pub amount: f64,
-    pub package_id: i64,
+    pub package_id: Uuid,
     pub package_title: Option<String>,
     pub package_slug: Option<String>,
     pub package_tier: i32,
@@ -28,10 +29,10 @@ pub struct PaymentInsert {
 #[diesel(check_for_backend(diesel::pg::Pg))]
 #[derive(Debug)]
 pub struct PaymentResponse {
-    pub id: i64,
-    pub user_id: i64,
+    pub id: Uuid,
+    pub user_id: Uuid,
     pub amount: f64,
-    pub package_id: i64,
+    pub package_id: Uuid,
     pub package_title: Option<String>,
     pub package_slug: Option<String>,
     pub package_tier: i32,

@@ -64,8 +64,8 @@ diesel::table! {
     use super::sql_types::ChatMessageStatus;
 
     chat_messages (id) {
-        id -> Int8,
-        chat_session_id -> Int8,
+        id -> Uuid,
+        chat_session_id -> Uuid,
         role -> ChatSessionRoleType,
         #[sql_name = "type"]
         type_ -> ChatMessageType,
@@ -77,13 +77,13 @@ diesel::table! {
 
 diesel::table! {
     chat_sessions (id) {
-        id -> Int8,
-        project_id -> Int8,
-        user_id -> Int8,
+        id -> Uuid,
+        project_id -> Uuid,
+        user_id -> Uuid,
         #[max_length = 150]
         title -> Varchar,
         created_at -> Timestamptz,
-        stage_project_runtime_id -> Nullable<Int8>,
+        stage_project_runtime_id -> Nullable<Uuid>,
     }
 }
 
@@ -93,7 +93,7 @@ diesel::table! {
     use super::sql_types::DbClusterType;
 
     db_clusters (id) {
-        id -> Int8,
+        id -> Uuid,
         environment -> PlatformEnvironmentType,
         db_type -> DbClusterType,
         max_capacity -> Int4,
@@ -103,7 +103,7 @@ diesel::table! {
 
 diesel::table! {
     packages (id) {
-        id -> Int8,
+        id -> Uuid,
         #[max_length = 255]
         title -> Varchar,
         #[max_length = 255]
@@ -119,10 +119,10 @@ diesel::table! {
 
 diesel::table! {
     payments (id) {
-        id -> Int8,
-        user_id -> Int8,
+        id -> Uuid,
+        user_id -> Uuid,
         amount -> Float8,
-        package_id -> Int8,
+        package_id -> Uuid,
         #[max_length = 255]
         package_title -> Nullable<Varchar>,
         #[max_length = 255]
@@ -139,8 +139,8 @@ diesel::table! {
 
 diesel::table! {
     project_releases (id) {
-        id -> Int8,
-        project_id -> Int8,
+        id -> Uuid,
+        project_id -> Uuid,
         #[max_length = 50]
         version -> Varchar,
         units_metadata -> Nullable<Jsonb>,
@@ -155,15 +155,15 @@ diesel::table! {
     use super::sql_types::DeploymentStatusType;
 
     project_runtimes (id) {
-        id -> Int8,
-        project_id -> Int8,
+        id -> Uuid,
+        project_id -> Uuid,
         environment -> PlatformEnvironmentType,
-        db_cluster_id -> Nullable<Int8>,
+        db_cluster_id -> Nullable<Uuid>,
         db_cluster_deployment_metadata -> Nullable<Jsonb>,
         db_cluster_deployment_status -> Nullable<DeploymentStatusType>,
         db_cluster_deployment_is_healthy -> Nullable<Bool>,
         db_cluster_deployment_last_health -> Nullable<Timestamptz>,
-        server_cluster_id -> Nullable<Int8>,
+        server_cluster_id -> Nullable<Uuid>,
         server_cluster_deployment_metadata -> Nullable<Jsonb>,
         server_cluster_deployment_status -> Nullable<DeploymentStatusType>,
         server_cluster_deployment_is_healthy -> Nullable<Bool>,
@@ -182,16 +182,16 @@ diesel::table! {
     use super::sql_types::ProjectUnitType;
 
     project_units (id) {
-        id -> Int8,
-        project_id -> Int8,
+        id -> Uuid,
+        project_id -> Uuid,
         code -> Nullable<Text>,
         explanation -> Nullable<Text>,
         #[max_length = 50]
         version -> Varchar,
-        parent_unit_id -> Nullable<Int8>,
+        parent_unit_id -> Nullable<Uuid>,
         unit_type -> ProjectUnitType,
         is_draft -> Bool,
-        chat_session_id -> Nullable<Int8>,
+        chat_session_id -> Nullable<Uuid>,
     }
 }
 
@@ -201,9 +201,9 @@ diesel::table! {
     use super::sql_types::LanguageType;
 
     projects (id) {
-        id -> Int8,
+        id -> Uuid,
         framework -> FrameworkType,
-        owner_user_id -> Int8,
+        owner_user_id -> Uuid,
         #[max_length = 255]
         name -> Varchar,
         #[max_length = 255]
@@ -218,7 +218,7 @@ diesel::table! {
     use super::sql_types::ServerClusterType;
 
     server_clusters (id) {
-        id -> Int8,
+        id -> Uuid,
         environment -> PlatformEnvironmentType,
         server_type -> ServerClusterType,
         max_capacity -> Int4,
@@ -231,15 +231,15 @@ diesel::table! {
     use super::sql_types::UserTokenType;
 
     user_tokens (id) {
-        id -> Int8,
-        user_id -> Int8,
+        id -> Uuid,
+        user_id -> Uuid,
         token_type -> UserTokenType,
         token -> Text,
         expires_at -> Timestamptz,
         revoked -> Nullable<Bool>,
         created_at -> Timestamptz,
         is_signup_token -> Bool,
-        refresh_token_id -> Nullable<Int8>,
+        refresh_token_id -> Nullable<Uuid>,
     }
 }
 
@@ -248,7 +248,7 @@ diesel::table! {
     use super::sql_types::PlatformType;
 
     users (id) {
-        id -> Int8,
+        id -> Uuid,
         platform -> PlatformType,
         #[max_length = 255]
         id_in_platform -> Varchar,

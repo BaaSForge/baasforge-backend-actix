@@ -1,5 +1,6 @@
 use crate::models::chat_messages::ChatMessageStatus;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -17,7 +18,7 @@ pub enum WsServerEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatSessionMessageStatusChangePayload {
     #[serde(rename = "messageId")]
-    pub message_id: i64,
+    pub message_id: Uuid,
     pub status: ChatMessageStatus,
 }
 
@@ -39,7 +40,7 @@ pub struct RuntimeCreatedPayload {
 pub struct ChatSessionNewMessageChunkPayload {
     pub topic: String,
     /// ID of the placeholder message this chunk belongs to (client appends content to this message).
-    pub message_id: i64,
+    pub message_id: Uuid,
     pub chunk_index: u32,
     pub content: String,
     pub done: bool,
@@ -48,7 +49,7 @@ pub struct ChatSessionNewMessageChunkPayload {
 impl ChatSessionNewMessageChunkPayload {
     pub fn new(
         topic: String,
-        message_id: i64,
+        message_id: Uuid,
         chunk_index: u32,
         content: String,
         done: bool,

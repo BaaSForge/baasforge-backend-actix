@@ -1,8 +1,8 @@
 CREATE TABLE payments (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL REFERENCES users(id),
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
+    user_id UUID NOT NULL REFERENCES users(id),
     amount FLOAT8 NOT NULL,
-    package_id BIGINT NOT NULL REFERENCES packages(id),
+    package_id UUID NOT NULL REFERENCES packages(id),
     package_title VARCHAR(255),
     package_slug VARCHAR(255),
     package_tier INTEGER NOT NULL UNIQUE CHECK (package_tier > 0),

@@ -97,7 +97,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         };
 
-        // Placeholder is required; deserialization would have failed if missing (field is i64)
+        // Placeholder is required; deserialization would have failed if missing (field is Uuid)
         let placeholder_ai_message_id = payload.placeholder_ai_message_id;
 
         // If user already requested stop for this message, ack and skip so it is not picked by another consumer
@@ -105,9 +105,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let mut guard = redis_conn.lock().await;
             if let Ok(true) = is_message_stopped(&mut *guard, placeholder_ai_message_id).await {
                 tracing::info!(
-                    project_id,
-                    session_id,
-                    placeholder_ai_message_id,
+                    %project_id,
+                    %session_id,
+                    %placeholder_ai_message_id,
                     "Message marked stopped in Redis, acking and skipping"
                 );
                 let _ = delivery.acker.ack(BasicAckOptions::default()).await;
@@ -145,8 +145,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Err(e) => {
                     if retry_policy.should_dead_letter(retry_num) {
                         tracing::error!(
-                            project_id,
-                            session_id,
+                            %project_id,
+                            %session_id,
                             retry_num,
                             "Process message failed after max retries, sending to dead letter: {}",
                             e
@@ -199,8 +199,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         }
                     } else {
                         tracing::error!(
-                            project_id,
-                            session_id,
+                            %project_id,
+                            %session_id,
                             retry_num,
                             "Process message failed, sending to retry delay: {}",
                             e

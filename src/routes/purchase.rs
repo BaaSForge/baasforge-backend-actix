@@ -13,10 +13,11 @@ use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 
 #[derive(Deserialize)]
 pub struct InitiatePaymentRequest {
-    package_id: i64,
+    package_id: Uuid,
 }
 
 pub async fn handle_initiate_purchase(
