@@ -32,7 +32,6 @@ pub async fn call_gemini_stream(
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
     message_id: Uuid,
-    tool_context: Option<&tools::ToolContext>,
 ) -> Result<GenerateOutcome, BoxError> {
     let client = Gemini::with_model(api_key.to_string(), gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
@@ -126,7 +125,7 @@ pub async fn call_gemini_stream(
         );
         for (name, args) in all_function_calls {
             tracing::info!(tool = %name, args = ?args, "Gemini: executing tool");
-            let _result = tools::execute_tool(&name, &args, tool_context)
+            let _result = tools::execute_tool(&name, &args)
                 .map_err(|e| format!("Tool execution failed: {}", e))?;
         }
         // Tools executed; caller can re-invoke the LLM later with tool results in context

@@ -1,8 +1,8 @@
 use crate::database::{block_on_db_tokio, DbPool};
 use crate::models::chat_messages::ChatMessageStatus;
-use crate::schema::{chat_messages, chat_sessions};
+use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_previous_session_messages;
-use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient, tools::ToolContext};
+use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient};
 use diesel::prelude::*;
 use redis::aio::MultiplexedConnection;
 use std::sync::Arc;
@@ -26,18 +26,6 @@ pub async fn process_one(
     .await
     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
-    let tool_context = block_on_db_tokio(pool, move |conn| {
-        let stage_project_runtime_id = chat_sessions::table
-            .filter(chat_sessions::id.eq(session_id))
-            .select(chat_sessions::stage_project_runtime_id)
-            .get_result::<Option<Uuid>>(conn)?;
-        Ok(ToolContext {
-            stage_runtime_connected: stage_project_runtime_id.is_some(),
-        })
-    })
-    .await
-    .ok();
-
     let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
     let outcome = llm_client
         .generate(
@@ -46,7 +34,6 @@ pub async fn process_one(
             Some(redis_conn.clone()),
             &topic,
             placeholder_ai_message_id,
-            tool_context.as_ref(),
         )
         .await?;
 

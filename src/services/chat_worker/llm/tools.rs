@@ -2,11 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 #[derive(Clone, Debug)]
-pub struct ToolContext {
-    pub stage_runtime_connected: bool,
-}
-
-#[derive(Clone, Debug)]
 pub struct ToolSpec {
     pub name: &'static str,
     pub description: &'static str,
@@ -41,12 +36,6 @@ pub fn tool_log_debug(args: &Value) -> Result<String, String> {
     Ok(format!("Logged debug: {}", msg))
 }
 
-pub fn tool_is_any_stage_connected(context: Option<&ToolContext>) -> Result<String, String> {
-    let ctx = context.ok_or_else(|| "Session context not available for is_any_stage_connected".to_string())?;
-    let result = json!({ "connected": ctx.stage_runtime_connected });
-    Ok(result.to_string())
-}
-
 pub fn all_tool_specs() -> Vec<ToolSpec> {
     let params_schema = json!({
         "type": "object",
@@ -57,11 +46,6 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
             }
         },
         "required": ["message"]
-    });
-    let no_params_schema = json!({
-        "type": "object",
-        "properties": {},
-        "required": []
     });
     vec![
         ToolSpec {
@@ -74,21 +58,15 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
             description: "Log a message at DEBUG level. Use for debugging or verbose information.",
             parameters: params_schema,
         },
-        ToolSpec {
-            name: "is_any_stage_connected",
-            description: "Check whether the current chat session has any stage runtime connected (attached). Use this before suggesting the user to connect a runtime or to create a draft release. Returns connected: true/false.",
-            parameters: no_params_schema,
-        },
     ]
 }
 
-pub fn execute_tool(name: &str, args: &Value, context: Option<&ToolContext>) -> Result<String, String> {
+pub fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
     eprintln!("[tool-debug] execute_tool called: name={:?} args={}", name, args);
     tracing::info!(tool = %name, args = ?args, "Executing tool");
     match name {
         "log_message" => tool_log_message(args),
         "log_debug" => tool_log_debug(args),
-        "is_any_stage_connected" => tool_is_any_stage_connected(context),
         _ => Err(format!("Unknown tool: {}", name)),
     }
 }
