@@ -1,9 +1,10 @@
 use crate::database::{block_on_db_tokio, DbPool};
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType};
 use crate::models::projects::ProjectUnitResponse;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFetchRelevantUnitsArgs {
     pub query: String,
 }
@@ -24,6 +25,13 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::{BoxError, ToolSpec};
+use gemini_rust::tools::model::FunctionDeclaration;
+
+/// Gemini function declaration with parameter schema so the model receives required arguments.
+pub fn gemini_declaration() -> FunctionDeclaration {
+    FunctionDeclaration::new(TOOL_NAME, spec().description, None)
+        .with_parameters::<ToolFetchRelevantUnitsArgs>()
+}
 
 /// ChatMessageType for messages produced by this tool. Used to register the handler in the tools module.
 pub const MESSAGE_TYPE: ChatMessageType = ChatMessageType::ToolFetchRelevantUnits;
@@ -45,9 +53,10 @@ fn params_schema() -> Value {
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Required search query to filter or find relevant units in the latest production release, it can be a sentence or some keywords or whatever a vector similarity search can handle."
+                "description": "Search query to filter or find relevant units in the latest production release (e.g. user's question, keywords, or a short phrase). Must not be empty."
             }
-        }
+        },
+        "required": ["query"]
     })
 }
 
@@ -57,7 +66,7 @@ pub const TOOL_NAME: &str = "load_latest_production_release_units";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Load units from the latest production release for the current project. Call this to understand the current production architecture before creating or modifying units.",
+        description: "Load units from the latest production release for the current project, filtered by a search query. You MUST always pass the 'query' parameter: set it to the user's exact question or a short phrase summarizing their intent (e.g. 'auth controller', 'payment flow'). Never call this with an empty or missing query. Call this to understand the current production architecture before creating or modifying units.",
         parameters: params_schema(),
     }
 }

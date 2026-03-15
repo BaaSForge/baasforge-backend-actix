@@ -21,7 +21,7 @@ actix-ws = "0.3.1"
 actix-session = { version = "0.11.0", features = ["cookie-session"] }
 actix-limitation = "0.5.1"
 
-schemars = { package = "apistos-schemars", version = "0.8.22" }
+apistos_schemars = { package = "apistos-schemars", version = "0.8.22" }
 apistos = "0.6.0"
 
 # Async Runtime
@@ -92,7 +92,11 @@ rust-s3 = "0.37.1"
 # You'll likely need to build your own wrapper around the OpenAI API.  Here's a starting point:
 # Official OpenAI Rust client (for general API access)
 openai = "1.1.1"
+
 gemini-rust = "1.7"
+# Same crate as gemini-rust uses; required for .with_parameters::<T>() so Gemini receives tool parameter schemas
+schemars = "1.0"
+
 futures = "0.3"
 
 # Authentication (Passport equivalent)

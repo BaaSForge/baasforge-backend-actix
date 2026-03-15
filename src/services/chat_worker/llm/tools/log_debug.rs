@@ -10,12 +10,14 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::ToolSpec;
+use gemini_rust::tools::model::FunctionDeclaration;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 // ----- Payload types (stored in chat_messages.payload for type_ = ToolLogDebug) -----
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolLogDebugArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -40,6 +42,11 @@ pub const MESSAGE_TYPE: ChatMessageType = ChatMessageType::ToolLogDebug;
 
 /// Tool name. Part of the standard tool interface.
 pub const TOOL_NAME: &str = "log_debug";
+
+/// Gemini function declaration with parameter schema.
+pub fn gemini_declaration() -> FunctionDeclaration {
+    FunctionDeclaration::new(TOOL_NAME, spec().description, None).with_parameters::<ToolLogDebugArgs>()
+}
 
 fn params_schema() -> Value {
     json!({

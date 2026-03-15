@@ -1,16 +1,17 @@
 use crate::database::{block_on_db_tokio, DbPool};
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType};
 use crate::models::projects::ProjectReleaseResponse;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct ToolLoadLatestReleasesArgs {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
+pub struct ToolFetchLatestReleasesArgs {
     pub limit: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ToolLoadLatestReleasesPayload {
-    pub args: ToolLoadLatestReleasesArgs,
+pub struct ToolFetchLatestReleasesPayload {
+    pub args: ToolFetchLatestReleasesArgs,
     pub releases: Vec<ProjectReleaseResponse>,
 }
 
@@ -25,15 +26,22 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::{BoxError, ToolSpec};
+use gemini_rust::tools::model::FunctionDeclaration;
+
+/// Gemini function declaration with parameter schema.
+pub fn gemini_declaration() -> FunctionDeclaration {
+    FunctionDeclaration::new(TOOL_NAME, spec().description, None)
+        .with_parameters::<ToolFetchLatestReleasesArgs>()
+}
 
 /// ChatMessageType for messages produced by this tool. Used to register the handler in the tools module.
-pub const MESSAGE_TYPE: ChatMessageType = ChatMessageType::ToolLoadLatestReleases;
+pub const MESSAGE_TYPE: ChatMessageType = ChatMessageType::ToolFetchLatestReleases;
 
 /// Builds the queue message payload from LLM tool-call args. Used by [`super::tool_context_for_chat_session`].
 pub fn payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError> {
-    let args = serde_json::from_value::<ToolLoadLatestReleasesArgs>(args).unwrap_or_default();
-    Ok(ChatMessagePayload::ToolLoadLatestReleases(
-        ToolLoadLatestReleasesPayload {
+    let args = serde_json::from_value::<ToolFetchLatestReleasesArgs>(args).unwrap_or_default();
+    Ok(ChatMessagePayload::ToolFetchLatestReleases(
+        ToolFetchLatestReleasesPayload {
             args,
             releases: vec![],
         },
@@ -76,7 +84,7 @@ pub async fn handler(
 ) {
     let existing = payload
         .as_ref()
-        .and_then(|v| serde_json::from_value::<ToolLoadLatestReleasesPayload>(v.clone()).ok());
+        .and_then(|v| serde_json::from_value::<ToolFetchLatestReleasesPayload>(v.clone()).ok());
     let args = existing.as_ref().map(|p| p.args.clone()).unwrap_or_default();
     let limit = args.limit;
 
@@ -106,7 +114,7 @@ pub async fn handler(
             return;
         }
     };
-    let full_payload = ToolLoadLatestReleasesPayload {
+    let full_payload = ToolFetchLatestReleasesPayload {
         args,
         releases,
     };

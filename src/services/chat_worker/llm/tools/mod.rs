@@ -7,10 +7,12 @@
 //! - **`spec() -> ToolSpec`** — Name, description, and JSON schema for parameters (for LLM declarations).
 //! - **`handler(...)`** — Async fn that processes a consumed queue message (same signature for all tools).
 //! - **`payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError>`** — Builds queue payload from LLM args (used by [`tool_context_for_chat_session`]).
+//! - **`gemini_declaration() -> FunctionDeclaration`** — Gemini declaration with parameter schema (used by [`to_gemini_declarations`]).
 //!
 //! To add a new tool: add `mod my_tool;`, add `my_tool::spec()` to [`all_tool_specs`],
 //! add `(my_tool::MESSAGE_TYPE, my_tool::handler)` to [`tool_message_handlers`],
-//! and add `(my_tool::TOOL_NAME, my_tool::MESSAGE_TYPE, my_tool::payload_from_args)` to [`tool_queue_registry`].
+//! add `(my_tool::TOOL_NAME, my_tool::MESSAGE_TYPE, my_tool::payload_from_args)` to [`tool_queue_registry`],
+//! and add `my_tool::gemini_declaration` to [`gemini_declaration_fns`].
 
 mod log_debug;
 mod log_message;
@@ -19,7 +21,7 @@ mod load_latest_releases;
 
 /// Re-exported for use in [`crate::models::chat_messages::ChatMessagePayload`].
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
-pub use load_latest_releases::ToolLoadLatestReleasesPayload;
+pub use load_latest_releases::ToolFetchLatestReleasesPayload;
 
 use crate::database::DbPool;
 use crate::libs::ids::new_uuid;
@@ -173,12 +175,19 @@ pub fn to_openai_functions() -> Vec<openai::chat::ChatCompletionFunctionDefiniti
         .collect()
 }
 
+/// List of tool functions that produce a Gemini declaration (with parameter schema). Add new tools here when registering.
+fn gemini_declaration_fns() -> &'static [fn() -> gemini_rust::tools::model::FunctionDeclaration] {
+    &[
+        load_latest_production_release_units::gemini_declaration,
+        load_latest_releases::gemini_declaration,
+        log_debug::gemini_declaration,
+        log_message::gemini_declaration,
+    ]
+}
+
+/// Gemini declarations with parameter schemas so the model receives required arguments (e.g. `query`).
 pub fn to_gemini_declarations() -> Vec<gemini_rust::tools::model::FunctionDeclaration> {
-    use gemini_rust::tools::model::FunctionDeclaration;
-    all_tool_specs()
-        .into_iter()
-        .map(|t| FunctionDeclaration::new(t.name, t.description, None))
-        .collect()
+    gemini_declaration_fns().iter().map(|f| f()).collect()
 }
 
 // ----- Tool message handlers (runner → worker) -----

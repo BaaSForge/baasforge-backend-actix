@@ -34,7 +34,7 @@ pub fn load_units_for_latest_production_release(
     project_id: Uuid,
     query: &str,
 ) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
-    println!("load_units_for_latest_production_release query: {}", query);
+    tracing::debug!(query = %query, "load_units_for_latest_production_release");
 
     // let live_version: Option<String> = project_runtimes::table
     //     .filter(project_runtimes::project_id.eq(project_id))
