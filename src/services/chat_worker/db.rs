@@ -32,7 +32,11 @@ pub fn load_previous_session_messages(
 pub fn load_units_for_latest_production_release(
     conn: &mut PooledConn,
     project_id: Uuid,
+    query: Option<&str>,
 ) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    if let Some(q) = query {
+        println!("load_units_for_latest_production_release query: {}", q);
+    }
     // let live_version: Option<String> = project_runtimes::table
     //     .filter(project_runtimes::project_id.eq(project_id))
     //     .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Prod))

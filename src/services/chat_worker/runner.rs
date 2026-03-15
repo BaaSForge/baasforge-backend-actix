@@ -12,7 +12,7 @@ use crate::routes::ws::events::{ChatSessionMessageCreatedPayload, ChatSessionMes
 use crate::routes::ws::redis::{is_message_stopped, publish_event_to_channel};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::build_llm_client;
-use crate::services::chat_worker::llm::tools::spawn_tool_message_handler;
+use crate::services::chat_worker::llm::tools::{spawn_tool_message_handler, ToolMessageContext};
 use crate::services::chat_worker::processor::process_one;
 use crate::services::message_queue::{
     create_shared_publisher, publish_to_dead_letter, publish_to_retry_delay,
@@ -325,6 +325,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .payload
                 .as_ref()
                 .and_then(|p| serde_json::to_value(p).ok());
+            let payload_json_for_insert = payload_json.clone();
             let role = payload.role.clone();
             let type_ = payload.type_.clone();
             let insert_message_id = response_message_id;
@@ -337,7 +338,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         chat_messages::chat_session_id.eq(session_id_insert),
                         chat_messages::role.eq(role),
                         chat_messages::type_.eq(type_),
-                        chat_messages::payload.eq(payload_json),
+                        chat_messages::payload.eq(payload_json_for_insert),
                         chat_messages::status.eq(ChatMessageStatus::Generating),
                     ))
                     .returning(ChatMessageRow::as_returning())
@@ -372,12 +373,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             
             spawn_tool_message_handler(
                 payload.type_.clone(),
-                pool.clone(),
-                redis_conn.clone(),
-                project_id,
-                session_id,
-                response_message_id,
-                user_id,
+                ToolMessageContext {
+                    pool: pool.clone(),
+                    redis_conn: redis_conn.clone(),
+                    project_id,
+                    session_id,
+                    message_id: response_message_id,
+                    user_id,
+                    payload: payload_json,
+                },
             );
             let _ = delivery.acker.ack(BasicAckOptions::default()).await;
         }

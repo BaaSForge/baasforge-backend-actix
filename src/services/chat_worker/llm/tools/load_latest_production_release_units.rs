@@ -42,7 +42,12 @@ pub fn payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError> {
 fn params_schema() -> Value {
     json!({
         "type": "object",
-        "properties": {}
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Optional search query to filter or find relevant units in the latest production release, it can be a sentence or some keywords or whatever a vector similarity search can handle."
+            }
+        }
     })
 }
 
@@ -59,6 +64,7 @@ pub fn spec() -> ToolSpec {
 
 /// Handles a consumed queue message for this tool: load units for the latest production release,
 /// update the message with units and status Completed, then publish Redis status change.
+/// `payload` is the tool message payload from the queue (ChatMessagePayload as JSON), containing the LLM tool-call args.
 pub async fn handler(
     pool: DbPool,
     redis_conn: Arc<Mutex<redis::aio::MultiplexedConnection>>,
@@ -66,9 +72,15 @@ pub async fn handler(
     session_id: Uuid,
     message_id: Uuid,
     user_id: Uuid,
+    payload: Option<Value>,
 ) {
+    let query = payload
+        .as_ref()
+        .and_then(|v| serde_json::from_value::<ToolFetchRelevantUnitsPayload>(v.clone()).ok())
+        .and_then(|p| match p { ToolFetchRelevantUnitsPayload::Args(a) => a.query, _ => None });
+
     let units = match block_on_db_tokio(&pool, move |conn| {
-        load_units_for_latest_production_release(conn, project_id)
+        load_units_for_latest_production_release(conn, project_id, query.as_deref())
     })
     .await
     {

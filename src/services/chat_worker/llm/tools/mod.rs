@@ -175,67 +175,78 @@ pub fn to_gemini_declarations() -> Vec<gemini_rust::tools::model::FunctionDeclar
 
 // ----- Tool message handlers (runner → worker) -----
 
+type RedisConn = Arc<Mutex<redis::aio::MultiplexedConnection>>;
+
+/// Arguments passed to a tool message handler when a queue message is consumed.
+/// Handlers receive this struct so the meaning of each value is clear.
+#[derive(Clone)]
+pub struct ToolMessageContext {
+    pub pool: DbPool,
+    pub redis_conn: RedisConn,
+    pub project_id: Uuid,
+    pub session_id: Uuid,
+    pub message_id: Uuid,
+    pub user_id: Uuid,
+    /// Tool message payload from the queue (same as stored on the message). Handlers can use
+    /// tool-call args without querying the DB.
+    pub payload: Option<Value>,
+}
+
 /// Type of a handler that processes a tool message (e.g. after a queue message is consumed).
-pub type ToolMessageHandler = Arc<
-    dyn Fn(
-            DbPool,
-            Arc<Mutex<redis::aio::MultiplexedConnection>>,
-            Uuid,
-            Uuid,
-            Uuid,
-            Uuid,
-        ) -> Pin<Box<dyn Future<Output = ()> + Send>>
-        + Send
-        + Sync,
->;
+pub type ToolMessageHandler =
+    Arc<dyn Fn(ToolMessageContext) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+/// Wraps an async handler that takes payload into a [`ToolMessageHandler`].
+fn wrap_handler_with_payload<F, Fut>(handler: F) -> ToolMessageHandler
+where
+    F: Fn(DbPool, RedisConn, Uuid, Uuid, Uuid, Uuid, Option<Value>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    Arc::new(move |ctx: ToolMessageContext| {
+        Box::pin(handler(
+            ctx.pool,
+            ctx.redis_conn,
+            ctx.project_id,
+            ctx.session_id,
+            ctx.message_id,
+            ctx.user_id,
+            ctx.payload,
+        ))
+    })
+}
+
+/// Wraps an async handler that ignores payload into a [`ToolMessageHandler`].
+fn wrap_handler_no_payload<F, Fut>(handler: F) -> ToolMessageHandler
+where
+    F: Fn(DbPool, RedisConn, Uuid, Uuid, Uuid, Uuid) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    Arc::new(move |ctx: ToolMessageContext| {
+        Box::pin(handler(
+            ctx.pool,
+            ctx.redis_conn,
+            ctx.project_id,
+            ctx.session_id,
+            ctx.message_id,
+            ctx.user_id,
+        ))
+    })
+}
 
 /// List of (MESSAGE_TYPE, handler) for all queue-based tools. Add new tools here.
 fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
     static HANDLERS: OnceLock<Vec<(ChatMessageType, ToolMessageHandler)>> = OnceLock::new();
-    let v = HANDLERS.get_or_init(|| {
+    HANDLERS.get_or_init(|| {
         vec![
             (
                 load_latest_production_release_units::MESSAGE_TYPE,
-                Arc::new(
-                    |pool, redis_conn, project_id, session_id, message_id, user_id| {
-                        Box::pin(async move {
-                            load_latest_production_release_units::handler(
-                                pool, redis_conn, project_id, session_id, message_id, user_id,
-                            )
-                            .await
-                        }) as Pin<Box<dyn Future<Output = ()> + Send>>
-                    },
-                ) as ToolMessageHandler,
+                wrap_handler_with_payload(load_latest_production_release_units::handler),
             ),
-            (
-                log_debug::MESSAGE_TYPE,
-                Arc::new(
-                    |pool, redis_conn, project_id, session_id, message_id, user_id| {
-                        Box::pin(async move {
-                            log_debug::handler(
-                                pool, redis_conn, project_id, session_id, message_id, user_id,
-                            )
-                            .await
-                        }) as Pin<Box<dyn Future<Output = ()> + Send>>
-                    },
-                ) as ToolMessageHandler,
-            ),
-            (
-                log_message::MESSAGE_TYPE,
-                Arc::new(
-                    |pool, redis_conn, project_id, session_id, message_id, user_id| {
-                        Box::pin(async move {
-                            log_message::handler(
-                                pool, redis_conn, project_id, session_id, message_id, user_id,
-                            )
-                            .await
-                        }) as Pin<Box<dyn Future<Output = ()> + Send>>
-                    },
-                ) as ToolMessageHandler,
-            ),
+            (log_debug::MESSAGE_TYPE, wrap_handler_no_payload(log_debug::handler)),
+            (log_message::MESSAGE_TYPE, wrap_handler_no_payload(log_message::handler)),
         ]
-    });
-    v.as_slice()
+    })
+    .as_slice()
 }
 
 /// Returns the handler for the given message type, if any.
@@ -248,20 +259,14 @@ fn tool_message_handler(type_: ChatMessageType) -> Option<ToolMessageHandler> {
 
 /// Spawns the appropriate tool handler for the given message type. Does nothing if the type
 /// has no registered handler. Call this from the runner instead of matching on each tool type.
+/// `payload` should be the tool message payload from the queue (e.g. `ChatMessagePayload` as JSON).
 pub fn spawn_tool_message_handler(
     type_: ChatMessageType,
-    pool: DbPool,
-    redis_conn: Arc<Mutex<redis::aio::MultiplexedConnection>>,
-    project_id: Uuid,
-    session_id: Uuid,
-    message_id: Uuid,
-    user_id: Uuid,
+    ctx: ToolMessageContext,
 ) -> bool {
     if let Some(handler) = tool_message_handler(type_) {
-        let pool_handle = pool.clone();
-        let redis_handle = redis_conn.clone();
         tokio::spawn(async move {
-            handler(pool_handle, redis_handle, project_id, session_id, message_id, user_id).await;
+            handler(ctx).await;
         });
         true
     } else {
