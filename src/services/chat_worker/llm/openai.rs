@@ -300,6 +300,7 @@ pub async fn call_gpt_stream(
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
     message_id: i64,
+    tool_context: Option<&tools::ToolContext>,
 ) -> Result<GenerateOutcome, BoxError> {
     let messages = build_chat_messages(session_messages, user_text);
     let functions = tools::to_openai_functions();
@@ -461,7 +462,7 @@ pub async fn call_gpt_stream(
                 let args: Value = serde_json::from_str(arguments)
                     .unwrap_or(Value::Object(serde_json::Map::new()));
                 tracing::info!(tool = %name, args = %arguments, "OpenAI requested tool call, executing");
-                tools::execute_tool(name, &args).map_err(|e| {
+                tools::execute_tool(name, &args, tool_context).map_err(|e| {
                     let msg = format!("Tool execution failed: {}", e);
                     Box::<dyn std::error::Error + Send + Sync>::from(msg)
                 })?;

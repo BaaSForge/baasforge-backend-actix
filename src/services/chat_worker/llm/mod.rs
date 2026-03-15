@@ -45,6 +45,7 @@ impl LlmClient {
         redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
         topic: &str,
         message_id: i64,
+        tool_context: Option<&crate::services::chat_worker::llm::tools::ToolContext>,
     ) -> Result<GenerateOutcome, BoxError> {
         match self {
             LlmClient::OpenAi { credentials, model } => {
@@ -56,6 +57,7 @@ impl LlmClient {
                     redis_conn,
                     topic,
                     message_id,
+                    tool_context,
                 )
                 .await
             }
@@ -68,6 +70,7 @@ impl LlmClient {
                     redis_conn,
                     topic,
                     message_id,
+                    tool_context,
                 )
                 .await
             }
