@@ -467,10 +467,7 @@ pub async fn call_gpt_stream(
                 let args: Value = serde_json::from_str(arguments)
                     .unwrap_or(Value::Object(serde_json::Map::new()));
                 tracing::info!(tool = %name, args = %arguments, "OpenAI requested tool call, executing");
-                tools::execute_tool(name, &args).map_err(|e| {
-                    let msg = format!("Tool execution failed: {}", e);
-                    Box::<dyn std::error::Error + Send + Sync>::from(msg)
-                })?;
+                tools::execute_tool_async(name, args).await?;
             }
             // GPT can send both content and tool_calls in the same response. Prefer stream-accumulated
             // full_text (we built it in the loop); the crate's merge() often keeps only the last

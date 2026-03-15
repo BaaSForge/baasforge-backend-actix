@@ -12,8 +12,11 @@ use crate::routes::ws::events::{ChatSessionMessageCreatedPayload, ChatSessionMes
 use crate::routes::ws::redis::{is_message_stopped, publish_event_to_channel};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::build_llm_client;
+use crate::services::chat_worker::llm::tools::spawn_tool_message_handler;
 use crate::services::chat_worker::processor::process_one;
-use crate::services::message_queue::{publish_to_dead_letter, publish_to_retry_delay};
+use crate::services::message_queue::{
+    create_shared_publisher, publish_to_dead_letter, publish_to_retry_delay,
+};
 use diesel::prelude::*;
 use lapin::options::BasicAckOptions;
 use lapin::ConnectionProperties;
@@ -103,6 +106,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     let retry_channel = connection.create_channel().await
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    let rabbit_publisher = create_shared_publisher(
+        &rabbit_url,
+        chat_message_queue::CHAT_SESSION_EXCHANGE,
+    )
+    .await
+    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     info!("Chat worker started. Consuming from work queue.");
 
     while let Some(delivery_result) = consumer.next().await {
@@ -139,58 +148,57 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             continue;
         }
 
-        let (user_id, user_text) = match payload.as_user_text_message() {
-            Some(x) => x,
-            None => {
-                let _ = delivery.acker.ack(BasicAckOptions::default()).await;
-                continue;
-            }
-        };
-
         let response_message_id = payload.response_message_id;
 
-        // If user already requested stop for this message, ack and skip so it is not picked by another consumer
-        {
-            let mut guard = redis_conn.lock().await;
-            if let Ok(true) = is_message_stopped(&mut *guard, response_message_id).await {
-                tracing::info!(
-                    %project_id,
-                    %session_id,
-                    %response_message_id,
-                    "Message marked stopped in Redis, acking and skipping"
-                );
-                let _ = delivery.acker.ack(BasicAckOptions::default()).await;
-                continue;
+        if payload.type_ == ChatMessageType::Text {
+            let (user_id, user_text) = match payload.as_user_text_message() {
+                Some(x) => x,
+                None => {
+                    let _ = delivery.acker.ack(BasicAckOptions::default()).await;
+                    continue;
+                }
+            };
+
+            {
+                let mut guard = redis_conn.lock().await;
+                if let Ok(true) = is_message_stopped(&mut *guard, response_message_id).await {
+                    tracing::info!(
+                        %project_id,
+                        %session_id,
+                        %response_message_id,
+                        "Message marked stopped in Redis, acking and skipping"
+                    );
+                    let _ = delivery.acker.ack(BasicAckOptions::default()).await;
+                    continue;
+                }
             }
-        }
 
-        // For TEXT (streaming) messages we do not create the AI message row here.
-        // The processor will create it when the first streaming chunk arrives, so we avoid empty messages (e.g. when the AI only calls tools).
+            let retry_num = payload.retry_num;
+            let pool = pool.clone();
+            let redis_conn = redis_conn.clone();
+            let llm_client = llm_client.clone();
+            let acker = delivery.acker.clone();
+            let retry_channel = retry_channel.clone();
+            let rabbit_publisher = rabbit_publisher.clone();
+            let retry_delay_exchange = retry_delay_exchange.clone();
+            let delivery_data = delivery.data.clone();
+            let retry_routing_key = routing_key.clone();
+            let retry_policy = chat_retry_policy();
+            let dead_letter_spec = chat_dead_letter_spec();
 
-        let retry_num = payload.retry_num;
-        let pool = pool.clone();
-        let redis_conn = redis_conn.clone();
-        let llm_client = llm_client.clone();
-        let acker = delivery.acker.clone();
-        let retry_channel = retry_channel.clone();
-        let retry_delay_exchange = retry_delay_exchange.clone();
-        let delivery_data = delivery.data.clone();
-        let retry_routing_key = routing_key.clone();
-        let retry_policy = chat_retry_policy();
-        let dead_letter_spec = chat_dead_letter_spec();
-
-        tokio::spawn(async move {
-            let result = process_one(
-                &pool,
-                &llm_client,
-                &redis_conn,
-                user_id,
-                project_id,
-                session_id,
-                &user_text,
-                response_message_id,
-            )
-            .await;
+            tokio::spawn(async move {
+                let result = process_one(
+                    &pool,
+                    &llm_client,
+                    &redis_conn,
+                    &rabbit_publisher,
+                    user_id,
+                    project_id,
+                    session_id,
+                    &user_text,
+                    response_message_id,
+                )
+                .await;
 
             match &result {
                 Ok(()) => {}
@@ -310,6 +318,69 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 tracing::warn!("Failed to ack delivery");
             }
         });
+        } else {
+            // Non-TEXT: create message in DB, publish Redis "new message created", then type-specific handler.
+            let user_id = payload.user_id.expect("validated");
+            let payload_json = payload
+                .payload
+                .as_ref()
+                .and_then(|p| serde_json::to_value(p).ok());
+            let role = payload.role.clone();
+            let type_ = payload.type_.clone();
+            let insert_message_id = response_message_id;
+            let pool_clone = pool.clone();
+            let session_id_insert = session_id;
+            let inserted_row = match block_on_db_tokio(&pool_clone, move |conn| {
+                diesel::insert_into(chat_messages::table)
+                    .values((
+                        chat_messages::id.eq(insert_message_id),
+                        chat_messages::chat_session_id.eq(session_id_insert),
+                        chat_messages::role.eq(role),
+                        chat_messages::type_.eq(type_),
+                        chat_messages::payload.eq(payload_json),
+                        chat_messages::status.eq(ChatMessageStatus::Generating),
+                    ))
+                    .returning(ChatMessageRow::as_returning())
+                    .get_result(conn)
+            })
+            .await
+            {
+                Ok(row) => row,
+                Err(e) => {
+                    tracing::error!(
+                        %project_id,
+                        %session_id,
+                        %response_message_id,
+                        "Failed to create non-TEXT message in DB: {}",
+                        e
+                    );
+                    let _ = delivery.acker.ack(BasicAckOptions::default()).await;
+                    continue;
+                }
+            };
+            let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+            let created_message = ChatMessageResponse::from(inserted_row);
+            let event = WsServerEvent::ChatSessionMessageCreated(ChatSessionMessageCreatedPayload {
+                message: created_message,
+            });
+            {
+                let mut guard = redis_conn.lock().await;
+                if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &event).await {
+                    tracing::warn!("Failed to publish new message to Redis: {}", e);
+                }
+            }
+            
+            spawn_tool_message_handler(
+                payload.type_.clone(),
+                pool.clone(),
+                redis_conn.clone(),
+                project_id,
+                session_id,
+                response_message_id,
+                user_id,
+            );
+            let _ = delivery.acker.ack(BasicAckOptions::default()).await;
+        }
     }
 
     Ok(())

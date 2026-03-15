@@ -8,6 +8,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::models::projects::ProjectUnitResponse;
+use crate::services::chat_worker::llm::tools::ToolFetchRelevantUnitsPayload;
 
 #[derive(Debug, DbEnum, Serialize, Clone, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::ChatSessionRoleType"]
@@ -26,6 +27,9 @@ pub enum ChatMessageType {
     Text,
     Units,
     Unit,
+    ToolFetchRelevantUnits,
+    ToolLogDebug,
+    ToolLogMessage,
     Generating,
     GeneratingFailed,
     GeneratingSucceed,
@@ -48,6 +52,9 @@ pub enum ChatMessagePayload {
     Text(String),
     Unit(ProjectUnitResponse),
     Units(Vec<ProjectUnitResponse>),
+    ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
+    ToolLogDebug(Value),
+    ToolLogMessage(Value),
     Generating(Option<Value>),
     GeneratingFailed(Option<Value>),
     GeneratingSucceed(Option<Value>),
@@ -71,6 +78,12 @@ impl ChatMessagePayload {
                 let arr = serde_json::from_value::<Vec<ProjectUnitResponse>>(v)?;
                 ChatMessagePayload::Units(arr)
             }
+            ChatMessageType::ToolFetchRelevantUnits => {
+                let p = serde_json::from_value::<ToolFetchRelevantUnitsPayload>(v)?;
+                ChatMessagePayload::ToolFetchRelevantUnits(p)
+            }
+            ChatMessageType::ToolLogDebug => ChatMessagePayload::ToolLogDebug(v),
+            ChatMessageType::ToolLogMessage => ChatMessagePayload::ToolLogMessage(v),
             ChatMessageType::Generating => ChatMessagePayload::Generating(Some(v)),
             ChatMessageType::GeneratingFailed => ChatMessagePayload::GeneratingFailed(Some(v)),
             ChatMessageType::GeneratingSucceed => ChatMessagePayload::GeneratingSucceed(Some(v)),

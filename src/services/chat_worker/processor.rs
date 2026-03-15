@@ -3,6 +3,7 @@ use crate::models::chat_messages::ChatMessageStatus;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_previous_session_messages;
 use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient, OnFirstChunkFn};
+use crate::services::chat_worker::llm::tools::{tool_context_for_chat_session, with_tool_context};
 use crate::services::chat_worker::runner;
 use diesel::prelude::*;
 use redis::aio::MultiplexedConnection;
@@ -15,6 +16,7 @@ pub async fn process_one(
     pool: &DbPool,
     llm_client: &LlmClient,
     redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    rabbit_publisher: &Arc<crate::services::message_queue::SharedRabbitPublisher>,
     user_id: Uuid,
     project_id: Uuid,
     session_id: Uuid,
@@ -45,16 +47,21 @@ pub async fn process_one(
             .await
         })
     }));
-    let outcome = llm_client
-        .generate(
-            &session_messages,
-            user_text,
-            Some(redis_conn.clone()),
-            &topic,
-            placeholder_ai_message_id,
-            on_first_content_chunk,
-        )
-        .await?;
+    let tool_ctx = tool_context_for_chat_session(
+        rabbit_publisher.clone(),
+        user_id,
+        project_id,
+        session_id,
+    );
+    let outcome = with_tool_context(tool_ctx, llm_client.generate(
+        &session_messages,
+        user_text,
+        Some(redis_conn.clone()),
+        &topic,
+        placeholder_ai_message_id,
+        on_first_content_chunk,
+    ))
+    .await?;
 
     match outcome {
         GenerateOutcome::Stopped(partial) => {

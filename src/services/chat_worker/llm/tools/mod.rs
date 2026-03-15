@@ -1,0 +1,270 @@
+//! # Tool module standard (one tool per file)
+//!
+//! Every tool module must provide:
+//!
+//! - **`TOOL_NAME: &'static str`** — Unique tool name for the LLM.
+//! - **`MESSAGE_TYPE: ChatMessageType`** — Message type for queue/DB messages produced by this tool.
+//! - **`spec() -> ToolSpec`** — Name, description, and JSON schema for parameters (for LLM declarations).
+//! - **`handler(...)`** — Async fn that processes a consumed queue message (same signature for all tools).
+//! - **`payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError>`** — Builds queue payload from LLM args (used by [`tool_context_for_chat_session`]).
+//!
+//! To add a new tool: add `mod my_tool;`, add `my_tool::spec()` to [`all_tool_specs`],
+//! add `(my_tool::MESSAGE_TYPE, my_tool::handler)` to [`tool_message_handlers`],
+//! and add `(my_tool::TOOL_NAME, my_tool::MESSAGE_TYPE, my_tool::payload_from_args)` to [`tool_queue_registry`].
+
+mod log_debug;
+mod log_message;
+mod load_latest_production_release_units;
+
+/// Re-exported for use in [`crate::models::chat_messages::ChatMessagePayload`].
+pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
+
+use crate::database::DbPool;
+use crate::libs::ids::new_uuid;
+use crate::models::chat_messages::{
+    ChatMessagePayload, ChatMessageType, ChatSessionRoleType,
+};
+use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
+use crate::services::message_queue::SharedRabbitPublisher;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::OnceLock;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use uuid::Uuid;
+
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// Callback type for queue-based tools: each is invoked with raw args and returns the new message id.
+pub type OnToolCall =
+    Arc<dyn Fn(Value) -> Pin<Box<dyn Future<Output = Result<Uuid, BoxError>> + Send>> + Send + Sync>;
+
+#[derive(Clone, Debug)]
+pub struct ToolSpec {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub parameters: Value,
+}
+
+/// Context for tool execution (callbacks keyed by TOOL_NAME). Set once per request via [`with_tool_context`].
+#[derive(Clone, Default)]
+pub struct ToolContext {
+    /// Map from tool name (e.g. each module’s `TOOL_NAME`) to callback that publishes to the queue.
+    pub callbacks: HashMap<String, OnToolCall>,
+}
+
+tokio::task_local! {
+    /// Task-local tool context so the LLM layer does not need to pass callbacks through.
+    static TOOL_CONTEXT: Arc<ToolContext>;
+}
+
+/// Runs the given future with the tool context set. Call this at the entry point (e.g. processor)
+/// so that [`execute_tool_async`] can resolve async tools without any callback parameters.
+pub async fn with_tool_context<F, R>(ctx: ToolContext, f: F) -> R
+where
+    F: Future<Output = R>,
+{
+    TOOL_CONTEXT.scope(Arc::new(ctx), f).await
+}
+
+/// Function type each queue-based tool implements: args from LLM → payload for the queue message.
+type PayloadFromArgsFn = fn(Value) -> Result<ChatMessagePayload, BoxError>;
+
+/// Registry of (TOOL_NAME, MESSAGE_TYPE, payload_from_args). Add new tools here.
+fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFromArgsFn)] {
+    &[
+        (
+            load_latest_production_release_units::TOOL_NAME,
+            load_latest_production_release_units::MESSAGE_TYPE,
+            load_latest_production_release_units::payload_from_args,
+        ),
+        (log_debug::TOOL_NAME, log_debug::MESSAGE_TYPE, log_debug::payload_from_args),
+        (log_message::TOOL_NAME, log_message::MESSAGE_TYPE, log_message::payload_from_args),
+    ]
+}
+
+/// Builds a [`ToolContext`] with one callback per tool in [`tool_queue_registry`]. Each callback
+/// converts args to a queue payload and publishes. Use at the entry point (e.g. processor) before
+/// calling [`with_tool_context`].
+pub fn tool_context_for_chat_session(
+    publisher: Arc<SharedRabbitPublisher>,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> ToolContext {
+    let mut callbacks = HashMap::new();
+    for (name, message_type, payload_from_args) in tool_queue_registry() {
+        let publisher = publisher.clone();
+        let message_type = message_type.clone();
+        let payload_from_args = *payload_from_args;
+        callbacks.insert(
+            (*name).to_string(),
+            Arc::new(move |args: Value| {
+                let publisher = publisher.clone();
+                let user_id = user_id;
+                let project_id = project_id;
+                let session_id = session_id;
+                let message_type = message_type.clone();
+                let payload_from_args = payload_from_args;
+                Box::pin(async move {
+                    let response_message_id = new_uuid();
+                    let payload = payload_from_args(args).map_err(|e| -> BoxError { e })?;
+                    let message = ChatSessionQueueMessage {
+                        user_id: Some(user_id),
+                        role: ChatSessionRoleType::Ai,
+                        type_: message_type,
+                        payload: Some(payload),
+                        response_message_id,
+                        retry_num: 0,
+                    };
+                    chat_message_queue::publish_with_publisher(
+                        &publisher,
+                        project_id,
+                        session_id,
+                        &message,
+                    )
+                    .await
+                    .map_err(|e| -> BoxError { Box::new(e) })?;
+                    Ok(response_message_id)
+                }) as Pin<Box<dyn Future<Output = Result<Uuid, BoxError>> + Send>>
+            }) as OnToolCall,
+        );
+    }
+    ToolContext { callbacks }
+}
+
+pub fn all_tool_specs() -> Vec<ToolSpec> {
+    vec![
+        log_message::spec(),
+        log_debug::spec(),
+        load_latest_production_release_units::spec(),
+    ]
+}
+
+/// Single entry point for the LLM layer: runs queue-based tools via the callback registered under `name`.
+/// All tools publish to RabbitMQ; worker creates message and spawns handler.
+pub async fn execute_tool_async(name: &str, args: Value) -> Result<String, BoxError> {
+    let cb = TOOL_CONTEXT
+        .try_with(|ctx| ctx.callbacks.get(name).cloned())
+        .map_err(|_| "tools: TOOL_CONTEXT not set (call with_tool_context first)".to_string())?
+        .ok_or_else(|| format!("Unknown tool or callback not registered: {}", name))?;
+    cb(args).await?;
+    Ok("Request queued.".to_string())
+}
+
+pub fn to_openai_functions() -> Vec<openai::chat::ChatCompletionFunctionDefinition> {
+    all_tool_specs()
+        .into_iter()
+        .map(|t| openai::chat::ChatCompletionFunctionDefinition {
+            name: t.name.to_string(),
+            description: Some(t.description.to_string()),
+            parameters: Some(t.parameters),
+        })
+        .collect()
+}
+
+pub fn to_gemini_declarations() -> Vec<gemini_rust::tools::model::FunctionDeclaration> {
+    use gemini_rust::tools::model::FunctionDeclaration;
+    all_tool_specs()
+        .into_iter()
+        .map(|t| FunctionDeclaration::new(t.name, t.description, None))
+        .collect()
+}
+
+// ----- Tool message handlers (runner → worker) -----
+
+/// Type of a handler that processes a tool message (e.g. after a queue message is consumed).
+pub type ToolMessageHandler = Arc<
+    dyn Fn(
+            DbPool,
+            Arc<Mutex<redis::aio::MultiplexedConnection>>,
+            Uuid,
+            Uuid,
+            Uuid,
+            Uuid,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// List of (MESSAGE_TYPE, handler) for all queue-based tools. Add new tools here.
+fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
+    static HANDLERS: OnceLock<Vec<(ChatMessageType, ToolMessageHandler)>> = OnceLock::new();
+    let v = HANDLERS.get_or_init(|| {
+        vec![
+            (
+                load_latest_production_release_units::MESSAGE_TYPE,
+                Arc::new(
+                    |pool, redis_conn, project_id, session_id, message_id, user_id| {
+                        Box::pin(async move {
+                            load_latest_production_release_units::handler(
+                                pool, redis_conn, project_id, session_id, message_id, user_id,
+                            )
+                            .await
+                        }) as Pin<Box<dyn Future<Output = ()> + Send>>
+                    },
+                ) as ToolMessageHandler,
+            ),
+            (
+                log_debug::MESSAGE_TYPE,
+                Arc::new(
+                    |pool, redis_conn, project_id, session_id, message_id, user_id| {
+                        Box::pin(async move {
+                            log_debug::handler(
+                                pool, redis_conn, project_id, session_id, message_id, user_id,
+                            )
+                            .await
+                        }) as Pin<Box<dyn Future<Output = ()> + Send>>
+                    },
+                ) as ToolMessageHandler,
+            ),
+            (
+                log_message::MESSAGE_TYPE,
+                Arc::new(
+                    |pool, redis_conn, project_id, session_id, message_id, user_id| {
+                        Box::pin(async move {
+                            log_message::handler(
+                                pool, redis_conn, project_id, session_id, message_id, user_id,
+                            )
+                            .await
+                        }) as Pin<Box<dyn Future<Output = ()> + Send>>
+                    },
+                ) as ToolMessageHandler,
+            ),
+        ]
+    });
+    v.as_slice()
+}
+
+/// Returns the handler for the given message type, if any.
+fn tool_message_handler(type_: ChatMessageType) -> Option<ToolMessageHandler> {
+    tool_message_handlers()
+        .iter()
+        .find(|(t, _)| t == &type_)
+        .map(|(_, h)| h.clone())
+}
+
+/// Spawns the appropriate tool handler for the given message type. Does nothing if the type
+/// has no registered handler. Call this from the runner instead of matching on each tool type.
+pub fn spawn_tool_message_handler(
+    type_: ChatMessageType,
+    pool: DbPool,
+    redis_conn: Arc<Mutex<redis::aio::MultiplexedConnection>>,
+    project_id: Uuid,
+    session_id: Uuid,
+    message_id: Uuid,
+    user_id: Uuid,
+) -> bool {
+    if let Some(handler) = tool_message_handler(type_) {
+        let pool_handle = pool.clone();
+        let redis_handle = redis_conn.clone();
+        tokio::spawn(async move {
+            handler(pool_handle, redis_handle, project_id, session_id, message_id, user_id).await;
+        });
+        true
+    } else {
+        false
+    }
+}
