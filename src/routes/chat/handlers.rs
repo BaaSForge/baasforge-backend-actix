@@ -347,7 +347,7 @@ pub async fn handle_create_chat_session_message(
     let response_message_id = new_uuid();
     let queue_message = ChatSessionQueueMessage {
         user_id: Some(user_id),
-        role: ChatSessionRoleType::User,
+        role: ChatSessionRoleType::Ai,
         type_: message.type_.clone(),
         payload: message.payload.clone(),
         response_message_id,

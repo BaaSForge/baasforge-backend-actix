@@ -73,18 +73,21 @@ impl ChatSessionQueueMessage {
         if matches!(self.role, ChatSessionRoleType::User) && self.user_id.is_none() {
             return Err("user_id is required when role is User");
         }
+        // Ai + Text is used for continuation after tool calls; user_id is required to run process_one.
+        if matches!(self.role, ChatSessionRoleType::Ai)
+            && matches!(self.type_, ChatMessageType::Text)
+            && self.user_id.is_none()
+        {
+            return Err("user_id is required when role is Ai and type is Text");
+        }
         Ok(())
     }
 
-    // TODO: We may need to remove this logic and handle it inside ChatMessagePayload
-    pub fn as_user_text_message(&self) -> Option<(Uuid, String)> {
-        if !matches!(self.role, ChatSessionRoleType::User) {
-            return None;
-        }
-        let user_id = self.user_id?;
+    pub fn as_text_message_for_processing(&self) -> Option<(Uuid, String)> {
         if !matches!(self.type_, ChatMessageType::Text) {
             return None;
         }
+        let user_id = self.user_id?;
         let text = match &self.payload {
             Some(ChatMessagePayload::Text(p)) => p.text.clone(),
             _ => return None,

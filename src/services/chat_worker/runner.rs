@@ -106,7 +106,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let response_message_id = payload.response_message_id;
 
         if payload.type_ == ChatMessageType::Text {
-            let (user_id, user_text) = match payload.as_user_text_message() {
+            let (user_id, user_text) = match payload.as_text_message_for_processing() {
                 Some(x) => x,
                 None => {
                     let _ = delivery.acker.ack(BasicAckOptions::default()).await;
@@ -339,6 +339,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     user_id,
                     payload: payload_json,
                     invoking_message_id: payload.invoking_message_id,
+                    rabbit_publisher: Some(rabbit_publisher.clone()),
                 },
             );
             let _ = delivery.acker.ack(BasicAckOptions::default()).await;

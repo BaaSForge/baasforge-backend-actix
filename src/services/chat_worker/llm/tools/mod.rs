@@ -24,7 +24,7 @@ pub use load_latest_releases::ToolFetchLatestReleasesPayload;
 use crate::database::{block_on_db_tokio, DbPool};
 use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
-    ChatMessagePayload, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
+    ChatMessagePayload, ChatMessageStatus, ChatMessageType, ChatSessionRoleType, TextPayload,
 };
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, WsServerEvent};
@@ -110,7 +110,6 @@ pub fn tool_context_for_chat_session(
         let publisher = publisher.clone();
         let message_type = message_type.clone();
         let payload_from_args = *payload_from_args;
-        let invoking_message_id = invoking_message_id;
         callbacks.insert(
             (*name).to_string(),
             Arc::new(move |args: Value| {
@@ -120,7 +119,6 @@ pub fn tool_context_for_chat_session(
                 let session_id = session_id;
                 let message_type = message_type.clone();
                 let payload_from_args = payload_from_args;
-                let invoking_message_id = invoking_message_id;
                 Box::pin(async move {
                     let response_message_id = new_uuid();
                     let payload = payload_from_args(args).map_err(|e| -> BoxError { e })?;
@@ -245,6 +243,8 @@ pub struct ToolMessageContext {
     pub payload: Option<Value>,
     /// When set, this tool message was invoked by the AI message with this id; when all such tool messages are done, that message's status is updated to Completed or Failed.
     pub invoking_message_id: Option<Uuid>,
+    /// When set, after all tool messages for the invoking message are done we publish a continuation message to RabbitMQ so the LLM continues generating (same as POST flow).
+    pub rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
 }
 
 /// Type of a handler that processes a tool message (e.g. after a queue message is consumed).
@@ -290,6 +290,7 @@ pub async fn on_tool_message_finished(ctx: &ToolMessageContext, result: Result<(
         maybe_complete_invoking_message(
             &ctx.pool,
             &ctx.redis_conn,
+            ctx.rabbit_publisher.as_ref(),
             inv_id,
             ctx.user_id,
             ctx.project_id,
@@ -326,10 +327,12 @@ fn tool_message_handler(type_: ChatMessageType) -> Option<ToolMessageHandler> {
 }
 
 /// After a tool message completes (success or failure), check whether the invoking AI message
-/// has all its tool messages done; if so, set the AI message status to Completed or Failed.
+/// has all its tool messages done; if so, set the AI message status to Completed or Failed,
+/// and when a publisher is provided, publish a continuation message to RabbitMQ so the LLM continues (same as POST when user sends a new message).
 pub async fn maybe_complete_invoking_message(
     pool: &DbPool,
     redis_conn: &RedisConn,
+    rabbit_publisher: Option<&Arc<SharedRabbitPublisher>>,
     invoking_message_id: Uuid,
     user_id: Uuid,
     project_id: Uuid,
@@ -422,6 +425,46 @@ pub async fn maybe_complete_invoking_message(
             "maybe_complete_invoking_message: failed to publish status change: {}",
             e
         );
+    }
+    drop(guard);
+
+    // Publish to RabbitMQ so the worker runs process_one again and the LLM continues (same as when user sends a new message: User + Text with empty string).
+    if let Some(publisher) = rabbit_publisher {
+        let response_message_id = new_uuid();
+        let queue_message = ChatSessionQueueMessage {
+            user_id: Some(user_id),
+            role: ChatSessionRoleType::Ai,
+            type_: ChatMessageType::Text,
+            payload: Some(ChatMessagePayload::Text(TextPayload {
+                text: String::new(),
+                requested_tool_calls: None,
+            })),
+            response_message_id,
+            retry_num: 0,
+            invoking_message_id: None,
+        };
+        if let Err(e) = chat_message_queue::publish_with_publisher(
+            publisher,
+            project_id,
+            session_id,
+            &queue_message,
+        )
+        .await
+        {
+            tracing::error!(
+                %invoking_message_id,
+                %project_id,
+                %session_id,
+                "maybe_complete_invoking_message: failed to publish continuation to queue: {}",
+                e
+            );
+        } else {
+            tracing::info!(
+                %invoking_message_id,
+                %response_message_id,
+                "Published message to queue so LLM continues after tool calls"
+            );
+        }
     }
 }
 
