@@ -284,6 +284,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let role = payload.role.clone();
             let type_ = payload.type_.clone();
             let insert_message_id = response_message_id;
+            let invoking_message_id_insert = payload.invoking_message_id;
             let pool_clone = pool.clone();
             let session_id_insert = session_id;
             let inserted_row = match block_on_db_tokio(&pool_clone, move |conn| {
@@ -295,6 +296,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         chat_messages::type_.eq(type_),
                         chat_messages::payload.eq(payload_json_for_insert),
                         chat_messages::status.eq(ChatMessageStatus::Generating),
+                        chat_messages::invoking_message_id.eq(invoking_message_id_insert),
                     ))
                     .returning(ChatMessageRow::as_returning())
                     .get_result(conn)
@@ -336,6 +338,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     message_id: response_message_id,
                     user_id,
                     payload: payload_json,
+                    invoking_message_id: payload.invoking_message_id,
                 },
             );
             let _ = delivery.acker.ack(BasicAckOptions::default()).await;

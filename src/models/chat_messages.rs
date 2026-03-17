@@ -44,14 +44,8 @@ pub enum ChatSessionRoleType {
 pub enum ChatMessageType {
     Text,
     Units,
-    Unit,
     ToolFetchRelevantUnits,
     ToolFetchLatestReleases,
-    ToolLogDebug,
-    ToolLogMessage,
-    Generating,
-    GeneratingFailed,
-    GeneratingSucceed,
 }
 
 #[derive(Debug, DbEnum, Serialize, Clone, Deserialize, PartialEq)]
@@ -69,15 +63,9 @@ pub enum ChatMessageStatus {
 #[serde(untagged)]
 pub enum ChatMessagePayload {
     Text(TextPayload),
-    Unit(ProjectUnitResponse),
     Units(Vec<ProjectUnitResponse>),
     ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
     ToolFetchLatestReleases(ToolFetchLatestReleasesPayload),
-    ToolLogDebug(Value),
-    ToolLogMessage(Value),
-    Generating(Option<Value>),
-    GeneratingFailed(Option<Value>),
-    GeneratingSucceed(Option<Value>),
 }
 
 impl ChatMessagePayload {
@@ -89,10 +77,6 @@ impl ChatMessagePayload {
             ChatMessageType::Text => {
                 let text_payload = serde_json::from_value::<TextPayload>(v)?;
                 ChatMessagePayload::Text(text_payload)
-            }
-            ChatMessageType::Unit => {
-                let u = serde_json::from_value::<ProjectUnitResponse>(v)?;
-                ChatMessagePayload::Unit(u)
             }
             ChatMessageType::Units => {
                 let arr = serde_json::from_value::<Vec<ProjectUnitResponse>>(v)?;
@@ -106,11 +90,6 @@ impl ChatMessagePayload {
                 let p = serde_json::from_value::<ToolFetchLatestReleasesPayload>(v)?;
                 ChatMessagePayload::ToolFetchLatestReleases(p)
             }
-            ChatMessageType::ToolLogDebug => ChatMessagePayload::ToolLogDebug(v),
-            ChatMessageType::ToolLogMessage => ChatMessagePayload::ToolLogMessage(v),
-            ChatMessageType::Generating => ChatMessagePayload::Generating(Some(v)),
-            ChatMessageType::GeneratingFailed => ChatMessagePayload::GeneratingFailed(Some(v)),
-            ChatMessageType::GeneratingSucceed => ChatMessagePayload::GeneratingSucceed(Some(v)),
         };
         Ok(Some(payload))
     }
@@ -139,6 +118,7 @@ pub struct ChatMessageRow {
     pub payload: Option<Value>,
     pub status: ChatMessageStatus,
     pub created_at: DateTime<Utc>,
+    pub invoking_message_id: Option<Uuid>,
 }
 
 impl From<ChatMessageRow> for ChatMessageResponse {

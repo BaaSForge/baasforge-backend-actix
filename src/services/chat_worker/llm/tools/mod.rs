@@ -14,8 +14,6 @@
 //! add `(my_tool::TOOL_NAME, my_tool::MESSAGE_TYPE, my_tool::payload_from_args)` to [`tool_queue_registry`],
 //! and add `my_tool::gemini_declaration` to [`gemini_declaration_fns`].
 
-mod log_debug;
-mod log_message;
 mod load_latest_production_release_units;
 mod load_latest_releases;
 
@@ -23,13 +21,17 @@ mod load_latest_releases;
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
 pub use load_latest_releases::ToolFetchLatestReleasesPayload;
 
-use crate::database::DbPool;
+use crate::database::{block_on_db_tokio, DbPool};
 use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
-    ChatMessagePayload, ChatMessageType, ChatSessionRoleType,
+    ChatMessagePayload, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
+use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, WsServerEvent};
+use crate::routes::ws::redis::publish_event_to_channel;
+use crate::schema::chat_messages;
 use crate::services::message_queue::SharedRabbitPublisher;
+use diesel::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
@@ -89,25 +91,26 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             load_latest_releases::MESSAGE_TYPE,
             load_latest_releases::payload_from_args,
         ),
-        (log_debug::TOOL_NAME, log_debug::MESSAGE_TYPE, log_debug::payload_from_args),
-        (log_message::TOOL_NAME, log_message::MESSAGE_TYPE, log_message::payload_from_args),
     ]
 }
 
 /// Builds a [`ToolContext`] with one callback per tool in [`tool_queue_registry`]. Each callback
 /// converts args to a queue payload and publishes. Use at the entry point (e.g. processor) before
-/// calling [`with_tool_context`].
+/// calling [`with_tool_context`]. `invoking_message_id` is the AI message that requested the tool
+/// calls; tool messages will reference it so the parent can be set to Completed/Failed when all are done.
 pub fn tool_context_for_chat_session(
     publisher: Arc<SharedRabbitPublisher>,
     user_id: Uuid,
     project_id: Uuid,
     session_id: Uuid,
+    invoking_message_id: Uuid,
 ) -> ToolContext {
     let mut callbacks = HashMap::new();
     for (name, message_type, payload_from_args) in tool_queue_registry() {
         let publisher = publisher.clone();
         let message_type = message_type.clone();
         let payload_from_args = *payload_from_args;
+        let invoking_message_id = invoking_message_id;
         callbacks.insert(
             (*name).to_string(),
             Arc::new(move |args: Value| {
@@ -117,6 +120,7 @@ pub fn tool_context_for_chat_session(
                 let session_id = session_id;
                 let message_type = message_type.clone();
                 let payload_from_args = payload_from_args;
+                let invoking_message_id = invoking_message_id;
                 Box::pin(async move {
                     let response_message_id = new_uuid();
                     let payload = payload_from_args(args).map_err(|e| -> BoxError { e })?;
@@ -127,6 +131,7 @@ pub fn tool_context_for_chat_session(
                         payload: Some(payload),
                         response_message_id,
                         retry_num: 0,
+                        invoking_message_id: Some(invoking_message_id),
                     };
                     chat_message_queue::publish_with_publisher(
                         &publisher,
@@ -146,8 +151,6 @@ pub fn tool_context_for_chat_session(
 
 pub fn all_tool_specs() -> Vec<ToolSpec> {
     vec![
-        log_message::spec(),
-        log_debug::spec(),
         load_latest_production_release_units::spec(),
         load_latest_releases::spec(),
     ]
@@ -180,8 +183,6 @@ fn gemini_declaration_fns() -> &'static [fn() -> gemini_rust::tools::model::Func
     &[
         load_latest_production_release_units::gemini_declaration,
         load_latest_releases::gemini_declaration,
-        log_debug::gemini_declaration,
-        log_message::gemini_declaration,
     ]
 }
 
@@ -207,6 +208,8 @@ pub struct ToolMessageContext {
     /// Tool message payload from the queue (same as stored on the message). Handlers can use
     /// tool-call args without querying the DB.
     pub payload: Option<Value>,
+    /// When set, this tool message was invoked by the AI message with this id; when all such tool messages are done, that message's status is updated to Completed or Failed.
+    pub invoking_message_id: Option<Uuid>,
 }
 
 /// Type of a handler that processes a tool message (e.g. after a queue message is consumed).
@@ -232,24 +235,6 @@ where
     })
 }
 
-/// Wraps an async handler that ignores payload into a [`ToolMessageHandler`].
-fn wrap_handler_no_payload<F, Fut>(handler: F) -> ToolMessageHandler
-where
-    F: Fn(DbPool, RedisConn, Uuid, Uuid, Uuid, Uuid) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ()> + Send + 'static,
-{
-    Arc::new(move |ctx: ToolMessageContext| {
-        Box::pin(handler(
-            ctx.pool,
-            ctx.redis_conn,
-            ctx.project_id,
-            ctx.session_id,
-            ctx.message_id,
-            ctx.user_id,
-        ))
-    })
-}
-
 /// List of (MESSAGE_TYPE, handler) for all queue-based tools. Add new tools here.
 fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
     static HANDLERS: OnceLock<Vec<(ChatMessageType, ToolMessageHandler)>> = OnceLock::new();
@@ -263,8 +248,6 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                 load_latest_releases::MESSAGE_TYPE,
                 wrap_handler_with_payload(load_latest_releases::handler),
             ),
-            (log_debug::MESSAGE_TYPE, wrap_handler_no_payload(log_debug::handler)),
-            (log_message::MESSAGE_TYPE, wrap_handler_no_payload(log_message::handler)),
         ]
     })
     .as_slice()
@@ -278,6 +261,106 @@ fn tool_message_handler(type_: ChatMessageType) -> Option<ToolMessageHandler> {
         .map(|(_, h)| h.clone())
 }
 
+/// After a tool message completes (success or failure), check whether the invoking AI message
+/// has all its tool messages done; if so, set the AI message status to Completed or Failed.
+pub async fn maybe_complete_invoking_message(
+    pool: &DbPool,
+    redis_conn: &RedisConn,
+    invoking_message_id: Uuid,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
+) {
+    let (total, done, failed_count): (i64, i64, i64) = match block_on_db_tokio(pool, move |conn| {
+        let total: i64 = chat_messages::table
+            .filter(chat_messages::invoking_message_id.eq(invoking_message_id))
+            .count()
+            .get_result(conn)?;
+        let done: i64 = chat_messages::table
+            .filter(chat_messages::invoking_message_id.eq(invoking_message_id))
+            .filter(
+                chat_messages::status
+                    .eq(ChatMessageStatus::Completed)
+                    .or(chat_messages::status.eq(ChatMessageStatus::Failed)),
+            )
+            .count()
+            .get_result(conn)?;
+        let failed_count: i64 = chat_messages::table
+            .filter(chat_messages::invoking_message_id.eq(invoking_message_id))
+            .filter(chat_messages::status.eq(ChatMessageStatus::Failed))
+            .count()
+            .get_result(conn)?;
+        Ok::<_, diesel::result::Error>((total, done, failed_count))
+    })
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(
+                %invoking_message_id,
+                "maybe_complete_invoking_message: DB error: {}",
+                e
+            );
+            return;
+        }
+    };
+    if total == 0 || done != total {
+        return;
+    }
+    // If any tool failed, parent must be Failed. Only set Completed when none failed, and never overwrite an existing Failed (tools complete in arbitrary order).
+    let new_status = if failed_count > 0 {
+        ChatMessageStatus::Failed
+    } else {
+        ChatMessageStatus::Completed
+    };
+    let new_status_for_db = new_status.clone();
+    let is_failed = failed_count > 0;
+    let rows_updated = match block_on_db_tokio(pool, move |conn| {
+        let base = diesel::update(
+            chat_messages::table.filter(chat_messages::id.eq(invoking_message_id)),
+        );
+        let rows = if is_failed {
+            base.set(chat_messages::status.eq(new_status_for_db))
+                .execute(conn)?
+        } else {
+            // Only set Completed when parent is still Generating; do not override Failed.
+            base.set(chat_messages::status.eq(new_status_for_db))
+                .filter(chat_messages::status.eq(ChatMessageStatus::Generating))
+                .execute(conn)?
+        };
+        Ok::<_, diesel::result::Error>(rows)
+    })
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!(
+                %invoking_message_id,
+                "maybe_complete_invoking_message: failed to update parent: {}",
+                e
+            );
+            return;
+        }
+    };
+    if rows_updated == 0 {
+        return; // Another completion already set Failed (or we raced with Completed); don't overwrite or re-publish.
+    }
+    let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+    let event = WsServerEvent::ChatSessionMessageStatusChange(
+        ChatSessionMessageStatusChangePayload {
+            message_id: invoking_message_id,
+            status: new_status,
+        },
+    );
+    let mut guard = redis_conn.lock().await;
+    if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &event).await {
+        tracing::warn!(
+            "maybe_complete_invoking_message: failed to publish status change: {}",
+            e
+        );
+    }
+}
+
 /// Spawns the appropriate tool handler for the given message type. Does nothing if the type
 /// has no registered handler. Call this from the runner instead of matching on each tool type.
 /// `payload` should be the tool message payload from the queue (e.g. `ChatMessagePayload` as JSON).
@@ -287,7 +370,18 @@ pub fn spawn_tool_message_handler(
 ) -> bool {
     if let Some(handler) = tool_message_handler(type_) {
         tokio::spawn(async move {
-            handler(ctx).await;
+            handler(ctx.clone()).await;
+            if let Some(inv_id) = ctx.invoking_message_id {
+                maybe_complete_invoking_message(
+                    &ctx.pool,
+                    &ctx.redis_conn,
+                    inv_id,
+                    ctx.user_id,
+                    ctx.project_id,
+                    ctx.session_id,
+                )
+                .await;
+            }
         });
         true
     } else {

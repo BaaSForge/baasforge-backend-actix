@@ -61,9 +61,19 @@ pub async fn ensure_ai_message_created_and_publish(
     Ok(())
 }
 
+/// Returns true when the payload has any requested tool calls; status must stay Generating until all tool messages complete (even if there is text content).
+fn has_requested_tool_calls(text_payload: &TextPayload) -> bool {
+    text_payload
+        .requested_tool_calls
+        .as_ref()
+        .map_or(false, |c| !c.is_empty())
+}
+
 /// Creates the AI response message row with the given payload (e.g. tool-calls-only response)
 /// and publishes ChatSessionMessageCreated to Redis. Call this before executing tool calls
 /// so the client sees the AI message before tool-result messages.
+/// When the payload has any requested_tool_calls, the message is saved with status Generating; it will be
+/// set to Completed or Failed once all invoked tool messages have finished.
 pub async fn create_ai_message_with_payload_and_publish(
     pool: &DbPool,
     redis_conn: &Arc<Mutex<MultiplexedConnection>>,
@@ -74,6 +84,11 @@ pub async fn create_ai_message_with_payload_and_publish(
     text_payload: &TextPayload,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let payload_value = serde_json::to_value(text_payload).map_err(|e| e.to_string())?;
+    let initial_status = if has_requested_tool_calls(text_payload) {
+        ChatMessageStatus::Generating
+    } else {
+        ChatMessageStatus::Completed
+    };
     let inserted_row = block_on_db_tokio(pool, move |conn| {
         diesel::insert_into(chat_messages::table)
             .values((
@@ -82,7 +97,7 @@ pub async fn create_ai_message_with_payload_and_publish(
                 chat_messages::role.eq(ChatSessionRoleType::Ai),
                 chat_messages::type_.eq(ChatMessageType::Text),
                 chat_messages::payload.eq(Some(payload_value)),
-                chat_messages::status.eq(ChatMessageStatus::Completed),
+                chat_messages::status.eq(initial_status),
             ))
             .on_conflict(chat_messages::id)
             .do_nothing()
@@ -114,6 +129,11 @@ pub async fn create_ai_message_with_payload_and_publish(
         ))) => {
             // Row already exists (e.g. created when first chunk arrived); update with payload.
             let payload_value = serde_json::to_value(text_payload).map_err(|e| e.to_string())?;
+            let update_status = if has_requested_tool_calls(text_payload) {
+                ChatMessageStatus::Generating
+            } else {
+                ChatMessageStatus::Completed
+            };
             block_on_db_tokio(pool, move |conn| {
                 diesel::update(
                     chat_messages::table
@@ -122,7 +142,7 @@ pub async fn create_ai_message_with_payload_and_publish(
                 )
                 .set((
                     chat_messages::payload.eq(Some(payload_value)),
-                    chat_messages::status.eq(ChatMessageStatus::Completed),
+                    chat_messages::status.eq(update_status),
                 ))
                 .execute(conn)
             })

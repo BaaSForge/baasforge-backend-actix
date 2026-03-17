@@ -34,6 +34,7 @@ pub async fn process_one(
         user_id,
         project_id,
         session_id,
+        placeholder_ai_message_id,
     );
     let outcome = with_tool_context(tool_ctx, llm_client.generate(
         pool,
@@ -75,17 +76,23 @@ pub async fn process_one(
         GenerateOutcome::Completed(text_payload) => {
             if !text_payload.text.is_empty() || text_payload.requested_tool_calls.as_ref().map_or(false, |c| !c.is_empty()) {
                 let payload = Some(serde_json::to_value(&text_payload)?);
+                let has_tool_calls = text_payload.requested_tool_calls.as_ref().map_or(false, |c| !c.is_empty());
                 block_on_db_tokio(pool, move |conn| {
-                    diesel::update(
+                    let base = diesel::update(
                         chat_messages::table
                             .filter(chat_messages::id.eq(placeholder_ai_message_id))
                             .filter(chat_messages::status.ne(ChatMessageStatus::Stopped)),
-                    )
-                    .set((
-                        chat_messages::payload.eq(payload),
-                        chat_messages::status.eq(ChatMessageStatus::Completed),
-                    ))
-                    .execute(conn)
+                    );
+                    // When there are requested tool calls, leave status as Generating until all tool messages complete.
+                    if has_tool_calls {
+                        base.set(chat_messages::payload.eq(payload)).execute(conn)
+                    } else {
+                        base.set((
+                            chat_messages::payload.eq(payload),
+                            chat_messages::status.eq(ChatMessageStatus::Completed),
+                        ))
+                        .execute(conn)
+                    }
                 })
                 .await
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;

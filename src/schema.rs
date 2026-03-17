@@ -72,6 +72,7 @@ diesel::table! {
         payload -> Nullable<Jsonb>,
         created_at -> Timestamptz,
         status -> ChatMessageStatus,
+        invoking_message_id -> Nullable<Uuid>,
     }
 }
 

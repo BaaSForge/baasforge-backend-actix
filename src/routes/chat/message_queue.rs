@@ -63,6 +63,9 @@ pub struct ChatSessionQueueMessage {
     /// Retry attempt count. 0 = first attempt; incremented each time the message is sent to the retry delay queue.
     #[serde(default)]
     pub retry_num: u32,
+    /// When set, this message is a tool-invoked message; the AI message with this id should move to Completed/Failed once all its tool messages are done.
+    #[serde(default)]
+    pub invoking_message_id: Option<Uuid>,
 }
 
 impl ChatSessionQueueMessage {
