@@ -1,4 +1,4 @@
-use crate::database::{block_on_db_tokio, DbPool};
+use crate::database::{block_on_db_tokio, BlockingDbError, DbPool};
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType};
 use crate::models::projects::ProjectReleaseResponse;
 use schemars::JsonSchema;
@@ -15,7 +15,7 @@ pub struct ToolFetchLatestReleasesPayload {
     pub releases: Vec<ProjectReleaseResponse>,
 }
 
-use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, ChatSessionMessageUpdatedPayload, WsServerEvent};
+use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_latest_releases;
@@ -73,6 +73,7 @@ pub fn spec() -> ToolSpec {
 
 /// Handles a consumed queue message for this tool: load latest releases for the project,
 /// update the message with releases and status Completed, then publish Redis status change.
+/// Returns Err on any failure; the caller marks the message Failed and runs invoker completion.
 pub async fn handler(
     pool: DbPool,
     redis_conn: Arc<Mutex<redis::aio::MultiplexedConnection>>,
@@ -81,51 +82,25 @@ pub async fn handler(
     message_id: Uuid,
     user_id: Uuid,
     payload: Option<Value>,
-) {
+) -> Result<(), BoxError> {
     let existing = payload
         .as_ref()
         .and_then(|v| serde_json::from_value::<ToolFetchLatestReleasesPayload>(v.clone()).ok());
     let args = existing.as_ref().map(|p| p.args.clone()).unwrap_or_default();
     let limit = args.limit;
 
-    let releases = match block_on_db_tokio(&pool, move |conn| {
+    let releases = block_on_db_tokio(&pool, move |conn| {
         load_latest_releases(conn, project_id, limit)
     })
     .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(
-                %project_id,
-                %session_id,
-                %message_id,
-                "Failed to load latest releases: {}",
-                e
-            );
-            let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
-            let event = WsServerEvent::ChatSessionMessageStatusChange(
-                ChatSessionMessageStatusChangePayload {
-                    message_id,
-                    status: ChatMessageStatus::Failed,
-                },
-            );
-            let mut guard = redis_conn.lock().await;
-            let _ = publish_event_to_channel(&mut *guard, &topic, &event).await;
-            return;
-        }
-    };
+    .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
     let full_payload = ToolFetchLatestReleasesPayload {
         args,
         releases,
     };
-    let payload_value = match serde_json::to_value(&full_payload) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!("Failed to serialize releases for message: {}", e);
-            return;
-        }
-    };
-    let updated_row = match block_on_db_tokio(&pool, move |conn| {
+    let payload_value = serde_json::to_value(&full_payload)
+        .map_err(|e| -> BoxError { format!("serialize releases: {}", e).into() })?;
+    let updated_row = block_on_db_tokio(&pool, move |conn| {
         diesel::update(
             chat_messages::table.filter(chat_messages::id.eq(message_id)),
         )
@@ -137,24 +112,15 @@ pub async fn handler(
         .get_result(conn)
     })
     .await
-    {
-        Ok(row) => row,
-        Err(e) => {
-            tracing::error!(
-                %message_id,
-                "Failed to update load_latest_releases message: {}",
-                e
-            );
-            return;
-        }
-    };
+    .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
     let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
     let message: ChatMessageResponse = updated_row.into();
     let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
         message,
     });
     let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &event).await {
-        tracing::warn!("Failed to publish message updated to Redis: {}", e);
-    }
+    publish_event_to_channel(&mut *guard, &topic, &event)
+        .await
+        .map_err(|e| -> BoxError { e.to_string().into() })?;
+    Ok(())
 }

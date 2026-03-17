@@ -195,6 +195,41 @@ pub fn to_gemini_declarations() -> Vec<gemini_rust::tools::model::FunctionDeclar
 
 type RedisConn = Arc<Mutex<redis::aio::MultiplexedConnection>>;
 
+/// Persists a tool message as Failed in the DB and notifies the client via WebSocket.
+/// Call this from tool handlers on any failure path so that (1) the tool row shows Failed when
+/// listing messages from DB, and (2) maybe_complete_invoking_message can see it and update the
+/// invoker to Failed in DB and over WS.
+pub async fn set_tool_message_failed(
+    pool: &DbPool,
+    redis_conn: &RedisConn,
+    message_id: Uuid,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
+) {
+    if let Err(e) = block_on_db_tokio(pool, move |conn| {
+        diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+            .set(chat_messages::status.eq(ChatMessageStatus::Failed))
+            .execute(conn)?;
+        Ok::<_, diesel::result::Error>(())
+    })
+    .await
+    {
+        tracing::error!(%message_id, "set_tool_message_failed: DB update failed: {}", e);
+    }
+    let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+    let event = WsServerEvent::ChatSessionMessageStatusChange(
+        ChatSessionMessageStatusChangePayload {
+            message_id,
+            status: ChatMessageStatus::Failed,
+        },
+    );
+    let mut guard = redis_conn.lock().await;
+    if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &event).await {
+        tracing::warn!("set_tool_message_failed: failed to publish status change: {}", e);
+    }
+}
+
 /// Arguments passed to a tool message handler when a queue message is consumed.
 /// Handlers receive this struct so the meaning of each value is clear.
 #[derive(Clone)]
@@ -213,14 +248,15 @@ pub struct ToolMessageContext {
 }
 
 /// Type of a handler that processes a tool message (e.g. after a queue message is consumed).
+/// Handlers return `Ok(())` on success; on `Err`, the caller marks the message Failed and runs invoker completion.
 pub type ToolMessageHandler =
-    Arc<dyn Fn(ToolMessageContext) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+    Arc<dyn Fn(ToolMessageContext) -> Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send>> + Send + Sync>;
 
 /// Wraps an async handler that takes payload into a [`ToolMessageHandler`].
 fn wrap_handler_with_payload<F, Fut>(handler: F) -> ToolMessageHandler
 where
     F: Fn(DbPool, RedisConn, Uuid, Uuid, Uuid, Uuid, Option<Value>) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ()> + Send + 'static,
+    Fut: Future<Output = Result<(), BoxError>> + Send + 'static,
 {
     Arc::new(move |ctx: ToolMessageContext| {
         Box::pin(handler(
@@ -233,6 +269,34 @@ where
             ctx.payload,
         ))
     })
+}
+
+/// Called after a tool handler returns. If the handler failed, persists Failed (DB + WS) for the tool message;
+/// then runs [`maybe_complete_invoking_message`] so the invoker is marked Completed or Failed when all its tools are done.
+pub async fn on_tool_message_finished(ctx: &ToolMessageContext, result: Result<(), BoxError>) {
+    if let Err(e) = &result {
+        tracing::error!(%ctx.message_id, "Tool handler failed: {}", e);
+        set_tool_message_failed(
+            &ctx.pool,
+            &ctx.redis_conn,
+            ctx.message_id,
+            ctx.user_id,
+            ctx.project_id,
+            ctx.session_id,
+        )
+        .await;
+    }
+    if let Some(inv_id) = ctx.invoking_message_id {
+        maybe_complete_invoking_message(
+            &ctx.pool,
+            &ctx.redis_conn,
+            inv_id,
+            ctx.user_id,
+            ctx.project_id,
+            ctx.session_id,
+        )
+        .await;
+    }
 }
 
 /// List of (MESSAGE_TYPE, handler) for all queue-based tools. Add new tools here.
@@ -370,18 +434,8 @@ pub fn spawn_tool_message_handler(
 ) -> bool {
     if let Some(handler) = tool_message_handler(type_) {
         tokio::spawn(async move {
-            handler(ctx.clone()).await;
-            if let Some(inv_id) = ctx.invoking_message_id {
-                maybe_complete_invoking_message(
-                    &ctx.pool,
-                    &ctx.redis_conn,
-                    inv_id,
-                    ctx.user_id,
-                    ctx.project_id,
-                    ctx.session_id,
-                )
-                .await;
-            }
+            let result = handler(ctx.clone()).await;
+            on_tool_message_finished(&ctx, result).await;
         });
         true
     } else {
