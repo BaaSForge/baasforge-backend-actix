@@ -4,7 +4,8 @@ use crate::models::chat_messages::{RequestedToolCall, ChatSessionRoleType, TextP
 use crate::services::chat_worker::agent::BASE_SYSTEM_PROMPT;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
-use crate::services::chat_worker::llm::{GenerateOutcome, OnFirstChunk};
+use crate::services::chat_worker::ai_message;
+use crate::services::chat_worker::llm::GenerateOutcome;
 use gemini_rust::client::GenerationStream;
 use gemini_rust::tools::model::{FunctionCallingMode, FunctionDeclaration};
 use gemini_rust::Gemini;
@@ -27,12 +28,15 @@ fn gemini_model_id(model: &str) -> String {
 pub async fn call_gemini_stream(
     api_key: &str,
     model: &str,
+    pool: &crate::database::DbPool,
     session_messages: &[(ChatSessionRoleType, Option<Value>)],
     user_text: &str,
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
     message_id: Uuid,
-    mut on_first_content_chunk: Option<Box<dyn OnFirstChunk>>,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
 ) -> Result<GenerateOutcome, BoxError> {
     let client = Gemini::with_model(api_key.to_string(), gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
@@ -92,8 +96,17 @@ pub async fn call_gemini_stream(
         }
         let text: String = chunk.text().to_string();
         if !text.is_empty() {
-            if let Some(cb) = on_first_content_chunk.take() {
-                cb.call_once().await.map_err(|e| format!("on_first_content_chunk: {}", e))?;
+            if let Some(ref conn) = redis_conn {
+                ai_message::ensure_ai_message_created_and_publish(
+                    pool,
+                    conn,
+                    session_id,
+                    message_id,
+                    user_id,
+                    project_id,
+                )
+                .await
+                .map_err(|e| format!("ensure_ai_message_created_and_publish: {}", e))?;
             }
             message_created = true;
             full_text.push_str(&text);
@@ -142,6 +155,28 @@ pub async fn call_gemini_stream(
                 tool_arguments_to_pass: args.clone(),
             })
             .collect();
+
+        // Publish invoker message to client before executing tools so client sees correct order.
+        if !message_created {
+            let invoker_payload = TextPayload {
+                text: full_text.clone(),
+                requested_tool_calls: Some(requested.clone()),
+            };
+            if let Some(ref conn) = redis_conn {
+                ai_message::create_ai_message_with_payload_and_publish(
+                    pool,
+                    conn,
+                    session_id,
+                    message_id,
+                    user_id,
+                    project_id,
+                    &invoker_payload,
+                )
+                .await
+                .map_err(|e| format!("ai_message: {}", e))?;
+            }
+        }
+
         for (name, args) in &all_function_calls {
             tracing::info!(tool = %name, args = ?args, "Gemini: executing tool");
             tools::execute_tool_async(name, args.clone())

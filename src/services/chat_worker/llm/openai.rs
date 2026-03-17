@@ -4,7 +4,8 @@ use crate::models::chat_messages::{RequestedToolCall, ChatSessionRoleType, TextP
 use crate::services::chat_worker::agent::BASE_SYSTEM_PROMPT;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
-use crate::services::chat_worker::llm::{GenerateOutcome, OnFirstChunk};
+use crate::services::chat_worker::ai_message;
+use crate::services::chat_worker::llm::GenerateOutcome;
 use futures::StreamExt;
 use openai::Credentials;
 use openai::chat::{
@@ -295,12 +296,15 @@ async fn stream_content_to_redis(
 pub async fn call_gpt_stream(
     credentials: &Credentials,
     model: &str,
+    pool: &crate::database::DbPool,
     session_messages: &[(ChatSessionRoleType, Option<Value>)],
     user_text: &str,
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
     message_id: uuid::Uuid,
-    mut on_first_content_chunk: Option<Box<dyn OnFirstChunk>>,
+    user_id: uuid::Uuid,
+    project_id: uuid::Uuid,
+    session_id: uuid::Uuid,
 ) -> Result<GenerateOutcome, BoxError> {
     let messages = build_chat_messages(session_messages, user_text);
     let functions = tools::to_openai_functions();
@@ -345,8 +349,17 @@ pub async fn call_gpt_stream(
             }
             if let Some(ref content) = choice.delta.content {
                 if !content.is_empty() {
-                    if let Some(cb) = on_first_content_chunk.take() {
-                        cb.call_once().await?;
+                    if let Some(ref conn) = redis_conn {
+                        ai_message::ensure_ai_message_created_and_publish(
+                            pool,
+                            conn,
+                            session_id,
+                            message_id,
+                            user_id,
+                            project_id,
+                        )
+                        .await
+                        .map_err(|e| -> BoxError { e.into() })?;
                     }
                     message_created = true;
                     full_text.push_str(content);
@@ -483,6 +496,27 @@ pub async fn call_gpt_stream(
                     })
                     .collect(),
             );
+
+            // Publish invoker message to client before executing tools so client sees correct order.
+            if !message_created {
+                let invoker_payload = TextPayload {
+                    text: full_text.clone(),
+                    requested_tool_calls: requested_tool_calls_out.clone(),
+                };
+                if let Some(ref conn) = redis_conn {
+                    ai_message::create_ai_message_with_payload_and_publish(
+                        pool,
+                        conn,
+                        session_id,
+                        message_id,
+                        user_id,
+                        project_id,
+                        &invoker_payload,
+                    )
+                    .await
+                    .map_err(|e| -> BoxError { e.into() })?;
+                }
+            }
 
             for (_, name, arguments) in &to_run {
                 if name.is_empty() {
