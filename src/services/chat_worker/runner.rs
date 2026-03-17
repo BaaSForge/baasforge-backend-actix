@@ -28,51 +28,6 @@ use uuid::Uuid;
 
 use crate::database::DbPool;
 
-/// Ensures the AI response message row exists (inserts if missing) and publishes
-/// ChatSessionMessageCreated to Redis. Used when the first streaming chunk arrives
-/// so we avoid creating empty messages when the AI only calls tools.
-pub async fn ensure_ai_message_created_and_publish(
-    pool: &DbPool,
-    redis_conn: &Arc<Mutex<redis::aio::MultiplexedConnection>>,
-    session_id: Uuid,
-    response_message_id: Uuid,
-    user_id: Uuid,
-    project_id: Uuid,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let inserted_row = block_on_db_tokio(pool, move |conn| {
-        let row = diesel::insert_into(chat_messages::table)
-            .values((
-                chat_messages::id.eq(response_message_id),
-                chat_messages::chat_session_id.eq(session_id),
-                chat_messages::role.eq(ChatSessionRoleType::Ai),
-                chat_messages::type_.eq(ChatMessageType::Text),
-                chat_messages::payload.eq(None::<serde_json::Value>),
-                chat_messages::status.eq(ChatMessageStatus::Generating),
-            ))
-            .on_conflict(chat_messages::id)
-            .do_nothing()
-            .returning(ChatMessageRow::as_returning())
-            .get_result(conn);
-        match row {
-            Ok(r) => Ok(Some(r)),
-            Err(diesel::result::Error::NotFound) => Ok(None),
-            Err(e) => Err(e),
-        }
-    })
-    .await?;
-
-    if let Some(row) = inserted_row {
-        let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
-        let created_message = ChatMessageResponse::from(row);
-        let event = WsServerEvent::ChatSessionMessageCreated(ChatSessionMessageCreatedPayload {
-            message: created_message,
-        });
-        let mut guard = redis_conn.lock().await;
-        publish_event_to_channel(&mut *guard, &topic, &event).await?;
-    }
-    Ok(())
-}
-
 pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
 
