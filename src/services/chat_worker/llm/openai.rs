@@ -1,6 +1,6 @@
 // TODO: we know that gpt and gemini dont support tool call and content in the same response,
 // so we can simplify this code
-use crate::models::chat_messages::ChatSessionRoleType;
+use crate::models::chat_messages::{RequestedToolCall, ChatSessionRoleType, TextPayload};
 use crate::services::chat_worker::agent::BASE_SYSTEM_PROMPT;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
@@ -313,7 +313,8 @@ pub async fn call_gpt_stream(
         .map_err(|e| format!("OpenAI stream: {}", e))?;
 
     let mut merged: Option<ChatCompletionDelta> = None;
-    let mut accumulated_tool_calls: Vec<(String, String)> = Vec::new();
+    /// (tool_call_id, tool_name, arguments_json)
+    let mut accumulated_tool_calls: Vec<(String, String, String)> = Vec::new();
 
     tracing::info!(
         tools_defined = tools::all_tool_specs().len(),
@@ -359,20 +360,26 @@ pub async fn call_gpt_stream(
                     .await
                     .is_err()
                     {
-                        return Ok(GenerateOutcome::Stopped(full_text));
+                        return Ok(GenerateOutcome::Stopped(TextPayload {
+                        text: full_text,
+                        requested_tool_calls: None,
+                    }));
                     }
                 }
             }
             if let Some(ref tcs) = choice.delta.tool_calls {
                 for (i, tc) in tcs.iter().enumerate() {
                     if accumulated_tool_calls.len() <= i {
-                        accumulated_tool_calls.resize(i + 1, (String::new(), String::new()));
+                        accumulated_tool_calls.resize(i + 1, (String::new(), String::new(), String::new()));
                     }
                     let acc = &mut accumulated_tool_calls[i];
-                    if !tc.function.name.is_empty() {
-                        acc.0 = tc.function.name.clone();
+                    if !tc.id.is_empty() {
+                        acc.0 = tc.id.clone();
                     }
-                    acc.1.push_str(&tc.function.arguments);
+                    if !tc.function.name.is_empty() {
+                        acc.1 = tc.function.name.clone();
+                    }
+                    acc.2.push_str(&tc.function.arguments);
                 }
             }
             // Legacy API: stream sends function_call in delta (not tool_calls); accumulate it too.
@@ -383,17 +390,17 @@ pub async fn call_gpt_stream(
                 if !name.is_empty() || !args.is_empty() {
                     let last_name = accumulated_tool_calls
                         .last()
-                        .map(|t| t.0.as_str())
+                        .map(|t| t.1.as_str())
                         .unwrap_or("");
                     let is_new_call = !name.is_empty() && name != last_name;
                     if accumulated_tool_calls.is_empty() || is_new_call {
-                        accumulated_tool_calls.push((name.to_string(), args.to_string()));
+                        accumulated_tool_calls.push((String::new(), name.to_string(), args.to_string()));
                     } else {
                         let last = accumulated_tool_calls.last_mut().unwrap();
                         if !name.is_empty() {
-                            last.0 = name.to_string();
+                            last.1 = name.to_string();
                         }
-                        last.1.push_str(args);
+                        last.2.push_str(args);
                     }
                 }
             }
@@ -407,6 +414,7 @@ pub async fn call_gpt_stream(
         }
     }
 
+    let mut requested_tool_calls_out: Option<Vec<RequestedToolCall>> = None;
     if let Some(completion) = merged {
         // Read merged content from the delta before converting to ChatCompletion (so we have
         // the full streamed text when the model sent both content and tool_calls).
@@ -446,10 +454,10 @@ pub async fn call_gpt_stream(
             || message_has_function_call;
 
         if has_tool_calls {
-            let to_run: Vec<(String, String)> = if accumulated_tool_calls.is_empty() {
+            let to_run: Vec<(String, String, String)> = if accumulated_tool_calls.is_empty() {
                 if let Some(ref msg) = message {
                     if let Some(ref fc) = msg.function_call {
-                        vec![(fc.name.clone(), fc.arguments.clone())]
+                        vec![(String::new(), fc.name.clone(), fc.arguments.clone())]
                     } else {
                         vec![]
                     }
@@ -460,7 +468,23 @@ pub async fn call_gpt_stream(
                 accumulated_tool_calls
             };
 
-            for (name, arguments) in &to_run {
+            requested_tool_calls_out = Some(
+                to_run
+                    .iter()
+                    .filter(|(_, name, _)| !name.is_empty())
+                    .map(|(id, name, arguments)| {
+                        let tool_arguments_to_pass: Value = serde_json::from_str(arguments)
+                            .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+                        RequestedToolCall {
+                            tool_call_id: if id.is_empty() { None } else { Some(id.clone()) },
+                            tool_name: name.clone(),
+                            tool_arguments_to_pass,
+                        }
+                    })
+                    .collect(),
+            );
+
+            for (_, name, arguments) in &to_run {
                 if name.is_empty() {
                     continue;
                 }
@@ -515,5 +539,8 @@ pub async fn call_gpt_stream(
         }
     }
 
-    Ok(GenerateOutcome::Completed(full_text))
+    Ok(GenerateOutcome::Completed(TextPayload {
+        text: full_text,
+        requested_tool_calls: requested_tool_calls_out,
+    }))
 }

@@ -10,6 +10,24 @@ use uuid::Uuid;
 use crate::models::projects::ProjectUnitResponse;
 use crate::services::chat_worker::llm::tools::{ToolFetchRelevantUnitsPayload, ToolFetchLatestReleasesPayload};
 
+/// One requested tool call from the LLM (GPT tool_call_id optional; Gemini has no id).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RequestedToolCall {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    pub tool_name: String,
+    #[serde(alias = "tool_arguments_to_pass")]
+    pub tool_arguments_to_pass: Value,
+}
+
+/// Payload for Text messages: streamed text and optional requested tool calls.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TextPayload {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub requested_tool_calls: Option<Vec<RequestedToolCall>>,
+}
+
 #[derive(Debug, DbEnum, Serialize, Clone, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::ChatSessionRoleType"]
 #[DbValueStyle = "snake_case"]
@@ -50,7 +68,7 @@ pub enum ChatMessageStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ChatMessagePayload {
-    Text(String),
+    Text(TextPayload),
     Unit(ProjectUnitResponse),
     Units(Vec<ProjectUnitResponse>),
     ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
@@ -69,8 +87,8 @@ impl ChatMessagePayload {
         };
         let payload = match type_ {
             ChatMessageType::Text => {
-                let s = serde_json::from_value::<String>(v)?;
-                ChatMessagePayload::Text(s)
+                let text_payload = serde_json::from_value::<TextPayload>(v)?;
+                ChatMessagePayload::Text(text_payload)
             }
             ChatMessageType::Unit => {
                 let u = serde_json::from_value::<ProjectUnitResponse>(v)?;

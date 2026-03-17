@@ -64,9 +64,9 @@ pub async fn process_one(
     .await?;
 
     match outcome {
-        GenerateOutcome::Stopped(partial) => {
-            if !partial.is_empty() {
-                let payload = Some(serde_json::to_value(&partial)?);
+        GenerateOutcome::Stopped(text_payload) => {
+            if !text_payload.text.is_empty() || text_payload.requested_tool_calls.as_ref().map_or(false, |c| !c.is_empty()) {
+                let payload = Some(serde_json::to_value(&text_payload)?);
                 block_on_db_tokio(pool, move |conn| {
                     diesel::update(
                         chat_messages::table.filter(chat_messages::id.eq(placeholder_ai_message_id)),
@@ -87,9 +87,9 @@ pub async fn process_one(
                 );
             }
         }
-        GenerateOutcome::Completed(ai_text) => {
-            if !ai_text.is_empty() {
-                let payload = Some(serde_json::to_value(&ai_text)?);
+        GenerateOutcome::Completed(text_payload) => {
+            if !text_payload.text.is_empty() || text_payload.requested_tool_calls.as_ref().map_or(false, |c| !c.is_empty()) {
+                let payload = Some(serde_json::to_value(&text_payload)?);
                 block_on_db_tokio(pool, move |conn| {
                     diesel::update(
                         chat_messages::table

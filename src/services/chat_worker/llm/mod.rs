@@ -1,5 +1,5 @@
 use crate::configs::{LlmProvider, Settings};
-use crate::models::chat_messages::ChatSessionRoleType;
+use crate::models::chat_messages::{ChatSessionRoleType, TextPayload};
 use redis::aio::MultiplexedConnection;
 use serde_json::Value;
 use std::future::Future;
@@ -49,17 +49,23 @@ where
     }
 }
 
-/// Result of LLM generation: either completed fully or stopped by user (partial text).
+/// Result of LLM generation: either completed fully or stopped by user (partial text + optional tool calls).
 #[derive(Debug)]
 pub enum GenerateOutcome {
-    Completed(String),
-    Stopped(String),
+    Completed(TextPayload),
+    Stopped(TextPayload),
 }
 
+/// Extracts the text content from a message payload for LLM context.
+/// Expects Text payload shape `{ "text": "...", "requested_tool_calls": [...] }`.
 pub(crate) fn payload_to_string(payload: &Option<Value>) -> String {
     match payload {
-        Some(v) => v.as_str().map(String::from).unwrap_or_else(|| v.to_string()),
         None => String::new(),
+        Some(v) => v
+            .get("text")
+            .and_then(|t| t.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| v.to_string())
     }
 }
 

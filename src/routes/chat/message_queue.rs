@@ -83,7 +83,7 @@ impl ChatSessionQueueMessage {
             return None;
         }
         let text = match &self.payload {
-            Some(ChatMessagePayload::Text(s)) => s.clone(),
+            Some(ChatMessagePayload::Text(p)) => p.text.clone(),
             _ => return None,
         };
         Some((user_id, text))

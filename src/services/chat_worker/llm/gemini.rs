@@ -1,6 +1,6 @@
 // TODO: we know that gpt and gemini dont support tool call and content in the same response,
 // so we can simplify this code
-use crate::models::chat_messages::ChatSessionRoleType;
+use crate::models::chat_messages::{RequestedToolCall, ChatSessionRoleType, TextPayload};
 use crate::services::chat_worker::agent::BASE_SYSTEM_PROMPT;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
@@ -100,7 +100,10 @@ pub async fn call_gemini_stream(
             if let Some(ref conn) = redis_conn {
                 let mut guard = conn.lock().await;
                 if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
-                    return Ok(GenerateOutcome::Stopped(full_text));
+                    return Ok(GenerateOutcome::Stopped(TextPayload {
+                        text: full_text,
+                        requested_tool_calls: None,
+                    }));
                 }
                 let payload = ChatSessionNewMessageChunkPayload::new(
                     topic.to_string(),
@@ -124,19 +127,31 @@ pub async fn call_gemini_stream(
         function_call_count = fc_count,
         "Gemini: stream ended, checking for tool calls"
     );
-    if !all_function_calls.is_empty() {
+    let requested_tool_calls = if all_function_calls.is_empty() {
+        None
+    } else {
         tracing::info!(
             "Gemini: LLM requested {} tool call(s), executing",
             fc_count
         );
-        for (name, args) in all_function_calls {
+        let requested: Vec<RequestedToolCall> = all_function_calls
+            .iter()
+            .map(|(name, args)| RequestedToolCall {
+                tool_call_id: None, // Gemini does not provide tool call ids in stream
+                tool_name: name.clone(),
+                tool_arguments_to_pass: args.clone(),
+            })
+            .collect();
+        for (name, args) in &all_function_calls {
             tracing::info!(tool = %name, args = ?args, "Gemini: executing tool");
-            tools::execute_tool_async(&name, args)
-            .await
-            .map_err(|e| format!("Tool execution failed: {}", e))?;
+            tools::execute_tool_async(name, args.clone())
+                .await
+                .map_err(|e| format!("Tool execution failed: {}", e))?;
         }
-        // Tools executed; caller can re-invoke the LLM later with tool results in context
-    } else {
+        Some(requested)
+    };
+
+    if all_function_calls.is_empty() {
         tracing::info!("Gemini: no tool calls in any stream chunk (function_call_count=0)");
     }
 
@@ -157,5 +172,8 @@ pub async fn call_gemini_stream(
         }
     }
 
-    Ok(GenerateOutcome::Completed(full_text))
+    Ok(GenerateOutcome::Completed(TextPayload {
+        text: full_text,
+        requested_tool_calls,
+    }))
 }
