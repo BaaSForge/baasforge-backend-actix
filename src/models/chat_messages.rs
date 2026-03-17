@@ -132,6 +132,7 @@ impl From<ChatMessageRow> for ChatMessageResponse {
             payload,
             status: row.status,
             created_at: row.created_at,
+            invoking_message_id: row.invoking_message_id,
         }
     }
 }
@@ -146,6 +147,7 @@ pub struct ChatMessageResponse {
     pub payload: Option<ChatMessagePayload>,
     pub status: ChatMessageStatus,
     pub created_at: DateTime<Utc>,
+    pub invoking_message_id: Option<Uuid>,
 }
 
 #[derive(Serialize)]
