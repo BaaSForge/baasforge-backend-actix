@@ -1,3 +1,8 @@
+//! WebSocket topic authorization.
+//!
+//! Users may only subscribe to their own user channel (`user:{their_user_id}`).
+//! Subscribing to another user's channel is denied so users cannot receive other users' events.
+
 use diesel::prelude::*;
 use uuid::Uuid;
 
@@ -59,6 +64,8 @@ pub enum TopicAuth {
     Denied(&'static str),
 }
 
+/// Authorizes a subscription: only the authenticated user's own channel is allowed.
+/// Users cannot subscribe to other users' channels and therefore cannot receive other users' events.
 pub async fn authorize_topic_async(
     topic: &str,
     authenticated_user_id: Uuid,
@@ -75,8 +82,9 @@ pub async fn authorize_topic_async(
             project_id,
             chat_session_id,
         } => {
+            // Must not subscribe to another user's channel.
             if *user_id != authenticated_user_id {
-                return TopicAuth::Denied("topic user_id does not match authenticated user");
+                return TopicAuth::Denied("cannot subscribe to another user's channel");
             }
             let project_id = *project_id;
             let chat_session_id = *chat_session_id;
@@ -103,8 +111,9 @@ pub async fn authorize_topic_async(
             }
         }
         TopicKind::User { user_id } => {
+            // Users may only subscribe to their own user channel; cannot receive other users' events.
             if *user_id != authenticated_user_id {
-                return TopicAuth::Denied("topic user_id does not match authenticated user");
+                return TopicAuth::Denied("cannot subscribe to another user's channel");
             }
             TopicAuth::Allowed(kind.to_topic_string())
         }

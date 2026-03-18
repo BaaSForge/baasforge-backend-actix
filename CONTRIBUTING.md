@@ -19,6 +19,14 @@ Use Rust field names in snake_case and avoid `#[serde(rename = "camelCase")]` so
 
 **Developers and AI agents:** When adding or changing API or WebSocket payloads, keep all JSON keys in snake_case.
 
+### WebSocket: users may only subscribe to their own channel
+
+A connected user may only subscribe to the topic **`user:{their_own_user_id}`**. Subscribing to another user's channel (e.g. `user:{other_user_id}`) is **denied** so that:
+
+- Users **receive only their own events** (their channel is the only one they can subscribe to).
+- Users **cannot subscribe to other users' channels** (authorization in `src/routes/ws/topics.rs`).
+
+Do not relax this rule: broadcast targets are always per-user; no user should receive another user's events.
 
 ### Database ID conventions: use UUID v7 for all table primary keys
 
