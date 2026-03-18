@@ -13,6 +13,8 @@ use crate::models::chat_sessions::{
 use crate::models::projects::PlatformEnvironmentType;
 use crate::models::projects::{ProjectRuntimeResponse, ProjectUnitResponse};
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
+use crate::routes::ws::events::{ChatSessionGenerationStartedPayload, WsServerEvent};
+use crate::routes::ws::redis::{publish_event_to_channel, user_channel};
 use crate::routes::ws::set_stopped_message_id;
 use crate::routes::AppContext;
 // use crate::services::message_queue as mq_service;
@@ -374,6 +376,22 @@ pub async fn handle_create_chat_session_message(
             "Message was saved but the assistant pipeline is temporarily unavailable. Please try again.",
             json!({ "detail": e.to_string() }),
         ));
+    }
+
+    if let Some(ref redis_conn) = context.redis_conn {
+        let topic = user_channel(user_id);
+        let payload = ChatSessionGenerationStartedPayload {
+            project_id,
+            session_id,
+        };
+        let event = WsServerEvent::ChatSessionGenerationStarted(payload);
+        let mut guard = redis_conn.lock().await;
+        if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &event).await {
+            tracing::warn!(
+                "Failed to broadcast generation started to Redis: {}",
+                e
+            );
+        }
     }
 
     let response = ChatMessageWithFirstResponse {

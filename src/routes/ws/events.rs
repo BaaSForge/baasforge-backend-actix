@@ -9,11 +9,27 @@ pub enum WsServerEvent {
     ChatSessionMessageCreated(ChatSessionMessageCreatedPayload),
     ChatSessionMessageStatusChange(ChatSessionMessageStatusChangePayload),
     ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload),
+    /// Broadcast when the server has accepted a user message and generation of the AI response has started.
+    ChatSessionGenerationStarted(ChatSessionGenerationStartedPayload),
+    /// Broadcast when generation ended with no content and no tool calls (LLM sent nothing).
+    ChatSessionGenerationEnded(ChatSessionGenerationEndedPayload),
     ProjectDeleted(ProjectDeletedPayload),
     RuntimeCreated(RuntimeCreatedPayload),
     Subscribed { topic: String },
     Unsubscribed { topic: String },
     Error { message: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChatSessionGenerationStartedPayload {
+    pub project_id: Uuid,
+    pub session_id: Uuid,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChatSessionGenerationEndedPayload {
+    pub project_id: Uuid,
+    pub session_id: Uuid,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

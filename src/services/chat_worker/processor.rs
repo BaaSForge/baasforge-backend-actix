@@ -22,7 +22,7 @@ pub async fn process_one(
     session_id: Uuid,
     user_text: &str,
     placeholder_ai_message_id: Uuid,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<GenerateOutcome, Box<dyn std::error::Error + Send + Sync>> {
     let session_messages = block_on_db_tokio(pool, move |conn| {
         load_previous_session_messages(conn, session_id, 50)
     })
@@ -73,11 +73,13 @@ pub async fn process_one(
                     "Streaming stopped by user, saved partial content to DB"
                 );
             }
+            Ok(GenerateOutcome::Stopped(text_payload))
         }
         GenerateOutcome::Completed(text_payload) => {
-            if !text_payload.text.is_empty() || text_payload.requested_tool_calls.as_ref().map_or(false, |c| !c.is_empty()) {
+            let has_content = !text_payload.text.is_empty();
+            let has_tool_calls = text_payload.requested_tool_calls.as_ref().map_or(false, |c| !c.is_empty());
+            if has_content || has_tool_calls {
                 let payload = Some(serde_json::to_value(&text_payload)?);
-                let has_tool_calls = text_payload.requested_tool_calls.as_ref().map_or(false, |c| !c.is_empty());
                 block_on_db_tokio(pool, move |conn| {
                     let base = diesel::update(
                         chat_messages::table
@@ -99,8 +101,8 @@ pub async fn process_one(
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
                 info!(%project_id, %session_id, "Processed and saved AI response");
             }
+            Ok(GenerateOutcome::Completed(text_payload))
         }
     }
-    Ok(())
 }
 

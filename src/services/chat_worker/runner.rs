@@ -11,8 +11,9 @@ use crate::routes::chat::message_queue::{
 use crate::routes::ws::events::{ChatSessionMessageCreatedPayload, ChatSessionMessageStatusChangePayload, WsServerEvent};
 use crate::routes::ws::redis::{is_message_stopped, publish_event_to_channel};
 use crate::routes::ws::user_channel;
+use crate::services::chat_worker::generation_lifecycle;
 use crate::schema::chat_messages;
-use crate::services::chat_worker::llm::build_llm_client;
+use crate::services::chat_worker::llm::{build_llm_client, GenerateOutcome};
 use crate::services::chat_worker::llm::tools::{spawn_tool_message_handler, ToolMessageContext};
 use crate::services::chat_worker::processor::process_one;
 use crate::services::message_queue::{
@@ -157,7 +158,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .await;
 
             match &result {
-                Ok(()) => {}
+                Ok(outcome) => {
+                    // Continuation is scheduled only when LLM returned tool calls (tools will eventually call maybe_complete_invoking_message and publish).
+                    let will_schedule_continuation = matches!(
+                        outcome,
+                        GenerateOutcome::Completed(p)
+                            if p.requested_tool_calls.as_ref().map_or(false, |c| !c.is_empty())
+                    );
+                    generation_lifecycle::notify_if_generation_loop_finished(
+                        &redis_conn,
+                        user_id,
+                        project_id,
+                        session_id,
+                        will_schedule_continuation,
+                    )
+                    .await;
+                }
                 Err(e) => {
                     if retry_policy.should_dead_letter(retry_num) {
                         tracing::error!(
