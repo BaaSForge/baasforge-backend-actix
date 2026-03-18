@@ -2,7 +2,7 @@ use crate::database::{block_on_db_tokio, DbPool};
 use crate::models::chat_messages::{ChatAgentType, ChatMessageStatus, ChatMessageType};
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
-use crate::services::chat_worker::db::load_previous_session_messages;
+use crate::services::chat_worker::agent::load_history_for_agent;
 use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient};
 use crate::services::chat_worker::llm::tools::{tool_context_for_chat_session, with_tool_context};
 use diesel::prelude::*;
@@ -24,8 +24,9 @@ pub async fn process_one(
     placeholder_ai_message_id: Uuid,
     agent: ChatAgentType,
 ) -> Result<GenerateOutcome, Box<dyn std::error::Error + Send + Sync>> {
+    let agent_for_history = agent.clone();
     let session_messages = block_on_db_tokio(pool, move |conn| {
-        load_previous_session_messages(conn, session_id, 50)
+        load_history_for_agent(conn, session_id, agent_for_history)
     })
     .await
     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;

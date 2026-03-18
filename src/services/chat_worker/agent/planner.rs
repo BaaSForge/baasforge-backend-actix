@@ -1,4 +1,43 @@
-//! Planner agent: orchestrates No-Code backend development (Units, Releases, Runtimes).
+use crate::database::PooledConn;
+use crate::models::chat_messages::{
+    ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatSessionRoleType,
+};
+use crate::schema::chat_messages;
+use diesel::prelude::*;
+use diesel::result::Error;
+use serde_json::Value;
+use uuid::Uuid;
+
+const FETCH_LIMIT: i64 = 50;
+const HISTORY_LIMIT: i64 = 50;
+
+pub fn load_history(
+    conn: &mut PooledConn,
+    session_id: Uuid,
+) -> Result<Vec<(ChatSessionRoleType, Option<Value>)>, Error> {
+    let rows = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .order(chat_messages::id.desc())
+        .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
+        .limit(FETCH_LIMIT)
+        .select(ChatMessageRow::as_select())
+        .load::<ChatMessageRow>(conn)?;
+
+    let filtered: Vec<_> = rows
+        .into_iter()
+        .filter(|row| match row.role {
+            ChatSessionRoleType::User => true,
+            ChatSessionRoleType::Ai => {
+                row.agent.as_ref() == Some(&ChatAgentType::Planner) || row.agent.is_none()
+            }
+        })
+        .take(HISTORY_LIMIT as usize)
+        .map(|row| (row.role, row.payload))
+        .collect();
+
+    let out: Vec<_> = filtered.into_iter().rev().collect();
+    Ok(out)
+}
 
 pub const SYSTEM_PROMPT: &str = r#"Role: You are the Platform Architect AI, a specialized orchestrator for a "No-Code" backend development dashboard. Your goal is to help users build, manage, and deploy backend functionality through conversational intent. You translate high-level user needs into discrete "Units" and "Releases" without ever showing the user raw code unless explicitly requested. Your role is to resolve ambiguities in the user's requirements and analyze existing units to prevent conflicts and identify necessary connections.
 
