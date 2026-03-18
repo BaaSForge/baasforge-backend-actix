@@ -268,6 +268,8 @@ async fn stream_content_to_redis(
     redis_conn: Option<&Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
     message_id: uuid::Uuid,
+    project_id: uuid::Uuid,
+    session_id: uuid::Uuid,
 ) -> Result<(), ()> {
     if content.is_empty() {
         return Ok(());
@@ -278,7 +280,8 @@ async fn stream_content_to_redis(
             return Err(());
         }
         let payload = ChatSessionNewMessageChunkPayload::new(
-            topic.to_string(),
+            project_id,
+            session_id,
             message_id,
             *chunk_index,
             content.to_string(),
@@ -369,6 +372,8 @@ pub async fn call_gpt_stream(
                         redis_conn.as_ref(),
                         topic,
                         message_id,
+                        project_id,
+                        session_id,
                     )
                     .await
                     .is_err()
@@ -559,7 +564,8 @@ pub async fn call_gpt_stream(
     if message_created {
         if let Some(ref conn) = redis_conn {
             let payload = ChatSessionNewMessageChunkPayload::new(
-                topic.to_string(),
+                project_id,
+                session_id,
                 message_id,
                 chunk_index,
                 String::new(),

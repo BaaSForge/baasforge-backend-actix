@@ -119,7 +119,8 @@ pub async fn call_gemini_stream(
                     }));
                 }
                 let payload = ChatSessionNewMessageChunkPayload::new(
-                    topic.to_string(),
+                    project_id,
+                    session_id,
                     message_id,
                     chunk_index,
                     text,
@@ -193,7 +194,8 @@ pub async fn call_gemini_stream(
     if message_created {
         if let Some(ref conn) = redis_conn {
             let payload = ChatSessionNewMessageChunkPayload::new(
-                topic.to_string(),
+                project_id,
+                session_id,
                 message_id,
                 chunk_index,
                 String::new(),

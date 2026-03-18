@@ -18,39 +18,42 @@ pub enum WsServerEvent {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatSessionMessageCreatedPayload {
+    pub project_id: Uuid,
+    pub session_id: Uuid,
     pub message: ChatMessageResponse,
 }
 
 /// Notify clients that a message's status changed (e.g. to `failed` after max retries or `stopped`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatSessionMessageStatusChangePayload {
-    #[serde(rename = "messageId")]
+    pub project_id: Uuid,
+    pub session_id: Uuid,
     pub message_id: Uuid,
     pub status: ChatMessageStatus,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatSessionMessageUpdatedPayload {
+    pub project_id: Uuid,
+    pub session_id: Uuid,
     pub message: ChatMessageResponse,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectDeletedPayload {
-    #[serde(rename = "projectId")]
     pub project_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RuntimeCreatedPayload {
-    #[serde(rename = "projectId")]
     pub project_id: String,
-    #[serde(rename = "runtimeId")]
     pub runtime_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatSessionNewMessageChunkPayload {
-    pub topic: String,
+    pub project_id: Uuid,
+    pub session_id: Uuid,
     /// ID of the placeholder message this chunk belongs to (client appends content to this message).
     pub message_id: Uuid,
     pub chunk_index: u32,
@@ -60,14 +63,16 @@ pub struct ChatSessionNewMessageChunkPayload {
 
 impl ChatSessionNewMessageChunkPayload {
     pub fn new(
-        topic: String,
+        project_id: Uuid,
+        session_id: Uuid,
         message_id: Uuid,
         chunk_index: u32,
         content: String,
         done: bool,
     ) -> Self {
         Self {
-            topic,
+            project_id,
+            session_id,
             message_id,
             chunk_index,
             content,

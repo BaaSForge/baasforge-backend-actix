@@ -16,6 +16,7 @@ pub struct ToolFetchRelevantUnitsPayload {
 }
 use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
+use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_units_for_latest_production_release;
 use diesel::prelude::*;
@@ -112,13 +113,15 @@ pub async fn handler(
     })
     .await
     .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
-    let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+    let channel = user_channel(user_id);
     let message: ChatMessageResponse = updated_row.into();
     let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+        project_id,
+        session_id,
         message,
     });
     let mut guard = redis_conn.lock().await;
-    publish_event_to_channel(&mut *guard, &topic, &event)
+    publish_event_to_channel(&mut *guard, &channel, &event)
         .await
         .map_err(|e| -> BoxError { e.to_string().into() })?;
     Ok(())

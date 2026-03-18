@@ -1,5 +1,6 @@
 use crate::database::{block_on_db_tokio, DbPool};
 use crate::models::chat_messages::{ChatMessageStatus, ChatMessageType};
+use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_previous_session_messages;
 use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient};
@@ -28,7 +29,7 @@ pub async fn process_one(
     .await
     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
-    let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+    let channel = user_channel(user_id);
     let tool_ctx = tool_context_for_chat_session(
         rabbit_publisher.clone(),
         user_id,
@@ -41,7 +42,7 @@ pub async fn process_one(
         &session_messages,
         user_text,
         Some(redis_conn.clone()),
-        &topic,
+        &channel,
         placeholder_ai_message_id,
         user_id,
         project_id,

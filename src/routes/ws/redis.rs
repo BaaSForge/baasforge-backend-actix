@@ -81,7 +81,7 @@ async fn run_redis_subscriber_loop(
 ) -> Result<(), redis::RedisError> {
     let client = redis::Client::open(redis_url)?;
     let mut pubsub = client.get_async_pubsub().await?;
-    pubsub.psubscribe(format!("{}*", CHAT_SESSION_CHANNEL_PREFIX)).await?;
+    // Single channel pattern: all events (chat, project deleted, runtime created) are published to user:{user_id}.
     pubsub.psubscribe(format!("{}*", USER_CHANNEL_PREFIX)).await?;
 
     let mut stream = pubsub.on_message();

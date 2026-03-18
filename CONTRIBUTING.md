@@ -1,19 +1,23 @@
 # Contributing
 
-## API conventions
+## API and backend–client conventions
 
-### JSON response keys: use snake_case
+### JSON keys: snake_case everywhere (API and WebSocket)
 
-All JSON keys in API request/response bodies must be **snake_case**, not camelCase.
+**All** JSON sent from backend to client (and in API request/response bodies) must use **snake_case** keys, not camelCase.
 
-- **Do:** `stopped_count`, `stopped_message_ids`, `project_id`, `chat_session_id`
-- **Don't:** `stoppedCount`, `stoppedMessageIds`, `projectId`, `chatSessionId`
+- **Do:** `stopped_count`, `stopped_message_ids`, `project_id`, `chat_session_id`, `message_id`, `chunk_index`, `runtime_id`
+- **Don't:** `stoppedCount`, `stoppedMessageIds`, `projectId`, `chatSessionId`, `messageId`, `chunkIndex`, `runtimeId`
 
 This applies to:
+- REST API responses and request bodies
+- WebSocket event payloads (e.g. `src/routes/ws/events.rs`)
 - Manually built payloads (e.g. `json!({ "stopped_count": n })`)
 - Any API contract (OpenAPI, docs, or client expectations)
 
-Serialization of structs may use `#[serde(rename_all = "snake_case")]` where appropriate to keep Rust fields and JSON keys consistent.
+Use Rust field names in snake_case and avoid `#[serde(rename = "camelCase")]` so serialization stays snake_case. For enums you can use `#[serde(rename_all = "snake_case")]` to keep variant names in JSON as snake_case.
+
+**Developers and AI agents:** When adding or changing API or WebSocket payloads, keep all JSON keys in snake_case.
 
 
 ### Database ID conventions: use UUID v7 for all table primary keys

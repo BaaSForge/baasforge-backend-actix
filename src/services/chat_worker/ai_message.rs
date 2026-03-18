@@ -7,7 +7,7 @@ use crate::models::chat_messages::{
     TextPayload,
 };
 use crate::routes::ws::events::{ChatSessionMessageCreatedPayload, WsServerEvent};
-use crate::routes::ws::publish_event_to_channel;
+use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
 use diesel::prelude::*;
 use redis::aio::MultiplexedConnection;
@@ -50,13 +50,15 @@ pub async fn ensure_ai_message_created_and_publish(
     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
     if let Some(row) = inserted_row {
-        let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+        let channel = user_channel(user_id);
         let created_message = ChatMessageResponse::from(row);
         let event = WsServerEvent::ChatSessionMessageCreated(ChatSessionMessageCreatedPayload {
+            project_id,
+            session_id,
             message: created_message,
         });
         let mut guard = redis_conn.lock().await;
-        publish_event_to_channel(&mut *guard, &topic, &event).await?;
+        publish_event_to_channel(&mut *guard, &channel, &event).await?;
     }
     Ok(())
 }
@@ -108,13 +110,15 @@ pub async fn create_ai_message_with_payload_and_publish(
 
     match inserted_row {
         Ok(row) => {
-            let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+            let channel = user_channel(user_id);
             let created_message = ChatMessageResponse::from(row);
             let event = WsServerEvent::ChatSessionMessageCreated(ChatSessionMessageCreatedPayload {
+                project_id,
+                session_id,
                 message: created_message,
             });
             let mut guard = redis_conn.lock().await;
-            publish_event_to_channel(&mut *guard, &topic, &event).await?;
+            publish_event_to_channel(&mut *guard, &channel, &event).await?;
             info!(
                 %project_id,
                 %session_id,

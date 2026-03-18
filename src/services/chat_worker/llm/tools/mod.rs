@@ -29,6 +29,7 @@ use crate::models::chat_messages::{
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
+use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
@@ -215,15 +216,17 @@ pub async fn set_tool_message_failed(
     {
         tracing::error!(%message_id, "set_tool_message_failed: DB update failed: {}", e);
     }
-    let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+    let channel = user_channel(user_id);
     let event = WsServerEvent::ChatSessionMessageStatusChange(
         ChatSessionMessageStatusChangePayload {
+            project_id,
+            session_id,
             message_id,
             status: ChatMessageStatus::Failed,
         },
     );
     let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &event).await {
+    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
         tracing::warn!("set_tool_message_failed: failed to publish status change: {}", e);
     }
 }
@@ -412,15 +415,17 @@ pub async fn maybe_complete_invoking_message(
     if rows_updated == 0 {
         return; // Another completion already set Failed (or we raced with Completed); don't overwrite or re-publish.
     }
-    let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+    let channel = user_channel(user_id);
     let event = WsServerEvent::ChatSessionMessageStatusChange(
         ChatSessionMessageStatusChangePayload {
+            project_id,
+            session_id,
             message_id: invoking_message_id,
             status: new_status,
         },
     );
     let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &event).await {
+    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
         tracing::warn!(
             "maybe_complete_invoking_message: failed to publish status change: {}",
             e

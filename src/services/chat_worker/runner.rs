@@ -10,6 +10,7 @@ use crate::routes::chat::message_queue::{
 };
 use crate::routes::ws::events::{ChatSessionMessageCreatedPayload, ChatSessionMessageStatusChangePayload, WsServerEvent};
 use crate::routes::ws::redis::{is_message_stopped, publish_event_to_channel};
+use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::build_llm_client;
 use crate::services::chat_worker::llm::tools::{spawn_tool_message_handler, ToolMessageContext};
@@ -193,18 +194,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 db_e
                             );
                         } else {
-                            // Notify clients subscribed to this chat session so they can update UI
-                            let topic =
-                                format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+                            // Notify clients subscribed to this user so they can update UI
+                            let channel = user_channel(user_id);
                             let event = WsServerEvent::ChatSessionMessageStatusChange(
                                 ChatSessionMessageStatusChangePayload {
+                                    project_id,
+                                    session_id,
                                     message_id: response_message_id,
                                     status: ChatMessageStatus::Failed,
                                 },
                             );
                             let mut guard = redis_conn.lock().await;
                             if let Err(redis_e) =
-                                publish_event_to_channel(&mut *guard, &topic, &event).await
+                                publish_event_to_channel(&mut *guard, &channel, &event).await
                             {
                                 tracing::warn!(
                                     "Failed to publish message status change to Redis: {}",
@@ -316,14 +318,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     continue;
                 }
             };
-            let topic = format!("chat_session:{}:{}:{}", user_id, project_id, session_id);
+            let channel = user_channel(user_id);
             let created_message = ChatMessageResponse::from(inserted_row);
             let event = WsServerEvent::ChatSessionMessageCreated(ChatSessionMessageCreatedPayload {
+                project_id,
+                session_id,
                 message: created_message,
             });
             {
                 let mut guard = redis_conn.lock().await;
-                if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &event).await {
+                if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
                     tracing::warn!("Failed to publish new message to Redis: {}", e);
                 }
             }
