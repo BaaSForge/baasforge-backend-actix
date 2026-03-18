@@ -18,7 +18,24 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
 use super::{BoxError, payload_to_string, tools};
+use crate::services::chat_worker::agent::tool_names_for_agent;
 use serde_json::Value;
+
+/// OpenAI function definitions for the given agent only.
+fn to_openai_functions_for_agent(
+    agent: &ChatAgentType,
+) -> Vec<openai::chat::ChatCompletionFunctionDefinition> {
+    let names = tool_names_for_agent(agent);
+    tools::all_tool_specs()
+        .into_iter()
+        .filter(|t| names.contains(&t.name))
+        .map(|t| openai::chat::ChatCompletionFunctionDefinition {
+            name: t.name.to_string(),
+            description: Some(t.description.to_string()),
+            parameters: Some(t.parameters),
+        })
+        .collect()
+}
 
 fn build_chat_messages(
     session_messages: &[(ChatSessionRoleType, Option<Value>)],
@@ -199,9 +216,9 @@ async fn stream_openai_tools(
     credentials: &Credentials,
     model: &str,
     messages: Vec<ChatCompletionMessage>,
-    functions: Vec<openai::chat::ChatCompletionFunctionDefinition>,
+    functions: &[openai::chat::ChatCompletionFunctionDefinition],
 ) -> Result<mpsc::Receiver<ChatCompletionDelta>, BoxError> {
-    let body = build_tools_request_body(model, &messages, &functions);
+    let body = build_tools_request_body(model, &messages, functions);
     let url = format!("{}chat/completions", credentials.base_url());
     let client = reqwest::Client::new();
     let response = client
@@ -313,12 +330,13 @@ pub async fn call_gpt_stream(
     agent: ChatAgentType,
 ) -> Result<GenerateOutcome, BoxError> {
     let messages = build_chat_messages(session_messages, user_text, &agent);
-    let functions = tools::to_openai_functions();
+    let functions = to_openai_functions_for_agent(&agent);
+    let tools_count = functions.len();
     let mut full_text = String::new();
     let mut chunk_index: u32 = 0;
     let mut message_created = false;
 
-    let mut rx = stream_openai_tools(credentials, model, messages, functions)
+    let mut rx = stream_openai_tools(credentials, model, messages, &functions)
         .await
         .map_err(|e| format!("OpenAI stream: {}", e))?;
 
@@ -327,7 +345,7 @@ pub async fn call_gpt_stream(
     let mut accumulated_tool_calls: Vec<(String, String, String)> = Vec::new();
 
     tracing::info!(
-        tools_defined = tools::all_tool_specs().len(),
+        tools_defined = tools_count,
         "OpenAI: stream started with tools attached"
     );
 

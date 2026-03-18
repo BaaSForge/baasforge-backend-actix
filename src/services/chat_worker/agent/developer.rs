@@ -11,6 +11,10 @@ use uuid::Uuid;
 const FETCH_LIMIT: i64 = 50;
 const HISTORY_LIMIT: i64 = 50;
 
+pub fn tool_names() -> &'static [&'static str] {
+    &[]
+}
+
 pub fn load_history(
     conn: &mut PooledConn,
     session_id: Uuid,

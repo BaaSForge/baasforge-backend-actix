@@ -9,6 +9,15 @@ use diesel::result::Error;
 use serde_json::Value;
 use uuid::Uuid;
 
+pub fn tool_names_for_agent(agent: &ChatAgentType) -> &'static [&'static str] {
+    match agent {
+        ChatAgentType::Planner => planner::tool_names(),
+        ChatAgentType::ArchitectureAnalyzer => architecture_analyzer::tool_names(),
+        ChatAgentType::SolutionAnalyzer => solution_analyzer::tool_names(),
+        ChatAgentType::Developer => developer::tool_names(),
+    }
+}
+
 pub fn system_prompt_for_agent(agent: &ChatAgentType) -> &'static str {
     match agent {
         ChatAgentType::Planner => planner::SYSTEM_PROMPT,

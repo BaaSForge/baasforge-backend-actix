@@ -7,15 +7,15 @@
 //! - **`spec() -> ToolSpec`** — Name, description, and JSON schema for parameters (for LLM declarations).
 //! - **`handler(...)`** — Async fn that processes a consumed queue message (same signature for all tools).
 //! - **`payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError>`** — Builds queue payload from LLM args (used by [`tool_context_for_chat_session`]).
-//! - **`gemini_declaration() -> FunctionDeclaration`** — Gemini declaration with parameter schema (used by [`to_gemini_declarations`]).
+//! - **`gemini_declaration() -> FunctionDeclaration`** — Gemini declaration with parameter schema (used in `llm/gemini.rs`).
 //!
 //! To add a new tool: add `mod my_tool;`, add `my_tool::spec()` to [`all_tool_specs`],
 //! add `(my_tool::MESSAGE_TYPE, my_tool::handler)` to [`tool_message_handlers`],
 //! add `(my_tool::TOOL_NAME, my_tool::MESSAGE_TYPE, my_tool::payload_from_args)` to [`tool_queue_registry`],
-//! and add `my_tool::gemini_declaration` to [`gemini_declaration_fns`].
+//! and add `(my_tool::TOOL_NAME, my_tool::gemini_declaration)` in `gemini_declaration_fns_by_name` in `llm/gemini.rs`.
 
-mod load_latest_production_release_units;
-mod load_latest_releases;
+pub mod load_latest_production_release_units;
+pub mod load_latest_releases;
 
 /// Re-exported for use in [`crate::models::chat_messages::ChatMessagePayload`].
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
@@ -96,7 +96,16 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
     ]
 }
 
-/// Builds a [`ToolContext`] with one callback per tool in [`tool_queue_registry`]. Each callback
+fn tool_queue_registry_for_agent(agent: &ChatAgentType) -> Vec<(&'static str, ChatMessageType, PayloadFromArgsFn)> {
+    let names = crate::services::chat_worker::agent::tool_names_for_agent(agent);
+    tool_queue_registry()
+        .iter()
+        .filter(|(name, _, _)| names.contains(name))
+        .map(|(name, msg_type, fn_ptr)| (*name, msg_type.clone(), *fn_ptr))
+        .collect()
+}
+
+/// Builds a [`ToolContext`] with one callback per tool for this agent (only tools in [`crate::services::chat_worker::agent::tool_names_for_agent`]). Each callback
 /// converts args to a queue payload and publishes. Use at the entry point (e.g. processor) before
 /// calling [`with_tool_context`]. `invoking_message_id` is the AI message that requested the tool
 /// calls; tool messages will reference it so the parent can be set to Completed/Failed when all are done.
@@ -110,10 +119,9 @@ pub fn tool_context_for_chat_session(
     agent: ChatAgentType,
 ) -> ToolContext {
     let mut callbacks = HashMap::new();
-    for (name, message_type, payload_from_args) in tool_queue_registry() {
+    for (name, message_type, payload_from_args) in tool_queue_registry_for_agent(&agent) {
         let publisher = publisher.clone();
         let message_type = message_type.clone();
-        let payload_from_args = *payload_from_args;
         let agent = agent.clone();
         callbacks.insert(
             (*name).to_string(),
@@ -170,30 +178,6 @@ pub async fn execute_tool_async(name: &str, args: Value) -> Result<String, BoxEr
         .ok_or_else(|| format!("Unknown tool or callback not registered: {}", name))?;
     cb(args).await?;
     Ok("Request queued.".to_string())
-}
-
-pub fn to_openai_functions() -> Vec<openai::chat::ChatCompletionFunctionDefinition> {
-    all_tool_specs()
-        .into_iter()
-        .map(|t| openai::chat::ChatCompletionFunctionDefinition {
-            name: t.name.to_string(),
-            description: Some(t.description.to_string()),
-            parameters: Some(t.parameters),
-        })
-        .collect()
-}
-
-/// List of tool functions that produce a Gemini declaration (with parameter schema). Add new tools here when registering.
-fn gemini_declaration_fns() -> &'static [fn() -> gemini_rust::tools::model::FunctionDeclaration] {
-    &[
-        load_latest_production_release_units::gemini_declaration,
-        load_latest_releases::gemini_declaration,
-    ]
-}
-
-/// Gemini declarations with parameter schemas so the model receives required arguments (e.g. `query`).
-pub fn to_gemini_declarations() -> Vec<gemini_rust::tools::model::FunctionDeclaration> {
-    gemini_declaration_fns().iter().map(|f| f()).collect()
 }
 
 // ----- Tool message handlers (runner → worker) -----

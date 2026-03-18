@@ -14,8 +14,33 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::{payload_to_string, tools, BoxError};
+use super::tools::{self, load_latest_production_release_units, load_latest_releases};
+use super::{payload_to_string, BoxError};
+use crate::services::chat_worker::agent::tool_names_for_agent;
 use serde_json::Value;
+
+fn gemini_declaration_fns_by_name(
+) -> &'static [(&'static str, fn() -> gemini_rust::tools::model::FunctionDeclaration)] {
+    &[
+        (
+            load_latest_production_release_units::TOOL_NAME,
+            load_latest_production_release_units::gemini_declaration,
+        ),
+        (load_latest_releases::TOOL_NAME, load_latest_releases::gemini_declaration),
+    ]
+}
+
+/// Gemini declarations for the given agent only (subset of all tools).
+fn to_gemini_declarations_for_agent(
+    agent: &ChatAgentType,
+) -> Vec<gemini_rust::tools::model::FunctionDeclaration> {
+    let names = tool_names_for_agent(agent);
+    gemini_declaration_fns_by_name()
+        .iter()
+        .filter(|(name, _)| names.contains(name))
+        .map(|(_, f)| f())
+        .collect()
+}
 
 fn gemini_model_id(model: &str) -> String {
     if model.starts_with("models/") {
@@ -43,7 +68,7 @@ pub async fn call_gemini_stream(
         .map_err(|e| format!("Gemini client: {}", e))?;
 
     let system_prompt = system_prompt_for_agent(&agent);
-    let declarations: Vec<FunctionDeclaration> = tools::to_gemini_declarations();
+    let declarations: Vec<FunctionDeclaration> = to_gemini_declarations_for_agent(&agent);
     let mut full_text = String::new();
     let mut chunk_index: u32 = 0;
     let mut message_created = false;
