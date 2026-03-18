@@ -1,6 +1,6 @@
 use crate::configs::{LlmProvider, Settings};
 use crate::database::DbPool;
-use crate::models::chat_messages::{ChatSessionRoleType, TextPayload};
+use crate::models::chat_messages::{ChatAgentType, ChatSessionRoleType, TextPayload};
 use redis::aio::MultiplexedConnection;
 use serde_json::Value;
 use std::sync::Arc;
@@ -57,6 +57,7 @@ impl LlmClient {
         user_id: Uuid,
         project_id: Uuid,
         session_id: Uuid,
+        agent: ChatAgentType,
     ) -> Result<GenerateOutcome, BoxError> {
         match self {
             LlmClient::OpenAi { credentials, model } => {
@@ -72,6 +73,7 @@ impl LlmClient {
                     user_id,
                     project_id,
                     session_id,
+                    agent,
                 )
                 .await
             }
@@ -88,6 +90,7 @@ impl LlmClient {
                     user_id,
                     project_id,
                     session_id,
+                    agent,
                 )
                 .await
             }

@@ -59,6 +59,18 @@ pub enum ChatMessageStatus {
     Completed,
 }
 
+#[derive(Debug, Default, DbEnum, Serialize, Clone, Deserialize, PartialEq)]
+#[ExistingTypePath = "crate::schema::sql_types::ChatAgentType"]
+#[DbValueStyle = "snake_case"]
+#[serde(rename_all = "snake_case")]
+pub enum ChatAgentType {
+    #[default]
+    Planner,
+    ArchitectureAnalyzer,
+    SolutionAnalyzer,
+    Developer,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ChatMessagePayload {
@@ -119,6 +131,8 @@ pub struct ChatMessageRow {
     pub status: ChatMessageStatus,
     pub created_at: DateTime<Utc>,
     pub invoking_message_id: Option<Uuid>,
+    /// Set only for AI role messages; NULL for user messages.
+    pub agent: Option<ChatAgentType>,
 }
 
 impl From<ChatMessageRow> for ChatMessageResponse {
@@ -133,6 +147,7 @@ impl From<ChatMessageRow> for ChatMessageResponse {
             status: row.status,
             created_at: row.created_at,
             invoking_message_id: row.invoking_message_id,
+            agent: row.agent,
         }
     }
 }
@@ -148,6 +163,8 @@ pub struct ChatMessageResponse {
     pub status: ChatMessageStatus,
     pub created_at: DateTime<Utc>,
     pub invoking_message_id: Option<Uuid>,
+    /// Present only for AI role messages.
+    pub agent: Option<ChatAgentType>,
 }
 
 #[derive(Serialize)]
@@ -181,4 +198,6 @@ pub struct ChatMessageInsert {
     pub type_: ChatMessageType,
     pub payload: Option<Value>,
     pub status: ChatMessageStatus,
+    /// Set only for AI role; None for user messages.
+    pub agent: Option<ChatAgentType>,
 }

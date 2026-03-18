@@ -115,6 +115,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     continue;
                 }
             };
+            let agent = payload.agent.clone();
 
             {
                 let mut guard = redis_conn.lock().await;
@@ -154,6 +155,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     session_id,
                     &user_text,
                     response_message_id,
+                    agent,
                 )
                 .await;
 
@@ -303,6 +305,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let type_ = payload.type_.clone();
             let insert_message_id = response_message_id;
             let invoking_message_id_insert = payload.invoking_message_id;
+            let agent_insert = payload.agent.clone();
             let pool_clone = pool.clone();
             let session_id_insert = session_id;
             let inserted_row = match block_on_db_tokio(&pool_clone, move |conn| {
@@ -315,6 +318,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         chat_messages::payload.eq(payload_json_for_insert),
                         chat_messages::status.eq(ChatMessageStatus::Generating),
                         chat_messages::invoking_message_id.eq(invoking_message_id_insert),
+                        chat_messages::agent.eq(Some(agent_insert)),
                     ))
                     .returning(ChatMessageRow::as_returning())
                     .get_result(conn)

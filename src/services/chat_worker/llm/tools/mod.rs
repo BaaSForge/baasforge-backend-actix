@@ -24,7 +24,8 @@ pub use load_latest_releases::ToolFetchLatestReleasesPayload;
 use crate::database::{block_on_db_tokio, DbPool};
 use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
-    ChatMessagePayload, ChatMessageStatus, ChatMessageType, ChatSessionRoleType, TextPayload,
+    ChatAgentType, ChatMessagePayload, ChatMessageRow, ChatMessageStatus, ChatMessageType,
+    ChatSessionRoleType, TextPayload,
 };
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, WsServerEvent};
@@ -99,18 +100,21 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
 /// converts args to a queue payload and publishes. Use at the entry point (e.g. processor) before
 /// calling [`with_tool_context`]. `invoking_message_id` is the AI message that requested the tool
 /// calls; tool messages will reference it so the parent can be set to Completed/Failed when all are done.
+/// `agent` is stored on the queue message so the worker can set it on the created message row.
 pub fn tool_context_for_chat_session(
     publisher: Arc<SharedRabbitPublisher>,
     user_id: Uuid,
     project_id: Uuid,
     session_id: Uuid,
     invoking_message_id: Uuid,
+    agent: ChatAgentType,
 ) -> ToolContext {
     let mut callbacks = HashMap::new();
     for (name, message_type, payload_from_args) in tool_queue_registry() {
         let publisher = publisher.clone();
         let message_type = message_type.clone();
         let payload_from_args = *payload_from_args;
+        let agent = agent.clone();
         callbacks.insert(
             (*name).to_string(),
             Arc::new(move |args: Value| {
@@ -120,6 +124,7 @@ pub fn tool_context_for_chat_session(
                 let session_id = session_id;
                 let message_type = message_type.clone();
                 let payload_from_args = payload_from_args;
+                let agent = agent.clone();
                 Box::pin(async move {
                     let response_message_id = new_uuid();
                     let payload = payload_from_args(args).map_err(|e| -> BoxError { e })?;
@@ -131,6 +136,7 @@ pub fn tool_context_for_chat_session(
                         response_message_id,
                         retry_num: 0,
                         invoking_message_id: Some(invoking_message_id),
+                        agent,
                     };
                     chat_message_queue::publish_with_publisher(
                         &publisher,
@@ -447,6 +453,7 @@ pub async fn maybe_complete_invoking_message(
             response_message_id,
             retry_num: 0,
             invoking_message_id: None,
+            agent: ChatAgentType::Planner,
         };
         if let Err(e) = chat_message_queue::publish_with_publisher(
             publisher,

@@ -1,7 +1,7 @@
 // TODO: we know that gpt and gemini dont support tool call and content in the same response,
 // so we can simplify this code
-use crate::models::chat_messages::{RequestedToolCall, ChatSessionRoleType, TextPayload};
-use crate::services::chat_worker::agent::BASE_SYSTEM_PROMPT;
+use crate::models::chat_messages::{ChatAgentType, RequestedToolCall, ChatSessionRoleType, TextPayload};
+use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::ai_message;
@@ -23,10 +23,12 @@ use serde_json::Value;
 fn build_chat_messages(
     session_messages: &[(ChatSessionRoleType, Option<Value>)],
     user_text: &str,
+    agent: &ChatAgentType,
 ) -> Vec<ChatCompletionMessage> {
+    let system_prompt = system_prompt_for_agent(agent);
     let mut messages: Vec<ChatCompletionMessage> = vec![ChatCompletionMessage {
         role: ChatCompletionMessageRole::System,
-        content: Some(BASE_SYSTEM_PROMPT.to_string()),
+        content: Some(system_prompt.to_string()),
         name: None,
         function_call: None,
         tool_call_id: None,
@@ -308,8 +310,9 @@ pub async fn call_gpt_stream(
     user_id: uuid::Uuid,
     project_id: uuid::Uuid,
     session_id: uuid::Uuid,
+    agent: ChatAgentType,
 ) -> Result<GenerateOutcome, BoxError> {
-    let messages = build_chat_messages(session_messages, user_text);
+    let messages = build_chat_messages(session_messages, user_text, &agent);
     let functions = tools::to_openai_functions();
     let mut full_text = String::new();
     let mut chunk_index: u32 = 0;
@@ -360,6 +363,7 @@ pub async fn call_gpt_stream(
                             message_id,
                             user_id,
                             project_id,
+                            agent.clone(),
                         )
                         .await
                         .map_err(|e| -> BoxError { e.into() })?;
@@ -517,6 +521,7 @@ pub async fn call_gpt_stream(
                         user_id,
                         project_id,
                         &invoker_payload,
+                        agent.clone(),
                     )
                     .await
                     .map_err(|e| -> BoxError { e.into() })?;

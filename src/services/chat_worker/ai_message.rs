@@ -3,8 +3,8 @@
 
 use crate::database::{block_on_db_tokio, BlockingDbError, DbPool};
 use crate::models::chat_messages::{
-    ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
-    TextPayload,
+    ChatAgentType, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
+    ChatSessionRoleType, TextPayload,
 };
 use crate::routes::ws::events::{ChatSessionMessageCreatedPayload, WsServerEvent};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
@@ -25,6 +25,7 @@ pub async fn ensure_ai_message_created_and_publish(
     response_message_id: Uuid,
     user_id: Uuid,
     project_id: Uuid,
+    agent: ChatAgentType,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inserted_row = block_on_db_tokio(pool, move |conn| {
         let row = diesel::insert_into(chat_messages::table)
@@ -35,6 +36,7 @@ pub async fn ensure_ai_message_created_and_publish(
                 chat_messages::type_.eq(ChatMessageType::Text),
                 chat_messages::payload.eq(None::<serde_json::Value>),
                 chat_messages::status.eq(ChatMessageStatus::Generating),
+                chat_messages::agent.eq(Some(agent)),
             ))
             .on_conflict(chat_messages::id)
             .do_nothing()
@@ -84,6 +86,7 @@ pub async fn create_ai_message_with_payload_and_publish(
     user_id: Uuid,
     project_id: Uuid,
     text_payload: &TextPayload,
+    agent: ChatAgentType,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let payload_value = serde_json::to_value(text_payload).map_err(|e| e.to_string())?;
     let initial_status = if has_requested_tool_calls(text_payload) {
@@ -100,6 +103,7 @@ pub async fn create_ai_message_with_payload_and_publish(
                 chat_messages::type_.eq(ChatMessageType::Text),
                 chat_messages::payload.eq(Some(payload_value)),
                 chat_messages::status.eq(initial_status),
+                chat_messages::agent.eq(Some(agent)),
             ))
             .on_conflict(chat_messages::id)
             .do_nothing()

@@ -1,7 +1,7 @@
 // TODO: we know that gpt and gemini dont support tool call and content in the same response,
 // so we can simplify this code
-use crate::models::chat_messages::{RequestedToolCall, ChatSessionRoleType, TextPayload};
-use crate::services::chat_worker::agent::BASE_SYSTEM_PROMPT;
+use crate::models::chat_messages::{ChatAgentType, RequestedToolCall, ChatSessionRoleType, TextPayload};
+use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::ai_message;
@@ -37,10 +37,12 @@ pub async fn call_gemini_stream(
     user_id: Uuid,
     project_id: Uuid,
     session_id: Uuid,
+    agent: ChatAgentType,
 ) -> Result<GenerateOutcome, BoxError> {
     let client = Gemini::with_model(api_key.to_string(), gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
 
+    let system_prompt = system_prompt_for_agent(&agent);
     let declarations: Vec<FunctionDeclaration> = tools::to_gemini_declarations();
     let mut full_text = String::new();
     let mut chunk_index: u32 = 0;
@@ -48,7 +50,7 @@ pub async fn call_gemini_stream(
 
     let mut request = client
         .generate_content()
-        .with_system_prompt(BASE_SYSTEM_PROMPT);
+        .with_system_prompt(system_prompt);
 
     for (role, payload) in session_messages {
         let text = payload_to_string(payload);
@@ -104,6 +106,7 @@ pub async fn call_gemini_stream(
                     message_id,
                     user_id,
                     project_id,
+                    agent.clone(),
                 )
                 .await
                 .map_err(|e| format!("ensure_ai_message_created_and_publish: {}", e))?;
@@ -172,6 +175,7 @@ pub async fn call_gemini_stream(
                     user_id,
                     project_id,
                     &invoker_payload,
+                    agent.clone(),
                 )
                 .await
                 .map_err(|e| format!("ai_message: {}", e))?;

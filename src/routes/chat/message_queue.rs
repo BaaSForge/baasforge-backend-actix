@@ -1,4 +1,6 @@
-use crate::models::chat_messages::{ChatMessagePayload, ChatMessageType, ChatSessionRoleType};
+use crate::models::chat_messages::{
+    ChatAgentType, ChatMessagePayload, ChatMessageType, ChatSessionRoleType,
+};
 use crate::services::message_queue::{
     self, DeadLetterSpec, PublishError, RetryPolicy, SharedRabbitPublisher,
 };
@@ -66,6 +68,9 @@ pub struct ChatSessionQueueMessage {
     /// When set, this message is a tool-invoked message; the AI message with this id should move to Completed/Failed once all its tool messages are done.
     #[serde(default)]
     pub invoking_message_id: Option<Uuid>,
+    /// Agent that will handle this LLM call (used for system prompt and for the AI message row).
+    #[serde(default)]
+    pub agent: ChatAgentType,
 }
 
 impl ChatSessionQueueMessage {

@@ -2,6 +2,10 @@
 
 pub mod sql_types {
     #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "chat_agent_type"))]
+    pub struct ChatAgentType;
+
+    #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "chat_message_status"))]
     pub struct ChatMessageStatus;
 
@@ -62,6 +66,7 @@ diesel::table! {
     use super::sql_types::ChatSessionRoleType;
     use super::sql_types::ChatMessageType;
     use super::sql_types::ChatMessageStatus;
+    use super::sql_types::ChatAgentType;
 
     chat_messages (id) {
         id -> Uuid,
@@ -73,6 +78,7 @@ diesel::table! {
         created_at -> Timestamptz,
         status -> ChatMessageStatus,
         invoking_message_id -> Nullable<Uuid>,
+        agent -> Nullable<ChatAgentType>,
     }
 }
 

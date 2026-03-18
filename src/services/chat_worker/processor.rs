@@ -1,5 +1,5 @@
 use crate::database::{block_on_db_tokio, DbPool};
-use crate::models::chat_messages::{ChatMessageStatus, ChatMessageType};
+use crate::models::chat_messages::{ChatAgentType, ChatMessageStatus, ChatMessageType};
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_previous_session_messages;
@@ -22,6 +22,7 @@ pub async fn process_one(
     session_id: Uuid,
     user_text: &str,
     placeholder_ai_message_id: Uuid,
+    agent: ChatAgentType,
 ) -> Result<GenerateOutcome, Box<dyn std::error::Error + Send + Sync>> {
     let session_messages = block_on_db_tokio(pool, move |conn| {
         load_previous_session_messages(conn, session_id, 50)
@@ -36,6 +37,7 @@ pub async fn process_one(
         project_id,
         session_id,
         placeholder_ai_message_id,
+        agent.clone(),
     );
     let outcome = with_tool_context(tool_ctx, llm_client.generate(
         pool,
@@ -47,6 +49,7 @@ pub async fn process_one(
         user_id,
         project_id,
         session_id,
+        agent,
     ))
     .await?;
 
