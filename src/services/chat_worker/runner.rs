@@ -1,7 +1,8 @@
 use crate::configs::Settings;
 use crate::database::{block_on_db_tokio, establish_pool};
 use crate::models::chat_messages::{
-    ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
+    ChatAgentType, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
+    ChatSessionRoleType,
 };
 use crate::routes::chat::message_queue::{
     self as chat_message_queue,
@@ -11,6 +12,7 @@ use crate::routes::chat::message_queue::{
 use crate::routes::ws::events::{ChatSessionMessageCreatedPayload, ChatSessionMessageStatusChangePayload, WsServerEvent};
 use crate::routes::ws::redis::{is_message_stopped, publish_event_to_channel};
 use crate::routes::ws::user_channel;
+use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::generation_lifecycle;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::{build_llm_client, GenerateOutcome};
@@ -29,6 +31,75 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::database::DbPool;
+use redis::aio::MultiplexedConnection;
+
+/// Ensures the placeholder AI message exists with status Failed in the DB (inserts if it was never
+/// created because the LLM failed before streaming any chunk), then notifies the client via
+/// WebSocket. Call this whenever generation has failed and we will not retry.
+async fn set_message_failed_and_notify(
+    pool: &DbPool,
+    redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
+    response_message_id: Uuid,
+    agent: ChatAgentType,
+) {
+    let message_id = response_message_id;
+    let session_id_db = session_id;
+    let agent_db = agent;
+    let db_ok = block_on_db_tokio(pool, move |conn| {
+        // Update if row exists; otherwise insert (LLM may have failed before first chunk, so no row yet).
+        diesel::insert_into(chat_messages::table)
+            .values((
+                chat_messages::id.eq(message_id),
+                chat_messages::chat_session_id.eq(session_id_db),
+                chat_messages::role.eq(ChatSessionRoleType::Ai),
+                chat_messages::type_.eq(ChatMessageType::Text),
+                chat_messages::payload.eq(None::<serde_json::Value>),
+                chat_messages::status.eq(ChatMessageStatus::Failed),
+                chat_messages::agent.eq(Some(agent_db)),
+            ))
+            .on_conflict(chat_messages::id)
+            .do_update()
+            .set(chat_messages::status.eq(ChatMessageStatus::Failed))
+            .execute(conn)
+    })
+    .await
+    .is_ok();
+
+    if db_ok {
+        generation_lifecycle::notify_if_generation_loop_finished(
+            redis_conn,
+            user_id,
+            project_id,
+            session_id,
+            false,
+        )
+        .await;
+        let channel = user_channel(user_id);
+        let event = WsServerEvent::ChatSessionMessageStatusChange(
+            ChatSessionMessageStatusChangePayload {
+                project_id,
+                session_id,
+                message_id: response_message_id,
+                status: ChatMessageStatus::Failed,
+            },
+        );
+        let mut guard = redis_conn.lock().await;
+        if let Err(redis_e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+            tracing::warn!(
+                "Failed to publish message status change to Redis: {}",
+                redis_e
+            );
+        }
+    } else {
+        tracing::error!(
+            %response_message_id,
+            "Failed to upsert message status to Failed in DB"
+        );
+    }
+}
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
@@ -131,6 +202,27 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
             }
 
+            // Create the AI message row with status Generating as soon as we pick up the message,
+            // so stop-generating can find it while the message is in the queue or retry delay.
+            if let Err(e) = ai_message::ensure_ai_message_created_and_publish(
+                &pool,
+                &redis_conn,
+                session_id,
+                response_message_id,
+                user_id,
+                project_id,
+                agent.clone(),
+            )
+            .await
+            {
+                tracing::warn!(
+                    %session_id,
+                    %response_message_id,
+                    "Failed to ensure AI message row when picking up: {}",
+                    e
+                );
+            }
+
             let retry_num = payload.retry_num;
             let pool = pool.clone();
             let redis_conn = redis_conn.clone();
@@ -155,7 +247,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     session_id,
                     &user_text,
                     response_message_id,
-                    agent,
+                    agent.clone(),
                 )
                 .await;
 
@@ -185,6 +277,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             "Process message failed after max retries, sending to dead letter: {}",
                             e
                         );
+                        // Update DB first so on reload the user sees Failed; then notify client.
+                        set_message_failed_and_notify(
+                            &pool,
+                            &redis_conn,
+                            user_id,
+                            project_id,
+                            session_id,
+                            response_message_id,
+                            agent.clone(),
+                        )
+                        .await;
                         if let Err(dl_e) = publish_to_dead_letter(
                             &retry_channel,
                             &dead_letter_spec.exchange_name,
@@ -194,43 +297,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .await
                         {
                             tracing::error!("Failed to publish to dead letter: {}", dl_e);
-                        }
-                        let message_id_to_update = response_message_id;
-                        // Update placeholder message status to failed so client and API reflect it
-                        if let Err(db_e) = block_on_db_tokio(&pool, move |conn| {
-                            diesel::update(
-                                chat_messages::table
-                                    .filter(chat_messages::id.eq(message_id_to_update)),
-                            )
-                            .set(chat_messages::status.eq(ChatMessageStatus::Failed))
-                            .execute(conn)
-                        })
-                        .await
-                        {
-                            tracing::error!(
-                                "Failed to update message status to failed: {}",
-                                db_e
-                            );
-                        } else {
-                            // Notify clients subscribed to this user so they can update UI
-                            let channel = user_channel(user_id);
-                            let event = WsServerEvent::ChatSessionMessageStatusChange(
-                                ChatSessionMessageStatusChangePayload {
-                                    project_id,
-                                    session_id,
-                                    message_id: response_message_id,
-                                    status: ChatMessageStatus::Failed,
-                                },
-                            );
-                            let mut guard = redis_conn.lock().await;
-                            if let Err(redis_e) =
-                                publish_event_to_channel(&mut *guard, &channel, &event).await
-                            {
-                                tracing::warn!(
-                                    "Failed to publish message status change to Redis: {}",
-                                    redis_e
-                                );
-                            }
                         }
                     } else {
                         tracing::error!(
@@ -246,6 +312,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 Ok(p) => p,
                                 Err(parse_e) => {
                                     tracing::error!("Failed to parse message for retry: {}", parse_e);
+                                    set_message_failed_and_notify(
+                                        &pool,
+                                        &redis_conn,
+                                        user_id,
+                                        project_id,
+                                        session_id,
+                                        response_message_id,
+                                        agent.clone(),
+                                    )
+                                    .await;
                                     if let Err(dl_e) = publish_to_dead_letter(
                                         &retry_channel,
                                         &dead_letter_spec.exchange_name,
@@ -267,6 +343,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             Ok(b) => b,
                             Err(ser_e) => {
                                 tracing::error!("Failed to serialize message for retry: {}", ser_e);
+                                set_message_failed_and_notify(
+                                    &pool,
+                                    &redis_conn,
+                                    user_id,
+                                    project_id,
+                                    session_id,
+                                    response_message_id,
+                                    agent.clone(),
+                                )
+                                .await;
                                 if acker.ack(BasicAckOptions::default()).await.is_err() {
                                     tracing::warn!("Failed to ack delivery");
                                 }
@@ -284,6 +370,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .await
                         {
                             tracing::error!("Failed to publish to retry delay: {}", retry_e);
+                            set_message_failed_and_notify(
+                                &pool,
+                                &redis_conn,
+                                user_id,
+                                project_id,
+                                session_id,
+                                response_message_id,
+                                agent.clone(),
+                            )
+                            .await;
                         }
                     }
                 }

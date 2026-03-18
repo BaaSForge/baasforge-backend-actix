@@ -34,6 +34,7 @@ impl TryFrom<String> for AppEnvironment {
 pub enum LlmProvider {
   OpenAi,
   Gemini,
+  Anthropic,
 }
 
 impl std::fmt::Display for LlmProvider {
@@ -41,6 +42,7 @@ impl std::fmt::Display for LlmProvider {
     match self {
       LlmProvider::OpenAi => write!(f, "openai"),
       LlmProvider::Gemini => write!(f, "gemini"),
+      LlmProvider::Anthropic => write!(f, "anthropic"),
     }
   }
 }
@@ -52,7 +54,8 @@ impl TryFrom<String> for LlmProvider {
     match s.to_lowercase().trim() {
       "openai" => Ok(LlmProvider::OpenAi),
       "gemini" => Ok(LlmProvider::Gemini),
-      _ => Err("Invalid LLM_PROVIDER. Must be 'openai' or 'gemini'".to_string()),
+      "anthropic" => Ok(LlmProvider::Anthropic),
+      _ => Err("Invalid LLM_PROVIDER. Must be 'openai', 'gemini', or 'anthropic'".to_string()),
     }
   }
 }
@@ -81,6 +84,8 @@ pub struct Settings {
   pub openai_model: String,
   pub gemini_api_key: Option<String>,
   pub gemini_model: String,
+  pub anthropic_api_key: Option<String>,
+  pub anthropic_model: String,
   pub llm_provider: LlmProvider,
 }
 
@@ -123,6 +128,8 @@ impl Settings {
     let openai_model = env::var("OPENAI_MODEL").expect("OPENAI_MODEL must be set");
     let gemini_api_key = env::var("GEMINI_API_KEY").ok();
     let gemini_model = env::var("GEMINI_MODEL").expect("GEMINI_MODEL must be set");
+    let anthropic_api_key = env::var("ANTHROPIC_API_KEY").ok();
+    let anthropic_model = env::var("ANTHROPIC_MODEL").expect("ANTHROPIC_MODEL must be set");
     let llm_provider_str = env::var("LLM_PROVIDER").expect("LLM_PROVIDER must be set");
     let llm_provider = LlmProvider::try_from(llm_provider_str)?;
 
@@ -144,6 +151,8 @@ impl Settings {
       openai_model,
       gemini_api_key,
       gemini_model,
+      anthropic_api_key,
+      anthropic_model,
       llm_provider,
     })
   }

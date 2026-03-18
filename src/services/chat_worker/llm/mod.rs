@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+pub mod claude;
 pub mod openai;
 pub mod gemini;
 pub mod tools;
@@ -40,6 +41,10 @@ pub enum LlmClient {
         model: String,
     },
     Gemini {
+        api_key: String,
+        model: String,
+    },
+    Claude {
         api_key: String,
         model: String,
     },
@@ -94,6 +99,23 @@ impl LlmClient {
                 )
                 .await
             }
+            LlmClient::Claude { api_key, model } => {
+                claude::call_claude_stream(
+                    api_key,
+                    model,
+                    pool,
+                    session_messages,
+                    user_text,
+                    redis_conn,
+                    topic,
+                    message_id,
+                    user_id,
+                    project_id,
+                    session_id,
+                    agent,
+                )
+                .await
+            }
         }
     }
 }
@@ -119,6 +141,15 @@ pub fn build_llm_client(settings: &Settings) -> Result<LlmClient, BoxError> {
             Ok(LlmClient::Gemini {
                 api_key: key,
                 model: settings.gemini_model.clone(),
+            })
+        }
+        LlmProvider::Anthropic => {
+            let key = settings.anthropic_api_key.clone().ok_or_else(|| {
+                BoxError::from("LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set")
+            })?;
+            Ok(LlmClient::Claude {
+                api_key: key,
+                model: settings.anthropic_model.clone(),
             })
         }
     }

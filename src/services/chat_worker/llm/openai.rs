@@ -1,4 +1,3 @@
-// Response is either streaming text OR tool_calls (not both). No merge; we rely on streamed deltas.
 use crate::models::chat_messages::{ChatAgentType, RequestedToolCall, ChatSessionRoleType, TextPayload};
 use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};

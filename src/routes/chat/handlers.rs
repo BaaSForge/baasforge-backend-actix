@@ -13,7 +13,10 @@ use crate::models::chat_sessions::{
 use crate::models::projects::PlatformEnvironmentType;
 use crate::models::projects::{ProjectRuntimeResponse, ProjectUnitResponse};
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
-use crate::routes::ws::events::{ChatSessionGenerationStartedPayload, WsServerEvent};
+use crate::routes::ws::events::{
+    ChatSessionGenerationEndedPayload, ChatSessionGenerationStartedPayload,
+    ChatSessionMessageStatusChangePayload, WsServerEvent,
+};
 use crate::routes::ws::redis::{publish_event_to_channel, user_channel};
 use crate::routes::ws::set_stopped_message_id;
 use crate::routes::AppContext;
@@ -422,6 +425,8 @@ pub async fn handle_stop_generating(
     let user_id = access_payload.user_id;
     let ttl_secs = context.settings.stopped_messages_ids_cache_ttl_secs;
     let session_id_for_update = session_id;
+    let project_id_ws = project_id;
+    let session_id_ws = session_id;
 
     enum StopOut {
         NotFound,
@@ -507,6 +512,34 @@ pub async fn handle_stop_generating(
                     e
                 );
             }
+        }
+        let channel = user_channel(user_id);
+        for message_id in &generating_message_ids {
+            let event = WsServerEvent::ChatSessionMessageStatusChange(
+                ChatSessionMessageStatusChangePayload {
+                    project_id: project_id_ws,
+                    session_id: session_id_ws,
+                    message_id: *message_id,
+                    status: ChatMessageStatus::Stopped,
+                },
+            );
+            if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+                tracing::warn!(
+                    %message_id,
+                    "Failed to publish message status change to Redis: {}",
+                    e
+                );
+            }
+        }
+        let event = WsServerEvent::ChatSessionGenerationEnded(ChatSessionGenerationEndedPayload {
+            project_id: project_id_ws,
+            session_id: session_id_ws,
+        });
+        if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+            tracing::warn!(
+                "Failed to publish generation ended to Redis: {}",
+                e
+            );
         }
     }
 

@@ -1,5 +1,3 @@
-// TODO: we know that gpt and gemini dont support tool call and content in the same response,
-// so we can simplify this code
 use crate::models::chat_messages::{ChatAgentType, RequestedToolCall, ChatSessionRoleType, TextPayload};
 use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
