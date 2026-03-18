@@ -6,8 +6,10 @@ use crate::models::projects::ProjectReleaseResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Args for load_latest_releases. Schema from this struct is used for Gemini; GPT and Claude use params_schema() in spec().
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFetchLatestReleasesArgs {
+    #[schemars(description = "Required maximum number of releases to return (20 to max 100).")]
     pub limit: i64,
 }
 
@@ -59,13 +61,16 @@ fn params_schema() -> Value {
                 "type": "integer",
                 "description": "Required maximum number of releases to return (20 to max 100)."
             }
-        }
+        },
+        "required": ["limit"]
     })
 }
 
 /// Name of the tool that triggers a RabbitMQ message for the worker to load latest releases for the project.
 pub const TOOL_NAME: &str = "load_latest_releases";
 
+/// Single source for GPT and Claude: name, description, and parameters (params_schema).
+/// Gemini uses the same name and description but gets parameters from the args struct via `gemini_declaration()` (gemini_rust only supports struct-derived schemas); keep `ToolFetchLatestReleasesArgs` and `params_schema()` in sync.
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,

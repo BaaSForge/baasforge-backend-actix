@@ -6,8 +6,10 @@ use crate::models::projects::ProjectUnitResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Args for load_latest_production_release_units. Schema from this struct is used for Gemini; GPT and Claude use params_schema() in spec().
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFetchRelevantUnitsArgs {
+    #[schemars(description = "Search query to filter or find relevant units in the latest production release (e.g. user's question, keywords, or a short phrase). Must not be empty.")]
     pub query: String,
 }
 
@@ -66,6 +68,8 @@ fn params_schema() -> Value {
 /// Name of the tool that triggers a RabbitMQ message for the worker to load latest production release units (not executed inline).
 pub const TOOL_NAME: &str = "load_latest_production_release_units";
 
+/// Single source for GPT and Claude: name, description, and parameters (params_schema).
+/// Gemini uses the same name and description but gets parameters from the args struct via `gemini_declaration()` (gemini_rust only supports struct-derived schemas); keep `ToolFetchRelevantUnitsArgs` and `params_schema()` in sync.
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,

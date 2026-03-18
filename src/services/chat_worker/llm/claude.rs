@@ -90,6 +90,8 @@ fn build_messages(
     out
 }
 
+/// Build tools array for Claude Messages API. Each tool: name, description, input_schema (JSON Schema).
+/// Matches Anthropic format: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use
 fn to_tools_json(agent: &ChatAgentType) -> Vec<Value> {
     let names = tool_names_for_agent(agent);
     tools::all_tool_specs()
