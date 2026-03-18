@@ -1,21 +1,24 @@
 use crate::models::chat_messages::{
-    ChatAgentType, ChatSessionRoleType, RequestedToolCall, TextPayload,
+    ChatAgentType, ChatMessageType, ChatSessionRoleType, RequestedToolCall, TextPayload,
+};
+use crate::services::chat_worker::llm::history::{
+    session_messages_to_upstream_entries, UpstreamHistoryEntry,
 };
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::GenerateOutcome;
-use gemini_rust::Gemini;
 use gemini_rust::client::GenerationStream;
-use gemini_rust::tools::model::{FunctionCallingMode, FunctionDeclaration};
+use gemini_rust::tools::model::{FunctionCall, FunctionCallingMode, FunctionDeclaration};
+use gemini_rust::{Content, Gemini, Message, Role};
 use redis::aio::MultiplexedConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::tools::{self, load_latest_production_release_units, load_latest_releases};
-use super::{BoxError, payload_to_string};
+use super::BoxError;
 use crate::services::chat_worker::agent::tool_names_for_agent;
 use serde_json::Value;
 
@@ -59,7 +62,7 @@ pub async fn call_gemini_stream(
     api_key: &str,
     model: &str,
     pool: &crate::database::DbPool,
-    session_messages: &[(ChatSessionRoleType, Option<Value>)],
+    session_messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
     user_text: &str,
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
@@ -78,22 +81,54 @@ pub async fn call_gemini_stream(
     let mut chunk_index: u32 = 0;
     let mut message_created = false;
 
+    let entries = session_messages_to_upstream_entries(session_messages, user_text);
     let mut request = client.generate_content().with_system_prompt(system_prompt);
 
-    for (role, payload) in session_messages {
-        let text = payload_to_string(payload);
-        if text.is_empty() {
-            continue;
+    for entry in &entries {
+        match entry {
+            UpstreamHistoryEntry::User { text } => {
+                if !text.is_empty() {
+                    request = request.with_user_message(text.clone());
+                }
+            }
+            UpstreamHistoryEntry::Assistant { text, tool_calls } => {
+                if let Some(tcs) = tool_calls.as_ref() {
+                    if !text.trim().is_empty() {
+                        request = request.with_model_message(text.trim().to_string());
+                    }
+                    for tc in tcs.iter() {
+                        if tc.name.is_empty() {
+                            continue;
+                        }
+                        let Some(sig) = &tc.thought_signature else {
+                            continue;
+                        };
+                        let model_content = Content::function_call_with_thought(
+                            FunctionCall::new(tc.name.clone(), tc.arguments.clone()),
+                            sig.clone(),
+                        );
+                        request = request.with_message(Message {
+                            content: model_content,
+                            role: Role::Model,
+                        });
+                    }
+                } else if !text.trim().is_empty() {
+                    request = request.with_model_message(text.trim().to_string());
+                }
+            }
+            UpstreamHistoryEntry::ToolResult {
+                tool_name,
+                content,
+                ..
+            } => {
+                request = request
+                    .with_function_response_str(tool_name, content.clone())
+                    .map_err(|e| format!("Gemini history function response: {}", e))?;
+            }
         }
-        request = match role {
-            ChatSessionRoleType::User => request.with_user_message(text),
-            ChatSessionRoleType::Ai => request.with_model_message(text),
-        };
     }
 
-    request = request
-        .with_user_message(user_text.to_string())
-        .with_function_calling_mode(FunctionCallingMode::Auto);
+    request = request.with_function_calling_mode(FunctionCallingMode::Auto);
     for decl in &declarations {
         request = request.with_function(decl.clone());
     }
@@ -108,7 +143,7 @@ pub async fn call_gemini_stream(
         .await
         .map_err(|e| format!("Gemini stream: {}", e))?;
 
-    let mut all_function_calls: Vec<(String, Value)> = Vec::new();
+    let mut all_function_calls: Vec<(String, Value, Option<String>)> = Vec::new();
     let mut chunk_count: u32 = 0;
 
     while let Some(chunk) = futures::TryStreamExt::try_next(&mut stream)
@@ -116,11 +151,16 @@ pub async fn call_gemini_stream(
         .map_err(|e| format!("Gemini stream: {}", e))?
     {
         chunk_count += 1;
-        for fc in chunk.function_calls() {
-            all_function_calls.push((fc.name.clone(), fc.args.clone()));
+        for (fc, thought_sig) in chunk.function_calls_with_thoughts() {
+            all_function_calls.push((
+                fc.name.clone(),
+                fc.args.clone(),
+                thought_sig.map(String::from),
+            ));
             tracing::info!(
                 chunk_index = chunk_count,
                 tool = %fc.name,
+                has_thought_signature = thought_sig.is_some(),
                 "Gemini: found function call in stream chunk"
             );
         }
@@ -178,10 +218,11 @@ pub async fn call_gemini_stream(
         tracing::info!("Gemini: LLM requested {} tool call(s), executing", fc_count);
         let requested: Vec<RequestedToolCall> = all_function_calls
             .iter()
-            .map(|(name, args)| RequestedToolCall {
+            .map(|(name, args, thought_sig)| RequestedToolCall {
                 tool_call_id: None, // Gemini does not provide tool call ids in stream
                 tool_name: name.clone(),
                 tool_arguments_to_pass: args.clone(),
+                thought_signature: thought_sig.clone(),
             })
             .collect();
 
@@ -207,9 +248,9 @@ pub async fn call_gemini_stream(
             }
         }
 
-        for (name, args) in &all_function_calls {
+        for (name, args, _thought_sig) in &all_function_calls {
             tracing::info!(tool = %name, args = ?args, "Gemini: executing tool");
-            tools::execute_tool_async(name, args.clone())
+            tools::execute_tool_async(name, args.clone(), None)
                 .await
                 .map_err(|e| format!("Tool execution failed: {}", e))?;
         }

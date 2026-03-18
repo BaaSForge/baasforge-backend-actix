@@ -3,11 +3,14 @@
 // https://docs.anthropic.com/en/api/messages
 //
 // Replacing anthropic_rust with pure HTTP added ~130 lines of our own code:
-//   - Request: build_request_body, message_json, build_messages, to_tools_json (~55 lines)
+//   - Request: build_request_body, build_messages (ClaudeMessage/ClaudeContentBlock), to_tools_json
 //   - SSE: StreamEvent enum + read_one_sse_event parsing (~75 lines)
 // Total file ~396 lines; dependency removed from Cargo.toml.
 use crate::models::chat_messages::{
-    ChatAgentType, ChatSessionRoleType, RequestedToolCall, TextPayload,
+    ChatAgentType, ChatMessageType, ChatSessionRoleType, RequestedToolCall, TextPayload,
+};
+use crate::services::chat_worker::llm::history::{
+    session_messages_to_upstream_entries, UpstreamHistoryEntry,
 };
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
@@ -22,8 +25,9 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::tools;
-use super::{BoxError, payload_to_string};
+use super::BoxError;
 use crate::services::chat_worker::agent::tool_names_for_agent;
+use serde::Serialize;
 use serde_json::Value;
 
 // ---- Request/response types (no crate) ----
@@ -42,53 +46,108 @@ fn api_model_id(config_model: &str) -> &'static str {
     }
 }
 
+// ---- Claude API message types (type-safe, maps to Anthropic Messages API) ----
+// See: https://docs.anthropic.com/en/api/messages
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+enum ClaudeContentBlock {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct ClaudeMessage {
+    role: String,
+    content: Vec<ClaudeContentBlock>,
+}
+
+/// Convert upstream history entries to Claude API messages.
+/// Tool-call request and tool results are always separate messages (never combined):
+/// - One "assistant" message with text + tool_use blocks (the tool-call request).
+/// - Then one "user" message per tool result, each with a single tool_result block.
+fn entries_to_claude_messages(entries: &[UpstreamHistoryEntry]) -> Vec<ClaudeMessage> {
+    let mut out = Vec::new();
+    for entry in entries {
+        match entry {
+            UpstreamHistoryEntry::User { text } => {
+                if !text.is_empty() {
+                    out.push(ClaudeMessage {
+                        role: "user".into(),
+                        content: vec![ClaudeContentBlock::Text { text: text.clone() }],
+                    });
+                }
+            }
+            UpstreamHistoryEntry::Assistant { text, tool_calls } => {
+                let mut blocks: Vec<ClaudeContentBlock> = Vec::new();
+                if !text.trim().is_empty() {
+                    blocks.push(ClaudeContentBlock::Text {
+                        text: text.trim().to_string(),
+                    });
+                }
+                if let Some(tcs) = tool_calls.as_ref() {
+                    for tc in tcs {
+                        blocks.push(ClaudeContentBlock::ToolUse {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            input: tc.arguments.clone(),
+                        });
+                    }
+                }
+                if !blocks.is_empty() {
+                    out.push(ClaudeMessage {
+                        role: "assistant".into(),
+                        content: blocks,
+                    });
+                }
+            }
+            UpstreamHistoryEntry::ToolResult {
+                tool_call_id,
+                content,
+                ..
+            } => {
+                out.push(ClaudeMessage {
+                    role: "user".into(),
+                    content: vec![ClaudeContentBlock::ToolResult {
+                        tool_use_id: tool_call_id.clone(),
+                        content: content.clone(),
+                    }],
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Build request body for POST /v1/messages (streaming, with tools).
 fn build_request_body(
     system_prompt: &str,
-    messages: Vec<Value>,
+    messages: &[ClaudeMessage],
     tools_json: Vec<Value>,
     api_model: &str,
 ) -> Value {
+    let messages_value = serde_json::to_value(messages).expect("ClaudeMessage serialization");
     serde_json::json!({
         "model": api_model,
         "max_tokens": MAX_TOKENS,
         "stream": true,
         "system": system_prompt,
-        "messages": messages,
+        "messages": messages_value,
         "tools": tools_json,
     })
 }
 
-/// One message: { "role": "user"|"assistant", "content": [ { "type": "text", "text": "..." } ] }.
-fn message_json(role: &str, text: &str) -> Value {
-    serde_json::json!({
-        "role": role,
-        "content": [{ "type": "text", "text": text }],
-    })
-}
-
-fn build_messages(
-    session_messages: &[(ChatSessionRoleType, Option<Value>)],
-    user_text: &str,
-) -> Vec<Value> {
-    let mut out = Vec::new();
-    for (role, payload) in session_messages {
-        let c = payload_to_string(payload).trim().to_string();
-        if c.is_empty() {
-            continue;
-        }
-        let role_str = match role {
-            ChatSessionRoleType::User => "user",
-            ChatSessionRoleType::Ai => "assistant",
-        };
-        out.push(message_json(role_str, &c));
-    }
-    let user_text = user_text.trim();
-    if !user_text.is_empty() {
-        out.push(message_json("user", user_text));
-    }
-    out
-}
 
 /// Build tools array for Claude Messages API. Each tool: name, description, input_schema (JSON Schema).
 /// Matches Anthropic format: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use
@@ -226,7 +285,7 @@ pub async fn call_claude_stream(
     api_key: &str,
     model: &str,
     pool: &crate::database::DbPool,
-    session_messages: &[(ChatSessionRoleType, Option<Value>)],
+    session_messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
     user_text: &str,
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
@@ -241,7 +300,8 @@ pub async fn call_claude_stream(
     let tool_count = tools_list.len();
     let api_model = api_model_id(model);
 
-    let messages = build_messages(session_messages, user_text);
+    let entries = session_messages_to_upstream_entries(session_messages, user_text);
+    let messages = entries_to_claude_messages(&entries);
     if messages.is_empty() {
         return Err(
             "Claude: no messages to send (session history and user text are empty or whitespace)"
@@ -249,7 +309,7 @@ pub async fn call_claude_stream(
         );
     }
 
-    let body = build_request_body(system_prompt, messages, tools_list.clone(), api_model);
+    let body = build_request_body(system_prompt, &messages, tools_list.clone(), api_model);
 
     let url = format!("{}/v1/messages", ANTHROPIC_API_BASE);
     let response = reqwest::Client::new()
@@ -378,6 +438,7 @@ pub async fn call_claude_stream(
                 tool_call_id: if id.is_empty() { None } else { Some(id) },
                 tool_name: name.clone(),
                 tool_arguments_to_pass: input,
+                thought_signature: None,
             })
             .collect();
         if requested.is_empty() {
@@ -409,9 +470,13 @@ pub async fn call_claude_stream(
             }
             for r in &requested {
                 tracing::info!(tool = %r.tool_name, args = ?r.tool_arguments_to_pass, "Claude: executing tool");
-                tools::execute_tool_async(&r.tool_name, r.tool_arguments_to_pass.clone())
-                    .await
-                    .map_err(|e| format!("Tool execution failed: {}", e))?;
+                tools::execute_tool_async(
+                    &r.tool_name,
+                    r.tool_arguments_to_pass.clone(),
+                    r.tool_call_id.clone(),
+                )
+                .await
+                .map_err(|e| format!("Tool execution failed: {}", e))?;
             }
             Some(requested)
         }

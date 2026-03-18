@@ -4,7 +4,7 @@ mod planner;
 mod solution_analyzer;
 
 use crate::database::PooledConn;
-use crate::models::chat_messages::{ChatAgentType, ChatSessionRoleType};
+use crate::models::chat_messages::{ChatAgentType, ChatMessageType, ChatSessionRoleType};
 use diesel::result::Error;
 use serde_json::Value;
 use uuid::Uuid;
@@ -31,7 +31,7 @@ pub fn load_history_for_agent(
     conn: &mut PooledConn,
     session_id: Uuid,
     agent: ChatAgentType,
-) -> Result<Vec<(ChatSessionRoleType, Option<Value>)>, Error> {
+) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
     match agent {
         ChatAgentType::Planner => planner::load_history(conn, session_id),
         ChatAgentType::ArchitectureAnalyzer => {

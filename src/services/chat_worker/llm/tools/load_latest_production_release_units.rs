@@ -17,6 +17,12 @@ pub struct ToolFetchRelevantUnitsArgs {
 pub struct ToolFetchRelevantUnitsPayload {
     pub args: ToolFetchRelevantUnitsArgs,
     pub units: Vec<ProjectUnitResponse>,
+    /// LLM tool call id; used when building message history so tool results attach to the correct tool_use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// Tool name (e.g. TOOL_NAME); stored so upstream LLM history can use it without looking up from a previous message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
 }
 use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
@@ -42,12 +48,18 @@ pub fn gemini_declaration() -> FunctionDeclaration {
 pub const MESSAGE_TYPE: ChatMessageType = ChatMessageType::ToolFetchRelevantUnits;
 
 /// Builds the queue message payload from LLM tool-call args. Used by [`super::tool_context_for_chat_session`].
-pub fn payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError> {
+pub fn payload_from_args(
+    args: Value,
+    tool_call_id: Option<String>,
+    tool_name: &str,
+) -> Result<ChatMessagePayload, BoxError> {
     let args = serde_json::from_value::<ToolFetchRelevantUnitsArgs>(args).unwrap_or_default();
     Ok(ChatMessagePayload::ToolFetchRelevantUnits(
         ToolFetchRelevantUnitsPayload {
             args,
             units: vec![],
+            tool_call_id,
+            tool_name: Some(tool_name.to_string()),
         },
     ))
 }
@@ -97,13 +109,20 @@ pub async fn handler(
         .as_ref()
         .map(|p| p.args.clone())
         .unwrap_or_default();
+    let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
+    let tool_name = existing.as_ref().and_then(|p| p.tool_name.clone());
     let query_owned = args.query.clone();
     let units = block_on_db_tokio(&pool, move |conn| {
         load_units_for_latest_production_release(conn, project_id, &query_owned)
     })
     .await
     .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
-    let full_payload = ToolFetchRelevantUnitsPayload { args, units };
+    let full_payload = ToolFetchRelevantUnitsPayload {
+        args,
+        units,
+        tool_call_id,
+        tool_name,
+    };
     let payload_value = serde_json::to_value(&full_payload)
         .map_err(|e| -> BoxError { format!("serialize units: {}", e).into() })?;
     let updated_row = block_on_db_tokio(&pool, move |conn| {

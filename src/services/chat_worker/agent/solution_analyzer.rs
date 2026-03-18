@@ -1,6 +1,6 @@
 use crate::database::PooledConn;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatSessionRoleType,
+    ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::schema::chat_messages;
 use diesel::prelude::*;
@@ -18,7 +18,7 @@ pub fn tool_names() -> &'static [&'static str] {
 pub fn load_history(
     conn: &mut PooledConn,
     session_id: Uuid,
-) -> Result<Vec<(ChatSessionRoleType, Option<Value>)>, Error> {
+) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
     let rows = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))
         .order(chat_messages::id.desc())
@@ -36,7 +36,7 @@ pub fn load_history(
             }
         })
         .take(HISTORY_LIMIT as usize)
-        .map(|row| (row.role, row.payload))
+        .map(|row| (row.role, row.type_, row.payload))
         .collect();
 
     let out: Vec<_> = filtered.into_iter().rev().collect();

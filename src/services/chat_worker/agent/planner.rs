@@ -1,6 +1,6 @@
 use crate::database::PooledConn;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatSessionRoleType,
+    ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::tools::{
@@ -24,7 +24,7 @@ pub fn tool_names() -> &'static [&'static str] {
 pub fn load_history(
     conn: &mut PooledConn,
     session_id: Uuid,
-) -> Result<Vec<(ChatSessionRoleType, Option<Value>)>, Error> {
+) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
     let rows = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))
         .order(chat_messages::id.desc())
@@ -42,7 +42,7 @@ pub fn load_history(
             }
         })
         .take(HISTORY_LIMIT as usize)
-        .map(|row| (row.role, row.payload))
+        .map(|row| (row.role, row.type_, row.payload))
         .collect();
 
     let out: Vec<_> = filtered.into_iter().rev().collect();
@@ -76,6 +76,12 @@ Assemble: Create a New Release based on the modifications made during the chat s
 UI Orchestration: You can trigger UI elements for the user, specifically: The Connect Runtime button, The Create New Release button, or The Deploy/Release button.
 Do not call the same tool repeatedly with the same or equivalent inputs. If you already have the result of a tool call in the conversation, use that information instead of calling the tool again. Only invoke a tool when you genuinely need fresh data or a new action.
 
+3.1. Execution Loop (How Your Turns Work)
+You run in a loop. When you return one or more tool calls, the system executes those tools and then invokes you again with the same conversation history plus the tool results appended (as tool result messages). You will see your previous assistant message with tool_calls, followed by the results. Use this flow correctly:
+- When you need data or an action: Return a response that includes tool_calls (and optionally a short text prefix). Do not invent or assume tool results; wait for the next turn.
+- When you receive tool results: On the next invocation you will see the tool results in the conversation. Process them and respond with natural-language content if you need to.
+- Content and tool_calls: When you have nothing more to do after tool results, always end with a clear summary for the user—never end the turn with only tool_calls or with no user-facing content when the user is waiting for an answer.
+
 4. Operational Protocol & Workflow
 Analyze & Clarify: When a user asks for a feature, retrieve the project's units. If any ambiguity exists, you must ask the user for clarification. All requirements must be fully clarified before you begin creating or modifying units.
 Scope Constraint: Never add to or suggest features beyond the user's specific requirements. Implement only and exactly what the user has requested.
@@ -95,4 +101,4 @@ Tier Awareness: If a user needs more runtimes or projects than allowed, suggest 
 Single-Project/Single-Conversation Focus: You have only access to one chat session of one project. Stay focused on the project context of the current conversation.
 
 6. Ending the Discussion
-Before you decide to return no further text and end the turn (e.g. after using tools or when you have nothing more to add), you must provide a brief summary for the user: what tool calls you made, what you did, and the current state or next step. Do not end with an empty or silent response; always give a short summary of your actions and outcome so the user knows what happened."#;
+Before you end the turn—especially after a round of tool calls in the execution loop—you must provide a brief summary for the user: what tool calls you made, what you did, and the current state or next step. Do not end with an empty or silent response; always give a short summary of your actions and outcome so the user knows what happened."#;

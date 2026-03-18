@@ -1,5 +1,5 @@
 use crate::models::chat_messages::{
-    ChatAgentType, ChatSessionRoleType, RequestedToolCall, TextPayload,
+    ChatAgentType, ChatMessageType, ChatSessionRoleType, RequestedToolCall, TextPayload,
 };
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
@@ -8,14 +8,17 @@ use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::GenerateOutcome;
 use futures::StreamExt;
 use openai::Credentials;
-use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
 use redis::aio::MultiplexedConnection;
 use reqwest::header::{AUTHORIZATION, HeaderValue};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
-use super::{BoxError, payload_to_string, tools};
+use super::{BoxError, tools};
 use crate::services::chat_worker::agent::tool_names_for_agent;
+use crate::services::chat_worker::llm::history::{
+    session_messages_to_upstream_entries, UpstreamHistoryEntry,
+};
+use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole, ToolCall, ToolCallFunction};
 use serde_json::Value;
 
 struct StreamChunk {
@@ -54,27 +57,81 @@ fn to_openai_functions_for_agent(
         .collect()
 }
 
-fn build_chat_messages(
-    session_messages: &[(ChatSessionRoleType, Option<Value>)],
-    user_text: &str,
-    agent: &ChatAgentType,
+/// Convert upstream history entries to OpenAI Chat Completion messages.
+/// Tool-call request and tool results are always separate messages (never combined):
+/// - One Assistant message with tool_calls (the request).
+/// - Then one Tool-role message per result, each with its own tool_call_id and content.
+fn entries_to_openai_messages(
+    entries: &[UpstreamHistoryEntry],
+    system_prompt: &str,
 ) -> Vec<ChatCompletionMessage> {
     let mut messages = vec![openai_msg(
         ChatCompletionMessageRole::System,
-        system_prompt_for_agent(agent),
+        system_prompt,
     )];
-    for (role, payload) in session_messages {
-        let c = payload_to_string(payload);
-        if c.is_empty() {
-            continue;
+    for entry in entries {
+        match entry {
+            UpstreamHistoryEntry::User { text } => {
+                if !text.is_empty() {
+                    messages.push(openai_msg(ChatCompletionMessageRole::User, text.clone()));
+                }
+            }
+            UpstreamHistoryEntry::Assistant { text, tool_calls } => {
+                let content = if text.trim().is_empty() {
+                    None
+                } else {
+                    Some(text.trim().to_string())
+                };
+                let tool_calls: Option<Vec<ToolCall>> = tool_calls.as_ref().and_then(|tcs| {
+                    let v: Vec<ToolCall> = tcs
+                        .iter()
+                        .filter(|tc| !tc.name.is_empty())
+                        .map(|tc| {
+                            let arguments = serde_json::to_string(&tc.arguments)
+                                .unwrap_or_else(|_| "{}".to_string());
+                            ToolCall {
+                                id: tc.id.clone(),
+                                r#type: "function".to_string(),
+                                function: ToolCallFunction {
+                                    name: tc.name.clone(),
+                                    arguments,
+                                },
+                            }
+                        })
+                        .collect();
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some(v)
+                    }
+                });
+                if content.is_some() || tool_calls.is_some() {
+                    messages.push(ChatCompletionMessage {
+                        role: ChatCompletionMessageRole::Assistant,
+                        content,
+                        name: None,
+                        function_call: None,
+                        tool_call_id: None,
+                        tool_calls,
+                    });
+                }
+            }
+            UpstreamHistoryEntry::ToolResult {
+                tool_call_id,
+                content,
+                ..
+            } => {
+                messages.push(ChatCompletionMessage {
+                    role: ChatCompletionMessageRole::Tool,
+                    content: Some(content.clone()),
+                    name: None,
+                    function_call: None,
+                    tool_call_id: Some(tool_call_id.clone()),
+                    tool_calls: Some(Vec::new()),
+                });
+            }
         }
-        let role = match role {
-            ChatSessionRoleType::User => ChatCompletionMessageRole::User,
-            ChatSessionRoleType::Ai => ChatCompletionMessageRole::Assistant,
-        };
-        messages.push(openai_msg(role, c));
     }
-    messages.push(openai_msg(ChatCompletionMessageRole::User, user_text));
     messages
 }
 
@@ -218,7 +275,7 @@ pub async fn call_gpt_stream(
     credentials: &Credentials,
     model: &str,
     pool: &crate::database::DbPool,
-    session_messages: &[(ChatSessionRoleType, Option<Value>)],
+    session_messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
     user_text: &str,
     redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
     topic: &str,
@@ -228,7 +285,9 @@ pub async fn call_gpt_stream(
     session_id: uuid::Uuid,
     agent: ChatAgentType,
 ) -> Result<GenerateOutcome, BoxError> {
-    let messages = build_chat_messages(session_messages, user_text, &agent);
+    let entries = session_messages_to_upstream_entries(session_messages, user_text);
+    let system_prompt = system_prompt_for_agent(&agent);
+    let messages = entries_to_openai_messages(&entries, system_prompt);
     let functions = to_openai_functions_for_agent(&agent);
     let mut rx = stream_openai_tools(credentials, model, messages, &functions)
         .await
@@ -344,6 +403,7 @@ pub async fn call_gpt_stream(
                     },
                     tool_name: name.clone(),
                     tool_arguments_to_pass: args,
+                    thought_signature: None,
                 }
             })
             .collect();
@@ -366,10 +426,15 @@ pub async fn call_gpt_stream(
                 .await?;
             }
         }
-        for (_, name, arguments) in &to_run {
+        for (id, name, arguments) in &to_run {
             let args: Value = serde_json::from_str(arguments)
                 .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
-            tools::execute_tool_async(name, args).await?;
+            let tool_call_id = if id.is_empty() {
+                None
+            } else {
+                Some(id.clone())
+            };
+            tools::execute_tool_async(name, args, tool_call_id).await?;
         }
         Some(requested)
     } else {

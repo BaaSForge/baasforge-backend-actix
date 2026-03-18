@@ -13,6 +13,7 @@ use crate::services::chat_worker::llm::tools::{
 };
 
 /// One requested tool call from the LLM (GPT tool_call_id optional; Gemini has no id).
+/// For Gemini, thought_signature must be stored and sent back in history for tool calls to work.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RequestedToolCall {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -20,6 +21,9 @@ pub struct RequestedToolCall {
     pub tool_name: String,
     #[serde(alias = "tool_arguments_to_pass")]
     pub tool_arguments_to_pass: Value,
+    /// Gemini: required when replaying function calls in history (thoughtSignature).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 /// Payload for Text messages: streamed text and optional requested tool calls.

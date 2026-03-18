@@ -1,6 +1,8 @@
 use crate::configs::{LlmProvider, Settings};
 use crate::database::DbPool;
-use crate::models::chat_messages::{ChatAgentType, ChatSessionRoleType, TextPayload};
+use crate::models::chat_messages::{
+    ChatAgentType, ChatMessageType, ChatSessionRoleType, TextPayload,
+};
 use redis::aio::MultiplexedConnection;
 use serde_json::Value;
 use std::sync::Arc;
@@ -9,6 +11,7 @@ use uuid::Uuid;
 
 pub mod claude;
 pub mod gemini;
+pub mod history;
 pub mod openai;
 pub mod tools;
 
@@ -54,7 +57,7 @@ impl LlmClient {
     pub async fn generate(
         &self,
         pool: &DbPool,
-        session_messages: &[(ChatSessionRoleType, Option<Value>)],
+        session_messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
         user_text: &str,
         redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
         topic: &str,

@@ -45,9 +45,11 @@ use uuid::Uuid;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Callback type for queue-based tools: each is invoked with raw args and returns the new message id.
+/// Callback type for queue-based tools: invoked with (args, tool_call_id) and returns the new message id.
 pub type OnToolCall = Arc<
-    dyn Fn(Value) -> Pin<Box<dyn Future<Output = Result<Uuid, BoxError>> + Send>> + Send + Sync,
+    dyn Fn(Value, Option<String>) -> Pin<Box<dyn Future<Output = Result<Uuid, BoxError>> + Send>>
+        + Send
+        + Sync,
 >;
 
 #[derive(Clone, Debug)]
@@ -78,8 +80,8 @@ where
     TOOL_CONTEXT.scope(Arc::new(ctx), f).await
 }
 
-/// Function type each queue-based tool implements: args from LLM → payload for the queue message.
-type PayloadFromArgsFn = fn(Value) -> Result<ChatMessagePayload, BoxError>;
+/// Function type each queue-based tool implements: (args, tool_call_id, tool_name) from LLM → payload for the queue message.
+type PayloadFromArgsFn = fn(Value, Option<String>, &str) -> Result<ChatMessagePayload, BoxError>;
 
 /// Registry of (TOOL_NAME, MESSAGE_TYPE, payload_from_args). Add new tools here.
 fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFromArgsFn)] {
@@ -128,7 +130,7 @@ pub fn tool_context_for_chat_session(
         let agent = agent.clone();
         callbacks.insert(
             (*name).to_string(),
-            Arc::new(move |args: Value| {
+            Arc::new(move |args: Value, tool_call_id: Option<String>| {
                 let publisher = publisher.clone();
                 let user_id = user_id;
                 let project_id = project_id;
@@ -138,7 +140,8 @@ pub fn tool_context_for_chat_session(
                 let agent = agent.clone();
                 Box::pin(async move {
                     let response_message_id = new_uuid();
-                    let payload = payload_from_args(args).map_err(|e| -> BoxError { e })?;
+                    let payload = payload_from_args(args, tool_call_id, name)
+                        .map_err(|e| -> BoxError { e })?;
                     let message = ChatSessionQueueMessage {
                         user_id: Some(user_id),
                         role: ChatSessionRoleType::Ai,
@@ -171,12 +174,17 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
 
 /// Single entry point for the LLM layer: runs queue-based tools via the callback registered under `name`.
 /// All tools publish to RabbitMQ; worker creates message and spawns handler.
-pub async fn execute_tool_async(name: &str, args: Value) -> Result<String, BoxError> {
+/// Pass `tool_call_id` when the provider supplies it (e.g. Claude, OpenAI) so tool results can be attached correctly in history.
+pub async fn execute_tool_async(
+    name: &str,
+    args: Value,
+    tool_call_id: Option<String>,
+) -> Result<String, BoxError> {
     let cb = TOOL_CONTEXT
         .try_with(|ctx| ctx.callbacks.get(name).cloned())
         .map_err(|_| "tools: TOOL_CONTEXT not set (call with_tool_context first)".to_string())?
         .ok_or_else(|| format!("Unknown tool or callback not registered: {}", name))?;
-    cb(args).await?;
+    cb(args, tool_call_id).await?;
     Ok("Request queued.".to_string())
 }
 
