@@ -43,4 +43,5 @@ pub fn load_history(
     Ok(out)
 }
 
-pub const SYSTEM_PROMPT: &str = "You are the Solution Analyzer. You analyze user problems and propose solutions.";
+pub const SYSTEM_PROMPT: &str =
+    "You are the Solution Analyzer. You analyze user problems and propose solutions.";

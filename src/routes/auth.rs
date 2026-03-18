@@ -1,6 +1,5 @@
 use crate::database;
 use crate::libs::api_response::{api_error, api_success};
-use crate::libs::ids::new_uuid;
 use crate::middlewares::auth::{AccessPayload, RefreshPayload};
 // use actix_web::HttpMessage;
 use crate::models::user_tokens::{UserTokenInternal, UserTokenResponse, UserTokenType};
@@ -49,7 +48,10 @@ pub struct InitiateGoogleAuthQuery {
 // TODO: implement google OAuth here
 pub async fn initiate_google_auth(query: web::Query<InitiateGoogleAuthQuery>) -> HttpResponse {
     let location = match &query.callback_url {
-        Some(url) => format!("/api/v1/auth/google/callback?callback-url={}", urlencoding::encode(url)),
+        Some(url) => format!(
+            "/api/v1/auth/google/callback?callback-url={}",
+            urlencoding::encode(url)
+        ),
         None => "/api/v1/auth/google/callback".to_string(),
     };
     HttpResponse::SeeOther()
@@ -160,10 +162,8 @@ pub async fn handle_google_auth_callback(
         Ok(x) => x,
         Err(_) => {
             log::error!("[handle_google_auth_callback] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -221,7 +221,7 @@ pub async fn handle_refresh_token(
     let user_id = refresh_payload.user_id;
     let refresh_token_id = refresh_payload.db_token.id;
 
-    let _ = match database::block_on_db(&context.pool, move |conn| {
+    match database::block_on_db(&context.pool, move |conn| {
         diesel::insert_into(user_tokens::table)
             .values(&UserTokenInternal {
                 user_id,
@@ -239,10 +239,8 @@ pub async fn handle_refresh_token(
         Ok(_) => {}
         Err(_) => {
             log::error!("[handle_refresh_token] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -325,10 +323,8 @@ pub async fn handle_revoke_tokens(
         }
         Err(_) => {
             log::error!("[handle_revoke_tokens] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     }
 
@@ -356,10 +352,12 @@ pub async fn handle_list_tokens(
         .expect("RefreshPayload must exist to list tokens");
 
     let revoked_filter = query.revoked.unwrap_or(false);
-    let token_type_filter = query.token_type.clone().map_or(
-        vec![UserTokenType::Access, UserTokenType::Refresh],
-        |t| vec![t],
-    );
+    let token_type_filter = query
+        .token_type
+        .clone()
+        .map_or(vec![UserTokenType::Access, UserTokenType::Refresh], |t| {
+            vec![t]
+        });
     let user_id = access_payload.user_id;
     let refresh_token = refresh_payload.db_token.token.clone();
     let access_token = access_payload.db_token.token.clone();
@@ -379,10 +377,8 @@ pub async fn handle_list_tokens(
         Ok(v) => v,
         Err(_) => {
             log::error!("[handle_list_tokens] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -404,20 +400,15 @@ pub async fn handle_get_current_user(
     let user_id = access_payload.user_id;
 
     let user = match database::block_on_db(&context.pool, move |conn| {
-        users::table
-            .find(user_id)
-            .first::<User>(conn)
-            .optional()
+        users::table.find(user_id).first::<User>(conn).optional()
     })
     .await
     {
         Ok(u) => u,
         Err(_) => {
             log::error!("[handle_get_current_user] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 

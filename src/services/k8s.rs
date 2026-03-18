@@ -1,8 +1,6 @@
 use crate::models::server_clusters::ServerCluster;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use kube::{
-    Client, Config,
-};
+use kube::{Client, Config};
 use ureq::http;
 
 fn extract_der_from_pem(pem_str: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {

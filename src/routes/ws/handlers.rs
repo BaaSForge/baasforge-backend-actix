@@ -1,8 +1,8 @@
 use crate::middlewares::auth::AccessPayload;
+use crate::routes::AppContext;
 use crate::routes::ws::broker::{ConnectionId, WsBroker};
 use crate::routes::ws::events::WsServerEvent;
 use crate::routes::ws::topics;
-use crate::routes::AppContext;
 use actix_web::web;
 use actix_web::{HttpMessage, HttpRequest};
 use actix_ws::Message;
@@ -60,7 +60,11 @@ pub async fn handle_ws(
             conn_id,
         };
 
-        log::info!("[ws] Spawned connection handler for user_id={} conn_id={}", user_id, conn_id);
+        log::info!(
+            "[ws] Spawned connection handler for user_id={} conn_id={}",
+            user_id,
+            conn_id
+        );
 
         loop {
             tokio::select! {
@@ -114,11 +118,18 @@ pub async fn handle_ws(
         }
         log::info!("[ws] WebSocket connection closing for conn_id={}", conn_id);
         if let Err(e) = session.close(None).await {
-            log::warn!("[ws] Error closing WebSocket session: conn_id={} error={}", conn_id, e);
+            log::warn!(
+                "[ws] Error closing WebSocket session: conn_id={} error={}",
+                conn_id,
+                e
+            );
         }
     });
 
-    log::info!("[ws] WebSocket handshake successful, returning response for user_id={}", user_id);
+    log::info!(
+        "[ws] WebSocket handshake successful, returning response for user_id={}",
+        user_id
+    );
     Ok(response)
 }
 
@@ -145,7 +156,8 @@ async fn handle_client_message(
     text: &str,
     session: &mut actix_ws::Session,
 ) -> Result<(), String> {
-    let msg: ClientMessage = serde_json::from_str(text).map_err(|e| format!("invalid JSON: {}", e))?;
+    let msg: ClientMessage =
+        serde_json::from_str(text).map_err(|e| format!("invalid JSON: {}", e))?;
     match msg {
         ClientMessage::Subscribe { topic } => {
             let auth = topics::authorize_topic_async(&topic, user_id, pool).await;
@@ -173,7 +185,9 @@ async fn handle_client_message(
             match auth {
                 topics::TopicAuth::Allowed(canonical_topic) => {
                     broker.unsubscribe(conn_id, &canonical_topic).await;
-                    let event = WsServerEvent::Unsubscribed { topic: canonical_topic };
+                    let event = WsServerEvent::Unsubscribed {
+                        topic: canonical_topic,
+                    };
                     let out = serde_json::to_string(&event).map_err(|e| e.to_string())?;
                     session.text(out).await.map_err(|e| e.to_string())?;
                 }

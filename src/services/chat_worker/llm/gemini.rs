@@ -1,30 +1,37 @@
-use crate::models::chat_messages::{ChatAgentType, RequestedToolCall, ChatSessionRoleType, TextPayload};
-use crate::services::chat_worker::agent::system_prompt_for_agent;
+use crate::models::chat_messages::{
+    ChatAgentType, ChatSessionRoleType, RequestedToolCall, TextPayload,
+};
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
+use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::GenerateOutcome;
+use gemini_rust::Gemini;
 use gemini_rust::client::GenerationStream;
 use gemini_rust::tools::model::{FunctionCallingMode, FunctionDeclaration};
-use gemini_rust::Gemini;
 use redis::aio::MultiplexedConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::tools::{self, load_latest_production_release_units, load_latest_releases};
-use super::{payload_to_string, BoxError};
+use super::{BoxError, payload_to_string};
 use crate::services::chat_worker::agent::tool_names_for_agent;
 use serde_json::Value;
 
-fn gemini_declaration_fns_by_name(
-) -> &'static [(&'static str, fn() -> gemini_rust::tools::model::FunctionDeclaration)] {
+fn gemini_declaration_fns_by_name() -> &'static [(
+    &'static str,
+    fn() -> gemini_rust::tools::model::FunctionDeclaration,
+)] {
     &[
         (
             load_latest_production_release_units::TOOL_NAME,
             load_latest_production_release_units::gemini_declaration,
         ),
-        (load_latest_releases::TOOL_NAME, load_latest_releases::gemini_declaration),
+        (
+            load_latest_releases::TOOL_NAME,
+            load_latest_releases::gemini_declaration,
+        ),
     ]
 }
 
@@ -62,7 +69,7 @@ pub async fn call_gemini_stream(
     session_id: Uuid,
     agent: ChatAgentType,
 ) -> Result<GenerateOutcome, BoxError> {
-    let client = Gemini::with_model(api_key.to_string(), gemini_model_id(model))
+    let client = Gemini::with_model(api_key, gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
 
     let system_prompt = system_prompt_for_agent(&agent);
@@ -71,9 +78,7 @@ pub async fn call_gemini_stream(
     let mut chunk_index: u32 = 0;
     let mut message_created = false;
 
-    let mut request = client
-        .generate_content()
-        .with_system_prompt(system_prompt);
+    let mut request = client.generate_content().with_system_prompt(system_prompt);
 
     for (role, payload) in session_messages {
         let text = payload_to_string(payload);
@@ -170,10 +175,7 @@ pub async fn call_gemini_stream(
     let requested_tool_calls = if all_function_calls.is_empty() {
         None
     } else {
-        tracing::info!(
-            "Gemini: LLM requested {} tool call(s), executing",
-            fc_count
-        );
+        tracing::info!("Gemini: LLM requested {} tool call(s), executing", fc_count);
         let requested: Vec<RequestedToolCall> = all_function_calls
             .iter()
             .map(|(name, args)| RequestedToolCall {
@@ -218,21 +220,19 @@ pub async fn call_gemini_stream(
         tracing::info!("Gemini: no tool calls in any stream chunk (function_call_count=0)");
     }
 
-    if message_created {
-        if let Some(ref conn) = redis_conn {
-            let payload = ChatSessionNewMessageChunkPayload::new(
-                project_id,
-                session_id,
-                message_id,
-                chunk_index,
-                String::new(),
-                true,
-            );
-            let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
-            let mut guard = conn.lock().await;
-            if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
-                tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
-            }
+    if message_created && let Some(ref conn) = redis_conn {
+        let payload = ChatSessionNewMessageChunkPayload::new(
+            project_id,
+            session_id,
+            message_id,
+            chunk_index,
+            String::new(),
+            true,
+        );
+        let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
+        let mut guard = conn.lock().await;
+        if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
+            tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
         }
     }
 

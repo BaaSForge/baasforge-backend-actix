@@ -8,8 +8,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 pub mod claude;
-pub mod openai;
 pub mod gemini;
+pub mod openai;
 pub mod tools;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -30,7 +30,7 @@ pub(crate) fn payload_to_string(payload: &Option<Value>) -> String {
             .get("text")
             .and_then(|t| t.as_str())
             .map(String::from)
-            .unwrap_or_else(|| v.to_string())
+            .unwrap_or_else(|| v.to_string()),
     }
 }
 
@@ -125,9 +125,7 @@ pub fn build_llm_client(settings: &Settings) -> Result<LlmClient, BoxError> {
     match provider {
         LlmProvider::OpenAi => {
             let key = settings.openai_api_key.as_deref().ok_or_else(|| {
-                BoxError::from(
-                    "LLM_PROVIDER=openai but OPENAI_API_KEY (or OPENAI_KEY) is not set",
-                )
+                BoxError::from("LLM_PROVIDER=openai but OPENAI_API_KEY (or OPENAI_KEY) is not set")
             })?;
             Ok(LlmClient::OpenAi {
                 credentials: ::openai::Credentials::new(key, ""),
@@ -154,4 +152,3 @@ pub fn build_llm_client(settings: &Settings) -> Result<LlmClient, BoxError> {
         }
     }
 }
-

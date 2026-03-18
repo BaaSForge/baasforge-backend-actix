@@ -1,7 +1,5 @@
 use crate::configs::AppEnvironment;
-use crate::{
-    routes::AppContext,
-};
+use crate::routes::AppContext;
 use actix_web::{
     Error, HttpResponse,
     body::BoxBody,
@@ -22,7 +20,7 @@ where
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
 
     if app_context.settings.app_environment != AppEnvironment::Staging {
-        return Ok(req.into_response(HttpResponse::Unauthorized().finish()))
+        return Ok(req.into_response(HttpResponse::Unauthorized().finish()));
     }
 
     let res = next.call(req).await?;

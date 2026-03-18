@@ -15,9 +15,15 @@ pub enum WsServerEvent {
     ChatSessionGenerationEnded(ChatSessionGenerationEndedPayload),
     ProjectDeleted(ProjectDeletedPayload),
     RuntimeCreated(RuntimeCreatedPayload),
-    Subscribed { topic: String },
-    Unsubscribed { topic: String },
-    Error { message: String },
+    Subscribed {
+        topic: String,
+    },
+    Unsubscribed {
+        topic: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -34,7 +34,9 @@ pub fn load_history_for_agent(
 ) -> Result<Vec<(ChatSessionRoleType, Option<Value>)>, Error> {
     match agent {
         ChatAgentType::Planner => planner::load_history(conn, session_id),
-        ChatAgentType::ArchitectureAnalyzer => architecture_analyzer::load_history(conn, session_id),
+        ChatAgentType::ArchitectureAnalyzer => {
+            architecture_analyzer::load_history(conn, session_id)
+        }
         ChatAgentType::SolutionAnalyzer => solution_analyzer::load_history(conn, session_id),
         ChatAgentType::Developer => developer::load_history(conn, session_id),
     }

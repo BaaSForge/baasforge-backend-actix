@@ -1,7 +1,9 @@
-use crate::models::chat_messages::{ChatAgentType, RequestedToolCall, ChatSessionRoleType, TextPayload};
-use crate::services::chat_worker::agent::system_prompt_for_agent;
+use crate::models::chat_messages::{
+    ChatAgentType, ChatSessionRoleType, RequestedToolCall, TextPayload,
+};
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
+use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::GenerateOutcome;
 use futures::StreamExt;
@@ -19,11 +21,14 @@ use serde_json::Value;
 struct StreamChunk {
     content: Option<String>,
     tool_calls: Option<Vec<(u64, String, String, String)>>, // index, id, name, args
-    function_call: Option<(String, String)>, // legacy: name, args
+    function_call: Option<(String, String)>,                // legacy: name, args
     finish_reason: Option<String>,
 }
 
-fn openai_msg(role: ChatCompletionMessageRole, content: impl Into<String>) -> ChatCompletionMessage {
+fn openai_msg(
+    role: ChatCompletionMessageRole,
+    content: impl Into<String>,
+) -> ChatCompletionMessage {
     ChatCompletionMessage {
         role,
         content: Some(content.into()),
@@ -76,24 +81,61 @@ fn build_chat_messages(
 fn parse_sse_chunk(data: &str) -> Option<StreamChunk> {
     let root: Value = serde_json::from_str(data).ok()?;
     let delta = root.get("choices")?.as_array()?.first()?.get("delta")?;
-    let content = delta.get("content").and_then(|v| v.as_str()).map(String::from);
-    let finish_reason = root.get("choices")?.as_array()?.first()?.get("finish_reason").and_then(|v| v.as_str()).map(String::from);
-    let tool_calls = delta.get("tool_calls").and_then(|v| v.as_array()).map(|arr| {
-        arr.iter().filter_map(|tc| {
-            let func = tc.get("function");
-            Some((
-                tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0),
-                tc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                func.and_then(|f| f.get("name").and_then(|v| v.as_str())).unwrap_or("").to_string(),
-                func.and_then(|f| f.get("arguments").and_then(|v| v.as_str())).unwrap_or("").to_string(),
-            ))
-        }).collect()
-    });
-    let function_call = delta.get("function_call").filter(|fc| fc.is_object()).map(|fc| (
-        fc.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        fc.get("arguments").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-    ));
-    Some(StreamChunk { content, tool_calls, function_call, finish_reason })
+    let content = delta
+        .get("content")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let finish_reason = root
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("finish_reason")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let tool_calls = delta
+        .get("tool_calls")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|tc| {
+                    let func = tc.get("function");
+                    Some((
+                        tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0),
+                        tc.get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        func.and_then(|f| f.get("name").and_then(|v| v.as_str()))
+                            .unwrap_or("")
+                            .to_string(),
+                        func.and_then(|f| f.get("arguments").and_then(|v| v.as_str()))
+                            .unwrap_or("")
+                            .to_string(),
+                    ))
+                })
+                .collect()
+        });
+    let function_call = delta
+        .get("function_call")
+        .filter(|fc| fc.is_object())
+        .map(|fc| {
+            (
+                fc.get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                fc.get("arguments")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        });
+    Some(StreamChunk {
+        content,
+        tool_calls,
+        function_call,
+        finish_reason,
+    })
 }
 
 async fn stream_openai_tools(
@@ -152,20 +194,20 @@ async fn stream_openai_tools(
                 let drained: Vec<u8> = buf.drain(..=pos).collect();
                 let lossy = String::from_utf8_lossy(&drained);
                 let line = lossy.trim();
-                if let Some(data) = line.strip_prefix("data: ").filter(|d| *d != "[DONE]") {
-                    if let Some(d) = parse_sse_chunk(data) {
-                        let _ = tx.send(d).await;
-                    }
+                if let Some(data) = line.strip_prefix("data: ").filter(|d| *d != "[DONE]")
+                    && let Some(d) = parse_sse_chunk(data)
+                {
+                    let _ = tx.send(d).await;
                 }
             }
         }
         if !buf.is_empty() {
             let lossy = String::from_utf8_lossy(&buf);
             let line = lossy.trim();
-            if let Some(data) = line.strip_prefix("data: ").filter(|d| *d != "[DONE]") {
-                if let Some(d) = parse_sse_chunk(data) {
-                    let _ = tx.send(d).await;
-                }
+            if let Some(data) = line.strip_prefix("data: ").filter(|d| *d != "[DONE]")
+                && let Some(d) = parse_sse_chunk(data)
+            {
+                let _ = tx.send(d).await;
             }
         }
     });
@@ -210,18 +252,36 @@ pub async fn call_gpt_stream(
             if !is_tool_response {
                 if let Some(ref conn) = redis_conn {
                     ai_message::ensure_ai_message_created_and_publish(
-                        pool, conn, session_id, message_id, user_id, project_id, agent.clone(),
-                    ).await?;
+                        pool,
+                        conn,
+                        session_id,
+                        message_id,
+                        user_id,
+                        project_id,
+                        agent.clone(),
+                    )
+                    .await?;
                     let mut guard = conn.lock().await;
                     if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
                         return Ok(GenerateOutcome::Stopped(TextPayload {
-                            text: full_text, requested_tool_calls: None,
+                            text: full_text,
+                            requested_tool_calls: None,
                         }));
                     }
                     let payload = ChatSessionNewMessageChunkPayload::new(
-                        project_id, session_id, message_id, chunk_index, c.clone(), false,
+                        project_id,
+                        session_id,
+                        message_id,
+                        chunk_index,
+                        c.clone(),
+                        false,
                     );
-                    let _ = publish_event_to_channel(&mut *guard, topic, &WsServerEvent::ChatSessionNewMessageChunk(payload)).await;
+                    let _ = publish_event_to_channel(
+                        &mut *guard,
+                        topic,
+                        &WsServerEvent::ChatSessionNewMessageChunk(payload),
+                    )
+                    .await;
                     chunk_index += 1;
                 }
                 message_created = true;
@@ -243,16 +303,18 @@ pub async fn call_gpt_stream(
                 a.2.push_str(args);
             }
         }
-        if let Some((name, args)) = &chunk.function_call {
-            if !name.is_empty() || !args.is_empty() {
-                let last_name = acc.last().map(|t| t.1.as_str()).unwrap_or("");
-                if acc.is_empty() || (!name.is_empty() && name.as_str() != last_name) {
-                    acc.push((String::new(), name.clone(), args.clone()));
-                } else {
-                    let last = acc.last_mut().unwrap();
-                    if !name.is_empty() { last.1 = name.clone(); }
-                    last.2.push_str(args);
+        if let Some((name, args)) = &chunk.function_call
+            && (!name.is_empty() || !args.is_empty())
+        {
+            let last_name = acc.last().map(|t| t.1.as_str()).unwrap_or("");
+            if acc.is_empty() || (!name.is_empty() && name.as_str() != last_name) {
+                acc.push((String::new(), name.clone(), args.clone()));
+            } else {
+                let last = acc.last_mut().unwrap();
+                if !name.is_empty() {
+                    last.1 = name.clone();
                 }
+                last.2.push_str(args);
             }
         }
         if let Some(r) = chunk.finish_reason {
@@ -265,25 +327,48 @@ pub async fn call_gpt_stream(
         || last_finish_reason == "function_call";
 
     let requested_tool_calls_out: Option<Vec<RequestedToolCall>> = if has_tool_calls {
-        let to_run: Vec<_> = acc.into_iter().filter(|(_, name, _)| !name.is_empty()).collect();
-        let requested: Vec<RequestedToolCall> = to_run.iter().map(|(id, name, arguments)| {
-            let args = serde_json::from_str(arguments).unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
-            RequestedToolCall {
-                tool_call_id: if id.is_empty() { None } else { Some(id.clone()) },
-                tool_name: name.clone(),
-                tool_arguments_to_pass: args,
-            }
-        }).collect();
+        let to_run: Vec<_> = acc
+            .into_iter()
+            .filter(|(_, name, _)| !name.is_empty())
+            .collect();
+        let requested: Vec<RequestedToolCall> = to_run
+            .iter()
+            .map(|(id, name, arguments)| {
+                let args = serde_json::from_str(arguments)
+                    .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+                RequestedToolCall {
+                    tool_call_id: if id.is_empty() {
+                        None
+                    } else {
+                        Some(id.clone())
+                    },
+                    tool_name: name.clone(),
+                    tool_arguments_to_pass: args,
+                }
+            })
+            .collect();
         if !message_created {
-            let payload = TextPayload { text: full_text.clone(), requested_tool_calls: Some(requested.clone()) };
+            let payload = TextPayload {
+                text: full_text.clone(),
+                requested_tool_calls: Some(requested.clone()),
+            };
             if let Some(ref conn) = redis_conn {
                 ai_message::create_ai_message_with_payload_and_publish(
-                    pool, conn, session_id, message_id, user_id, project_id, &payload, agent.clone(),
-                ).await?;
+                    pool,
+                    conn,
+                    session_id,
+                    message_id,
+                    user_id,
+                    project_id,
+                    &payload,
+                    agent.clone(),
+                )
+                .await?;
             }
         }
         for (_, name, arguments) in &to_run {
-            let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+            let args: Value = serde_json::from_str(arguments)
+                .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
             tools::execute_tool_async(name, args).await?;
         }
         Some(requested)
@@ -291,14 +376,22 @@ pub async fn call_gpt_stream(
         None
     };
 
-    if message_created {
-        if let Some(ref conn) = redis_conn {
-            let payload = ChatSessionNewMessageChunkPayload::new(
-                project_id, session_id, message_id, chunk_index, String::new(), true,
-            );
-            let mut guard = conn.lock().await;
-            let _ = publish_event_to_channel(&mut *guard, topic, &WsServerEvent::ChatSessionNewMessageChunk(payload)).await;
-        }
+    if message_created && let Some(ref conn) = redis_conn {
+        let payload = ChatSessionNewMessageChunkPayload::new(
+            project_id,
+            session_id,
+            message_id,
+            chunk_index,
+            String::new(),
+            true,
+        );
+        let mut guard = conn.lock().await;
+        let _ = publish_event_to_channel(
+            &mut *guard,
+            topic,
+            &WsServerEvent::ChatSessionNewMessageChunk(payload),
+        )
+        .await;
     }
 
     Ok(GenerateOutcome::Completed(TextPayload {

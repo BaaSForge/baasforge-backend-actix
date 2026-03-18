@@ -35,9 +35,6 @@ pub async fn notify_if_generation_loop_finished(
     });
     let mut guard = redis_conn.lock().await;
     if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
-        tracing::warn!(
-            "Failed to broadcast generation ended to Redis: {}",
-            e
-        );
+        tracing::warn!("Failed to broadcast generation ended to Redis: {}", e);
     }
 }

@@ -16,11 +16,11 @@ use crate::middlewares::auth::{
 use crate::middlewares::payment::paid_features_guard_middleware_factory;
 use crate::middlewares::project::projects_owner_guard_middleware_factory;
 use crate::middlewares::test::test_closed_stage_guard_middleware;
+use crate::routes::chat::message_queue;
+use crate::services::message_queue as mq_service;
 use actix_web::Result;
 use actix_web::middleware::from_fn;
 use actix_web::web;
-use crate::routes::chat::message_queue;
-use crate::services::message_queue as mq_service;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -104,7 +104,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
             None
         }
     };
-    let app_context = AppContext::new(pool, settings.clone(), ws_broker, rabbit_publisher, redis_conn);
+    let app_context = AppContext::new(
+        pool,
+        settings.clone(),
+        ws_broker,
+        rabbit_publisher,
+        redis_conn,
+    );
 
     HttpServer::new(move || {
         App::new()
@@ -333,14 +339,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .to(chat::handle_stop_generating)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
-                    )
-                    // .route(
-                    //     "/projects/{id}/chat-sessions/{session_id}/channel",
-                    //     web::get()
-                    //         .to(chat::handle_chat_session_channel_ws)
-                    //         .wrap(from_fn(projects_owner_guard_middleware_factory()))
-                    //         .wrap(from_fn(auth_closed_guard_middleware)),
-                    // ),
+                    ), // .route(
+                       //     "/projects/{id}/chat-sessions/{session_id}/channel",
+                       //     web::get()
+                       //         .to(chat::handle_chat_session_channel_ws)
+                       //         .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                       //         .wrap(from_fn(auth_closed_guard_middleware)),
+                       // ),
             )
     })
     .bind(("127.0.0.1", port))?

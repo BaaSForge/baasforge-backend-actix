@@ -1,6 +1,6 @@
 use crate::models::chat_sessions::ChatSessionResponse;
-use diesel::Insertable;
 use chrono::{DateTime, Utc};
+use diesel::Insertable;
 use diesel::Queryable;
 use diesel::Selectable;
 use serde::Deserialize;
@@ -13,7 +13,7 @@ use uuid::Uuid;
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
 pub enum FrameworkType {
-    Mvc
+    Mvc,
 }
 
 #[derive(Debug, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
@@ -21,9 +21,8 @@ pub enum FrameworkType {
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
 pub enum LanguageType {
-    Rust
+    Rust,
 }
-
 
 #[derive(Debug, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::DeploymentStatusType"]
@@ -34,7 +33,7 @@ pub enum DeploymentStatusType {
     Stopped,
     Pruned,
     Up,
-    Failed
+    Failed,
 }
 
 #[derive(Debug, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
@@ -43,7 +42,7 @@ pub enum DeploymentStatusType {
 #[serde(rename_all = "snake_case")]
 pub enum PlatformEnvironmentType {
     Stage,
-    Prod
+    Prod,
 }
 
 #[derive(Debug, PartialEq, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
@@ -92,7 +91,6 @@ pub struct ProjectUnitResponse {
     pub is_draft: bool,
     pub chat_session_id: Option<Uuid>,
 }
-
 
 #[derive(Serialize, Queryable, Selectable)]
 #[diesel(table_name = crate::schema::project_runtimes)]

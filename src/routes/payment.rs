@@ -53,10 +53,8 @@ pub async fn handle_get_user_paid_package(
             Ok(t) => t,
             Err(e) => {
                 log::error!("[handle_get_user_paid_package] DB/block error: {}", e);
-                return HttpResponse::ServiceUnavailable().json(api_error(
-                    "Database temporarily unavailable",
-                    json!({}),
-                ));
+                return HttpResponse::ServiceUnavailable()
+                    .json(api_error("Database temporarily unavailable", json!({})));
             }
         };
 
@@ -102,10 +100,8 @@ pub async fn handle_list_user_payments(
         Ok(p) => p,
         Err(e) => {
             log::error!("[handle_list_user_payments] DB/block error: {}", e);
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 

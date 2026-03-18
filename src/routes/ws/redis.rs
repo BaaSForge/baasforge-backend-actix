@@ -28,7 +28,10 @@ where
 }
 
 /// Check if a message ID is marked as stopped in Redis. Used by chat workers before and during streaming.
-pub async fn is_message_stopped<C>(conn: &mut C, message_id: Uuid) -> Result<bool, redis::RedisError>
+pub async fn is_message_stopped<C>(
+    conn: &mut C,
+    message_id: Uuid,
+) -> Result<bool, redis::RedisError>
 where
     C: AsyncCommands + Send,
 {
@@ -67,7 +70,10 @@ pub fn run_redis_subscriber(redis_url: String, broker: Arc<WsBroker>) {
             match run_redis_subscriber_loop(&redis_url, &broker).await {
                 Ok(()) => {}
                 Err(e) => {
-                    log::warn!("[ws-redis] Subscriber loop error: {}. Reconnecting in 5s.", e);
+                    log::warn!(
+                        "[ws-redis] Subscriber loop error: {}. Reconnecting in 5s.",
+                        e
+                    );
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
@@ -82,7 +88,9 @@ async fn run_redis_subscriber_loop(
     let client = redis::Client::open(redis_url)?;
     let mut pubsub = client.get_async_pubsub().await?;
     // Single channel pattern: all events (chat, project deleted, runtime created) are published to user:{user_id}.
-    pubsub.psubscribe(format!("{}*", USER_CHANNEL_PREFIX)).await?;
+    pubsub
+        .psubscribe(format!("{}*", USER_CHANNEL_PREFIX))
+        .await?;
 
     let mut stream = pubsub.on_message();
 

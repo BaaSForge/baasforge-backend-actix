@@ -1,7 +1,7 @@
 //! AI (assistant) message creation and publishing for the chat worker. Used by the LLM layer to
 //! create the placeholder message when streaming starts, or the full message when tool-calls-only.
 
-use crate::database::{block_on_db_tokio, BlockingDbError, DbPool};
+use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
     ChatSessionRoleType, TextPayload,
@@ -70,7 +70,7 @@ fn has_requested_tool_calls(text_payload: &TextPayload) -> bool {
     text_payload
         .requested_tool_calls
         .as_ref()
-        .map_or(false, |c| !c.is_empty())
+        .is_some_and(|c| !c.is_empty())
 }
 
 /// Creates the AI response message row with the given payload (e.g. tool-calls-only response)
@@ -116,11 +116,12 @@ pub async fn create_ai_message_with_payload_and_publish(
         Ok(row) => {
             let channel = user_channel(user_id);
             let created_message = ChatMessageResponse::from(row);
-            let event = WsServerEvent::ChatSessionMessageCreated(ChatSessionMessageCreatedPayload {
-                project_id,
-                session_id,
-                message: created_message,
-            });
+            let event =
+                WsServerEvent::ChatSessionMessageCreated(ChatSessionMessageCreatedPayload {
+                    project_id,
+                    session_id,
+                    message: created_message,
+                });
             let mut guard = redis_conn.lock().await;
             publish_event_to_channel(&mut *guard, &channel, &event).await?;
             info!(

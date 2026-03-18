@@ -13,7 +13,9 @@ pub enum TopicKind {
         project_id: Uuid,
         chat_session_id: Uuid,
     },
-    User { user_id: Uuid },
+    User {
+        user_id: Uuid,
+    },
 }
 
 impl TopicKind {
@@ -53,7 +55,10 @@ impl TopicKind {
                 user_id,
                 project_id,
                 chat_session_id,
-            } => format!("chat_session:{}:{}:{}", user_id, project_id, chat_session_id),
+            } => format!(
+                "chat_session:{}:{}:{}",
+                user_id, project_id, chat_session_id
+            ),
             TopicKind::User { user_id } => format!("user:{}", user_id),
         }
     }
@@ -91,10 +96,9 @@ pub async fn authorize_topic_async(
             let user_id = authenticated_user_id;
             match crate::database::block_on_db(pool, move |conn| {
                 crate::schema::chat_sessions::table
-                    .inner_join(
-                        crate::schema::projects::table
-                            .on(crate::schema::chat_sessions::project_id.eq(crate::schema::projects::id)),
-                    )
+                    .inner_join(crate::schema::projects::table.on(
+                        crate::schema::chat_sessions::project_id.eq(crate::schema::projects::id),
+                    ))
                     .filter(crate::schema::projects::owner_user_id.eq(user_id))
                     .filter(crate::schema::chat_sessions::project_id.eq(project_id))
                     .filter(crate::schema::chat_sessions::id.eq(chat_session_id))
@@ -105,9 +109,7 @@ pub async fn authorize_topic_async(
             .await
             {
                 Ok(Some(_)) => TopicAuth::Allowed(kind.to_topic_string()),
-                Ok(None) | Err(_) => {
-                    TopicAuth::Denied("chat session not found or access denied")
-                }
+                Ok(None) | Err(_) => TopicAuth::Denied("chat session not found or access denied"),
             }
         }
         TopicKind::User { user_id } => {

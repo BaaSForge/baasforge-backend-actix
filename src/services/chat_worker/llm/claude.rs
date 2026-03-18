@@ -6,10 +6,12 @@
 //   - Request: build_request_body, message_json, build_messages, to_tools_json (~55 lines)
 //   - SSE: StreamEvent enum + read_one_sse_event parsing (~75 lines)
 // Total file ~396 lines; dependency removed from Cargo.toml.
-use crate::models::chat_messages::{ChatAgentType, RequestedToolCall, ChatSessionRoleType, TextPayload};
-use crate::services::chat_worker::agent::system_prompt_for_agent;
+use crate::models::chat_messages::{
+    ChatAgentType, ChatSessionRoleType, RequestedToolCall, TextPayload,
+};
 use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
+use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::GenerateOutcome;
 use futures::StreamExt;
@@ -20,7 +22,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::tools;
-use super::{payload_to_string, BoxError};
+use super::{BoxError, payload_to_string};
 use crate::services::chat_worker::agent::tool_names_for_agent;
 use serde_json::Value;
 
@@ -107,9 +109,19 @@ fn to_tools_json(agent: &ChatAgentType) -> Vec<Value> {
 
 /// Events we care about from the stream (API sends message_start, content_block_start, content_block_delta, message_stop, etc.).
 enum StreamEvent {
-    TextDelta { text: String },
-    ToolUseStart { index: usize, id: String, name: String, input: Value },
-    InputJsonDelta { index: usize, partial_json: String },
+    TextDelta {
+        text: String,
+    },
+    ToolUseStart {
+        index: usize,
+        id: String,
+        name: String,
+        input: Value,
+    },
+    InputJsonDelta {
+        index: usize,
+        partial_json: String,
+    },
     MessageStop,
 }
 
@@ -135,7 +147,10 @@ where
                     serde_json::from_str(data).map_err(|e| format!("Claude SSE JSON: {}", e))?;
                 let event_type = v.get("type").and_then(|t| t.as_str());
 
-                if event_type.map(|t| t.eq_ignore_ascii_case("ping")).unwrap_or(false) {
+                if event_type
+                    .map(|t| t.eq_ignore_ascii_case("ping"))
+                    .unwrap_or(false)
+                {
                     continue;
                 }
 
@@ -148,7 +163,10 @@ where
                                 .and_then(|p| p.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            return Ok(Some(StreamEvent::InputJsonDelta { index, partial_json }));
+                            return Ok(Some(StreamEvent::InputJsonDelta {
+                                index,
+                                partial_json,
+                            }));
                         }
                         if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
                             return Ok(Some(StreamEvent::TextDelta {
@@ -161,18 +179,26 @@ where
 
                 if event_type == Some("content_block_start") {
                     let index = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                    if let Some(block) = v.get("content_block") {
-                        if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                            let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-                            let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
-                            let input = block.get("input").cloned().unwrap_or(Value::Null);
-                            return Ok(Some(StreamEvent::ToolUseStart {
-                                index,
-                                id,
-                                name,
-                                input,
-                            }));
-                        }
+                    if let Some(block) = v.get("content_block")
+                        && block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+                    {
+                        let id = block
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let name = block
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let input = block.get("input").cloned().unwrap_or(Value::Null);
+                        return Ok(Some(StreamEvent::ToolUseStart {
+                            index,
+                            id,
+                            name,
+                            input,
+                        }));
                     }
                     continue;
                 }
@@ -215,10 +241,13 @@ pub async fn call_claude_stream(
 
     let messages = build_messages(session_messages, user_text);
     if messages.is_empty() {
-        return Err("Claude: no messages to send (session history and user text are empty or whitespace)".into());
+        return Err(
+            "Claude: no messages to send (session history and user text are empty or whitespace)"
+                .into(),
+        );
     }
 
-    let body = build_request_body(&system_prompt, messages, tools_list.clone(), api_model);
+    let body = build_request_body(system_prompt, messages, tools_list.clone(), api_model);
 
     let url = format!("{}/v1/messages", ANTHROPIC_API_BASE);
     let response = reqwest::Client::new()
@@ -237,9 +266,9 @@ pub async fn call_claude_stream(
         return Err(format!("Claude stream: {}: {}", status, err_body).into());
     }
 
-    let mut stream = response.bytes_stream().map(|r| {
-        r.map(|b| b.to_vec()).map_err(|e| e.to_string())
-    });
+    let mut stream = response
+        .bytes_stream()
+        .map(|r| r.map(|b| b.to_vec()).map_err(|e| e.to_string()));
     let mut buf: Vec<u8> = Vec::new();
     let mut full_text = String::new();
     let mut chunk_index: u32 = 0;
@@ -290,17 +319,27 @@ pub async fn call_claude_stream(
                             false,
                         );
                         let ws_event = WsServerEvent::ChatSessionNewMessageChunk(payload);
-                        if let Err(e) = publish_event_to_channel(&mut *guard, topic, &ws_event).await {
+                        if let Err(e) =
+                            publish_event_to_channel(&mut *guard, topic, &ws_event).await
+                        {
                             tracing::warn!("Failed to publish chat chunk to Redis: {}", e);
                         }
                         chunk_index += 1;
                     }
                 }
             }
-            StreamEvent::ToolUseStart { index, id, name, input } => {
+            StreamEvent::ToolUseStart {
+                index,
+                id,
+                name,
+                input,
+            } => {
                 tool_use_by_index.insert(*index, (id.clone(), name.clone(), input.clone()));
             }
-            StreamEvent::InputJsonDelta { index, partial_json } => {
+            StreamEvent::InputJsonDelta {
+                index,
+                partial_json,
+            } => {
                 accumulated_tool_input
                     .entry(*index)
                     .or_default()
@@ -376,21 +415,19 @@ pub async fn call_claude_stream(
         }
     };
 
-    if message_created {
-        if let Some(ref conn) = redis_conn {
-            let payload = ChatSessionNewMessageChunkPayload::new(
-                project_id,
-                session_id,
-                message_id,
-                chunk_index,
-                String::new(),
-                true,
-            );
-            let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
-            let mut guard = conn.lock().await;
-            if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
-                tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
-            }
+    if message_created && let Some(ref conn) = redis_conn {
+        let payload = ChatSessionNewMessageChunkPayload::new(
+            project_id,
+            session_id,
+            message_id,
+            chunk_index,
+            String::new(),
+            true,
+        );
+        let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
+        let mut guard = conn.lock().await;
+        if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
+            tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
         }
     }
 

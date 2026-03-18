@@ -107,9 +107,12 @@ pub async fn publish_with_publisher(
     session_id: Uuid,
     message: &ChatSessionQueueMessage,
 ) -> Result<(), PublishError> {
-    message
-        .validate()
-        .map_err(|e| PublishError::Serialize(serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, e))))?;
+    message.validate().map_err(|e| {
+        PublishError::Serialize(serde_json::Error::io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            e,
+        )))
+    })?;
     let payload = serde_json::to_vec(message).map_err(PublishError::Serialize)?;
     message_queue::publish_with_channel(
         publisher.as_ref(),

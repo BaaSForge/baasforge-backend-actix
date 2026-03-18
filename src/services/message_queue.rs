@@ -1,6 +1,7 @@
 use lapin::{
     BasicProperties, Connection, ConnectionProperties, Consumer,
-    options::*, types::{FieldTable, ShortString},
+    options::*,
+    types::{FieldTable, ShortString},
 };
 use std::fmt;
 use std::sync::Arc;
@@ -167,9 +168,7 @@ pub async fn create_work_consumer_on_connection(
     _binding_pattern: &str,
 ) -> Result<(lapin::Channel, Consumer), lapin::Error> {
     let channel = connection.create_channel().await?;
-    channel
-        .basic_qos(1, BasicQosOptions::default())
-        .await?;
+    channel.basic_qos(1, BasicQosOptions::default()).await?;
     let consumer_tag = format!("work_consumer_{}", queue_name);
     let mut consume_opts = BasicConsumeOptions::default();
     consume_opts.no_ack = false;

@@ -70,11 +70,7 @@ pub fn create_clear_cookie(key: &str) -> Cookie<'static> {
         .http_only(true)
         .secure(true)
         .same_site(SameSite::Strict)
-        .max_age(
-            StdDuration::from_mins(0)
-                .try_into()
-                .unwrap(),
-        )
+        .max_age(StdDuration::from_mins(0).try_into().unwrap())
         .finish()
 }
 
@@ -122,9 +118,7 @@ pub fn decode_refresh_token(token_str: &str, settings: &Settings) -> Result<Refr
     Ok(token_data.claims)
 }
 
-pub fn is_token_mature_enuogh(
-    db_token: &UserToken
-) -> bool {
+pub fn is_token_mature_enuogh(db_token: &UserToken) -> bool {
     let age = Utc::now() - db_token.created_at;
     db_token.is_signup_token || age >= Duration::days(7)
 }

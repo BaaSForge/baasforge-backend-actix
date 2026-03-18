@@ -1,5 +1,11 @@
-# Run Clippy explicitly: cargo clippy (or cargo lint).
-# Using rustc-wrapper = "clippy-driver" here caused "multiple input filenames" when Cargo
-# probes the compiler (e.g. --print=sysroot), so the wrapper was removed.
+# Run `cargo build` / `cargo run` through Clippy so both compiler and lint rules run; fail on lint.
+# Requires: rustup component add clippy
+#
+# cargo clippy --fix hits a bug (multiple input filenames) when the wrapper is active.
+# Use the script instead: ./clippy-fix.sh
+# Or: CARGO_BUILD_RUSTC_WRAPPER= cargo clippy --fix
+[build]
+rustc-wrapper = "clippy-driver"
+
 [alias]
 lint = "clippy"

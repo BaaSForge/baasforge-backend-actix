@@ -3,13 +3,13 @@ use crate::libs::api_response::api_error;
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::chat_sessions::ChatSessionResponse;
-use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
-use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::models::projects::{
     FrameworkType, LanguageType, PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse,
     ProjectResponse, ProjectRuntimeResponse, ProjectRuntimeWithConnectedChatResponse,
     ProjectUnitResponse,
 };
+use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
+use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
 use crate::schema::project_releases;
@@ -64,17 +64,15 @@ pub async fn handle_create_project(
         Ok(v) => v,
         Err(_) => {
             log::error!("[handle_create_project] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
     if projects.len() >= 3 {
         let missing_features = user_missing_paid_features(
             &payments_payload.active_payments,
-            &vec![PaidFeature::LotsOfProjects],
+            &[PaidFeature::LotsOfProjects],
         );
 
         let most_complete_needed_package =
@@ -121,10 +119,8 @@ pub async fn handle_create_project(
         Ok(p) => p,
         Err(_) => {
             log::error!("[handle_create_project] Insert DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -157,14 +153,12 @@ pub async fn handle_get_project(
     {
         Ok(Some(proj)) => proj,
         Ok(None) => {
-            return HttpResponse::NotFound().json(api_error("Project not found", json!({})))
+            return HttpResponse::NotFound().json(api_error("Project not found", json!({})));
         }
         Err(_) => {
             log::error!("[handle_get_project] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -202,13 +196,17 @@ pub async fn handle_patch_project(
             match self {
                 PatchOut::NameExists => HttpResponse::BadRequest()
                     .json(api_error("Project name must be unique", json!({}))),
-                PatchOut::NotFound => HttpResponse::NotFound().json(api_error("Project not found", json!({}))),
-                PatchOut::Updated(proj) => HttpResponse::Ok().json(api_success("Project name updated", json!(proj))),
+                PatchOut::NotFound => {
+                    HttpResponse::NotFound().json(api_error("Project not found", json!({})))
+                }
+                PatchOut::Updated(proj) => {
+                    HttpResponse::Ok().json(api_success("Project name updated", json!(proj)))
+                }
             }
         }
     }
 
-    let out = match database::block_on_db(&context.pool, move |conn| {
+    match database::block_on_db(&context.pool, move |conn| {
         let exists = projects::table
             .filter(projects::owner_user_id.eq(user_id))
             .filter(projects::name.eq(&name))
@@ -238,14 +236,10 @@ pub async fn handle_patch_project(
         Ok(o) => o.into_response(),
         Err(_) => {
             log::error!("[handle_patch_project] DB/block error");
-            HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ))
+            HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})))
         }
-    };
-
-    out
+    }
 }
 
 pub async fn handle_delete_project(
@@ -255,7 +249,6 @@ pub async fn handle_delete_project(
 ) -> HttpResponse {
     // TODO: add messages to queue to detach runtimes
     // TODO: create a saga which removes rows exactly when all side systems are detached successfully
-
 
     let extensions = req.extensions();
 
@@ -268,38 +261,41 @@ pub async fn handle_delete_project(
 
     let res = database::block_on_db(&context.pool, move |conn| {
         conn.transaction::<_, Error, _>(|conn| {
-        let session_ids: Vec<Uuid> = chat_sessions::table
-            .filter(chat_sessions::project_id.eq(project_id))
-            .select(chat_sessions::id)
-            .load(conn)?;
-        if !session_ids.is_empty() {
+            let session_ids: Vec<Uuid> = chat_sessions::table
+                .filter(chat_sessions::project_id.eq(project_id))
+                .select(chat_sessions::id)
+                .load(conn)?;
+            if !session_ids.is_empty() {
+                diesel::delete(
+                    chat_messages::table.filter(chat_messages::chat_session_id.eq_any(session_ids)),
+                )
+                .execute(conn)?;
+            }
+
+            diesel::delete(project_units::table.filter(project_units::project_id.eq(project_id)))
+                .execute(conn)?;
+
+            diesel::delete(chat_sessions::table.filter(chat_sessions::project_id.eq(project_id)))
+                .execute(conn)?;
+
             diesel::delete(
-                chat_messages::table
-                    .filter(chat_messages::chat_session_id.eq_any(session_ids)),
+                project_runtimes::table.filter(project_runtimes::project_id.eq(project_id)),
             )
             .execute(conn)?;
-        }
 
-        diesel::delete(project_units::table.filter(project_units::project_id.eq(project_id)))
+            diesel::delete(
+                project_releases::table.filter(project_releases::project_id.eq(project_id)),
+            )
             .execute(conn)?;
 
-        diesel::delete(chat_sessions::table.filter(chat_sessions::project_id.eq(project_id)))
+            diesel::delete(
+                projects::table
+                    .filter(projects::id.eq(project_id))
+                    .filter(projects::owner_user_id.eq(user_id)),
+            )
             .execute(conn)?;
 
-        diesel::delete(project_runtimes::table.filter(project_runtimes::project_id.eq(project_id)))
-            .execute(conn)?;
-
-        diesel::delete(project_releases::table.filter(project_releases::project_id.eq(project_id)))
-            .execute(conn)?;
-
-        diesel::delete(
-            projects::table
-                .filter(projects::id.eq(project_id))
-                .filter(projects::owner_user_id.eq(user_id)),
-        )
-        .execute(conn)?;
-
-        Ok(())
+            Ok(())
         })
     })
     .await;
@@ -309,10 +305,8 @@ pub async fn handle_delete_project(
         Err(database::BlockingDbError::Query(e)) => Err(e),
         Err(_) => {
             log::error!("[handle_delete_project] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -366,10 +360,8 @@ pub async fn handle_list_projects(
         Ok(v) => v,
         Err(_) => {
             log::error!("[list_projects] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -407,10 +399,8 @@ pub async fn handle_list_project_non_draft_units(
         Ok(v) => v,
         Err(_) => {
             log::error!("[handle_list_project_units] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -476,23 +466,25 @@ pub async fn handle_list_project_runtimes_with_connected_chat_sessions(
                 .filter_map(|s| s.stage_project_runtime_id.map(|rid| (rid, s)))
                 .collect()
         };
-        Ok::<_, diesel::result::Error>(runtimes
-            .into_iter()
-            .map(|runtime| ProjectRuntimeWithConnectedChatResponse {
-                connected_chat_session: connected_sessions.get(&runtime.id).cloned(),
-                runtime,
-            })
-            .collect::<Vec<_>>())
+        Ok::<_, diesel::result::Error>(
+            runtimes
+                .into_iter()
+                .map(|runtime| ProjectRuntimeWithConnectedChatResponse {
+                    connected_chat_session: connected_sessions.get(&runtime.id).cloned(),
+                    runtime,
+                })
+                .collect::<Vec<_>>(),
+        )
     })
     .await
     {
         Ok(v) => v,
         Err(_) => {
-            log::error!("[handle_list_project_runtimes_with_connected_chat_sessions] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            log::error!(
+                "[handle_list_project_runtimes_with_connected_chat_sessions] DB/block error"
+            );
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -530,10 +522,8 @@ pub async fn handle_list_project_releases(
         Ok(v) => v,
         Err(_) => {
             log::error!("[handle_list_project_releases] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -566,28 +556,28 @@ pub async fn handle_list_project_release_units(
         if ids.is_empty() {
             return Ok::<_, diesel::result::Error>(vec![]);
         }
-        Ok(project_units::table
+        project_units::table
             .inner_join(projects::table.on(project_units::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(project_units::project_id.eq(project_id))
             .filter(project_units::id.eq_any(&ids))
             .select(ProjectUnitResponse::as_select())
-            .load::<ProjectUnitResponse>(conn)?)
+            .load::<ProjectUnitResponse>(conn)
     })
     .await
     {
         Ok(u) => u,
         Err(database::BlockingDbError::Query(e)) => {
-            log::error!("[handle_list_project_release_units] Failed to load: {:?}", e);
-            return HttpResponse::InternalServerError()
-                .json(api_error(&e.to_string(), json!({})));
+            log::error!(
+                "[handle_list_project_release_units] Failed to load: {:?}",
+                e
+            );
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
         }
         Err(_) => {
             log::error!("[handle_list_project_release_units] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 

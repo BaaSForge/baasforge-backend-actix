@@ -8,7 +8,9 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::models::projects::ProjectUnitResponse;
-use crate::services::chat_worker::llm::tools::{ToolFetchRelevantUnitsPayload, ToolFetchLatestReleasesPayload};
+use crate::services::chat_worker::llm::tools::{
+    ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
+};
 
 /// One requested tool call from the LLM (GPT tool_call_id optional; Gemini has no id).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -81,7 +83,10 @@ pub enum ChatMessagePayload {
 }
 
 impl ChatMessagePayload {
-    pub fn from_value(type_: &ChatMessageType, value: Option<Value>) -> Result<Option<ChatMessagePayload>, serde_json::Error> {
+    pub fn from_value(
+        type_: &ChatMessageType,
+        value: Option<Value>,
+    ) -> Result<Option<ChatMessagePayload>, serde_json::Error> {
         let Some(v) = value else {
             return Ok(None);
         };
@@ -137,7 +142,9 @@ pub struct ChatMessageRow {
 
 impl From<ChatMessageRow> for ChatMessageResponse {
     fn from(row: ChatMessageRow) -> Self {
-        let payload = ChatMessagePayload::from_value(&row.type_, row.payload).ok().flatten();
+        let payload = ChatMessagePayload::from_value(&row.type_, row.payload)
+            .ok()
+            .flatten();
         ChatMessageResponse {
             id: row.id,
             chat_session_id: row.chat_session_id,
@@ -182,9 +189,7 @@ pub struct ChatMessageCreateBody {
 }
 
 impl ChatMessageCreateBody {
-    pub fn validate_payload(
-        &self,
-    ) -> Result<Option<ChatMessagePayload>, serde_json::Error> {
+    pub fn validate_payload(&self) -> Result<Option<ChatMessagePayload>, serde_json::Error> {
         ChatMessagePayload::from_value(&self.type_, self.payload.clone())
     }
 }

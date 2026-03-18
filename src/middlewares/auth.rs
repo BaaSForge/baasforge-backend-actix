@@ -45,28 +45,26 @@ where
 {
     let token_str = if let Some(cookie) = req.cookie(ACCESS_TOKEN_COOKIE_KEY) {
         cookie.value().to_string()
+    } else if req.cookie(REFRESH_TOKEN_COOKIE_KEY).is_some() {
+        log::warn!(
+            "[auth] Unauthorized: path={} reason=needs_refresh_token",
+            req.path()
+        );
+        let body = api_error(
+            "You need to refresh the access token",
+            json!({"needs_refresh_token": true}),
+        );
+        return Ok(req
+            .into_response(HttpResponse::Unauthorized().json(body))
+            .map_into_boxed_body());
     } else {
-        if let Some(_) = req.cookie(REFRESH_TOKEN_COOKIE_KEY) {
-            log::warn!(
-                "[auth] Unauthorized: path={} reason=needs_refresh_token",
-                req.path()
-            );
-            let body = api_error(
-                "You need to refresh the access token",
-                json!({"needs_refresh_token": true}),
-            );
-            return Ok(req
-                .into_response(HttpResponse::Unauthorized().json(body))
-                .map_into_boxed_body());
-        } else {
-            log::warn!(
-                "[auth] Unauthorized: path={} reason=no_access_token_cookie (WebSocket needs same-origin or cookie)",
-                req.path()
-            );
-            return Ok(req
-                .into_response(HttpResponse::Unauthorized().finish())
-                .map_into_boxed_body());
-        }
+        log::warn!(
+            "[auth] Unauthorized: path={} reason=no_access_token_cookie (WebSocket needs same-origin or cookie)",
+            req.path()
+        );
+        return Ok(req
+            .into_response(HttpResponse::Unauthorized().finish())
+            .map_into_boxed_body());
     };
 
     let app_context = req
@@ -74,7 +72,11 @@ where
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
 
     let claims = decode_access_token(&token_str, &app_context.settings).map_err(|e| {
-        log::warn!("[auth] Unauthorized: path={} reason=invalid_token decode_err={:?}", req.path(), e);
+        log::warn!(
+            "[auth] Unauthorized: path={} reason=invalid_token decode_err={:?}",
+            req.path(),
+            e
+        );
         actix_web::error::ErrorUnauthorized("Invalid token")
     })?;
 

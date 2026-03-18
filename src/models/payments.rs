@@ -1,9 +1,9 @@
-use serde_json::Value;
 use chrono::{DateTime, Utc};
 use diesel::Insertable;
 use diesel::Queryable;
 use diesel::Selectable;
 use serde::Serialize;
+use serde_json::Value;
 use uuid::Uuid;
 
 #[derive(Insertable)]

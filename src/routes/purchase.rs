@@ -37,7 +37,10 @@ pub async fn handle_initiate_purchase(
     enum PurchaseOut {
         PackageNotFound,
         TierNotLarger,
-        Ok { package: Package, new_expires_at: chrono::DateTime<Utc> },
+        Ok {
+            package: Package,
+            new_expires_at: chrono::DateTime<Utc>,
+        },
         #[allow(dead_code)]
         DbErr(diesel::result::Error),
     }
@@ -97,24 +100,21 @@ pub async fn handle_initiate_purchase(
     .await;
 
     match result {
-        Ok(PurchaseOut::PackageNotFound) => {
-            return HttpResponse::BadRequest().json(api_error(
-                "Package not found or inactive",
-                json!({ "package_id": package_id }),
-            ));
-        }
-        Ok(PurchaseOut::TierNotLarger) => {
-            return HttpResponse::BadRequest().json(api_error(
-                "Target package tier must be larger than your current largest tier",
-                json!({}),
-            ));
-        }
-        Ok(PurchaseOut::Ok { package, new_expires_at }) => {
-            HttpResponse::Created().json(api_success(
-                "Purchase initiated successfully",
-                json!({ "package_id": package.id, "expires_at": new_expires_at }),
-            ))
-        }
+        Ok(PurchaseOut::PackageNotFound) => HttpResponse::BadRequest().json(api_error(
+            "Package not found or inactive",
+            json!({ "package_id": package_id }),
+        )),
+        Ok(PurchaseOut::TierNotLarger) => HttpResponse::BadRequest().json(api_error(
+            "Target package tier must be larger than your current largest tier",
+            json!({}),
+        )),
+        Ok(PurchaseOut::Ok {
+            package,
+            new_expires_at,
+        }) => HttpResponse::Created().json(api_success(
+            "Purchase initiated successfully",
+            json!({ "package_id": package.id, "expires_at": new_expires_at }),
+        )),
         Ok(PurchaseOut::DbErr(e)) => {
             HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})))
         }
@@ -123,10 +123,8 @@ pub async fn handle_initiate_purchase(
         }
         Err(e) => {
             log::error!("[handle_initiate_purchase] DB/block error: {}", e);
-            HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ))
+            HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})))
         }
     }
 }

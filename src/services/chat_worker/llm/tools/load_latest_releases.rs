@@ -1,5 +1,7 @@
-use crate::database::{block_on_db_tokio, BlockingDbError, DbPool};
-use crate::models::chat_messages::{ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType};
+use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
+use crate::models::chat_messages::{
+    ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
+};
 use crate::models::projects::ProjectReleaseResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -87,7 +89,10 @@ pub async fn handler(
     let existing = payload
         .as_ref()
         .and_then(|v| serde_json::from_value::<ToolFetchLatestReleasesPayload>(v.clone()).ok());
-    let args = existing.as_ref().map(|p| p.args.clone()).unwrap_or_default();
+    let args = existing
+        .as_ref()
+        .map(|p| p.args.clone())
+        .unwrap_or_default();
     let limit = args.limit;
 
     let releases = block_on_db_tokio(&pool, move |conn| {
@@ -95,22 +100,17 @@ pub async fn handler(
     })
     .await
     .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
-    let full_payload = ToolFetchLatestReleasesPayload {
-        args,
-        releases,
-    };
+    let full_payload = ToolFetchLatestReleasesPayload { args, releases };
     let payload_value = serde_json::to_value(&full_payload)
         .map_err(|e| -> BoxError { format!("serialize releases: {}", e).into() })?;
     let updated_row = block_on_db_tokio(&pool, move |conn| {
-        diesel::update(
-            chat_messages::table.filter(chat_messages::id.eq(message_id)),
-        )
-        .set((
-            chat_messages::payload.eq(Some(payload_value)),
-            chat_messages::status.eq(ChatMessageStatus::Completed),
-        ))
-        .returning(ChatMessageRow::as_returning())
-        .get_result(conn)
+        diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+            .set((
+                chat_messages::payload.eq(Some(payload_value)),
+                chat_messages::status.eq(ChatMessageStatus::Completed),
+            ))
+            .returning(ChatMessageRow::as_returning())
+            .get_result(conn)
     })
     .await
     .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;

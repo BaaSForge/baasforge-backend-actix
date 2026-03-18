@@ -10,8 +10,8 @@ use actix_web::body::BoxBody;
 use actix_web::dev::ServiceResponse;
 use actix_web::web;
 use actix_web::{HttpMessage, HttpResponse, dev::ServiceRequest, middleware::Next};
-use diesel::prelude::*;
 use chrono::Utc;
+use diesel::prelude::*;
 use serde_json::json;
 
 #[derive(Debug)]
@@ -48,7 +48,11 @@ pub fn paid_features_guard_middleware_factory(
                 payments::table
                     .filter(payments::user_id.eq(user_id))
                     .filter(payments::is_success.eq(true))
-                    .filter(payments::expires_at.is_null().or(payments::expires_at.gt(Utc::now())))
+                    .filter(
+                        payments::expires_at
+                            .is_null()
+                            .or(payments::expires_at.gt(Utc::now())),
+                    )
                     .select(PaymentResponse::as_select())
                     .load::<PaymentResponse>(conn)
             })
@@ -79,9 +83,7 @@ pub fn paid_features_guard_middleware_factory(
                     .map_into_boxed_body());
             }
 
-            let payload = PaymentPayload {
-                active_payments,
-            };
+            let payload = PaymentPayload { active_payments };
 
             req.extensions_mut().insert(payload);
             let res = next.call(req).await?;

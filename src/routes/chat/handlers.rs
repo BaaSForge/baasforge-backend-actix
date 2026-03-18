@@ -3,15 +3,15 @@ use crate::libs::api_response::{api_error, api_success};
 use crate::libs::ids::new_uuid;
 use crate::middlewares::auth::AccessPayload;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessageCreateBody, ChatMessageInsert, ChatMessageResponse,
-    ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatMessageWithFirstResponse,
-    ChatSessionRoleType,
+    ChatAgentType, ChatMessageCreateBody, ChatMessageInsert, ChatMessageResponse, ChatMessageRow,
+    ChatMessageStatus, ChatMessageType, ChatMessageWithFirstResponse, ChatSessionRoleType,
 };
 use crate::models::chat_sessions::{
     ChatSessionInsert, ChatSessionResponse, ChatSessionWithProjectRuntimeResponse,
 };
 use crate::models::projects::PlatformEnvironmentType;
 use crate::models::projects::{ProjectRuntimeResponse, ProjectUnitResponse};
+use crate::routes::AppContext;
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{
     ChatSessionGenerationEndedPayload, ChatSessionGenerationStartedPayload,
@@ -19,7 +19,6 @@ use crate::routes::ws::events::{
 };
 use crate::routes::ws::redis::{publish_event_to_channel, user_channel};
 use crate::routes::ws::set_stopped_message_id;
-use crate::routes::AppContext;
 // use crate::services::message_queue as mq_service;
 use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
@@ -63,10 +62,8 @@ pub async fn handle_list_project_chat_sessions(
         Ok(v) => v,
         Err(_) => {
             tracing::error!("[handle_list_project_chat_sessions] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -126,10 +123,8 @@ pub async fn handle_get_project_chat_session(
         }
         Err(_) => {
             tracing::error!("[handle_get_project_chat_session] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -171,7 +166,9 @@ pub async fn handle_list_chat_session_messages(
 
     let messages_with_first = match database::block_on_db(&context.pool, move |conn| {
         let mut db_query = chat_messages::table
-            .inner_join(chat_sessions::table.on(chat_messages::chat_session_id.eq(chat_sessions::id)))
+            .inner_join(
+                chat_sessions::table.on(chat_messages::chat_session_id.eq(chat_sessions::id)),
+            )
             .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(chat_sessions::project_id.eq(project_id))
@@ -188,7 +185,8 @@ pub async fn handle_list_chat_session_messages(
             .limit(limit)
             .load::<ChatMessageRow>(conn)
             .unwrap_or_default();
-        let messages: Vec<ChatMessageResponse> = rows.into_iter().map(ChatMessageResponse::from).collect();
+        let messages: Vec<ChatMessageResponse> =
+            rows.into_iter().map(ChatMessageResponse::from).collect();
 
         // UUID doesn't support min() in Diesel; get oldest by created_at
         let oldest_id: Option<Uuid> = chat_messages::table
@@ -198,23 +196,23 @@ pub async fn handle_list_chat_session_messages(
             .first(conn)
             .optional()?;
 
-        Ok::<_, diesel::result::Error>(messages
-            .into_iter()
-            .map(|m| ChatMessageWithFirstResponse {
-                is_first: oldest_id.map_or(false, |oldest| m.id == oldest),
-                inner: m,
-            })
-            .collect::<Vec<_>>())
+        Ok::<_, diesel::result::Error>(
+            messages
+                .into_iter()
+                .map(|m| ChatMessageWithFirstResponse {
+                    is_first: oldest_id == Some(m.id),
+                    inner: m,
+                })
+                .collect::<Vec<_>>(),
+        )
     })
     .await
     {
         Ok(v) => v,
         Err(_) => {
             tracing::error!("[handle_list_chat_session_messages] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -362,7 +360,13 @@ pub async fn handle_create_chat_session_message(
         agent: ChatAgentType::Planner,
     };
     let publish_result = if let Some(ref publisher) = context.rabbit_publisher {
-        chat_message_queue::publish_with_publisher(publisher, project_id, session_id, &queue_message).await
+        chat_message_queue::publish_with_publisher(
+            publisher,
+            project_id,
+            session_id,
+            &queue_message,
+        )
+        .await
     } else {
         tracing::error!("No RabbitMQ publisher available on create chat message");
         return HttpResponse::ServiceUnavailable().json(api_error(
@@ -392,10 +396,7 @@ pub async fn handle_create_chat_session_message(
         let event = WsServerEvent::ChatSessionGenerationStarted(payload);
         let mut guard = redis_conn.lock().await;
         if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &event).await {
-            tracing::warn!(
-                "Failed to broadcast generation started to Redis: {}",
-                e
-            );
+            tracing::warn!("Failed to broadcast generation started to Redis: {}", e);
         }
     }
 
@@ -463,10 +464,8 @@ pub async fn handle_stop_generating(
         }
         Err(_) => {
             tracing::error!("[handle_stop_generating] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -495,10 +494,8 @@ pub async fn handle_stop_generating(
         }
         Err(_) => {
             tracing::error!("[handle_stop_generating] DB/block error on update");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     }
 
@@ -536,10 +533,7 @@ pub async fn handle_stop_generating(
             session_id: session_id_ws,
         });
         if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
-            tracing::warn!(
-                "Failed to publish generation ended to Redis: {}",
-                e
-            );
+            tracing::warn!("Failed to publish generation ended to Redis: {}", e);
         }
     }
 
@@ -592,10 +586,8 @@ pub async fn handle_list_chat_session_draft_units(
         }
         Err(_) => {
             tracing::error!("[handle_list_chat_session_draft_units] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -636,10 +628,8 @@ pub async fn handle_create_project_chat_session(
         Ok(s) => s,
         Err(_) => {
             tracing::error!("[handle_create_project_chat_session] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -737,10 +727,8 @@ pub async fn handle_attach_chat_session_stage_runtime(
         }
         Err(_) => {
             tracing::error!("[handle_attach_chat_session_stage_runtime] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -832,10 +820,8 @@ pub async fn handle_detach_chat_session_stage_runtime(
         }
         Err(_) => {
             tracing::error!("[handle_detach_chat_session_stage_runtime] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 

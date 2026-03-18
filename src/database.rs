@@ -82,11 +82,7 @@ where
     }
 }
 
-pub fn establish_pool(
-    database_url: String,
-    max_size: u32,
-    connection_timeout_secs: u64,
-) -> DbPool {
+pub fn establish_pool(database_url: String, max_size: u32, connection_timeout_secs: u64) -> DbPool {
     let manager = ConnectionManager::<PgConnection>::new(&database_url);
 
     let pool = Pool::builder()

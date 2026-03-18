@@ -25,7 +25,6 @@ pub struct User {
     pub email_in_platform: Option<String>,
 }
 
-
 #[derive(Debug, Insertable)]
 #[diesel(table_name = crate::schema::users)]
 pub struct UserDTO {

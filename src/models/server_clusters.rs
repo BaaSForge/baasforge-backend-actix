@@ -11,7 +11,7 @@ use crate::models::projects::PlatformEnvironmentType;
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
 pub enum ServerClusterType {
-    K8s
+    K8s,
 }
 
 #[derive(Queryable, Selectable, Serialize)]

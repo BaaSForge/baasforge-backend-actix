@@ -1,8 +1,8 @@
-use crate::routes::ws::events::{WsServerEvent};
+use crate::routes::ws::events::WsServerEvent;
 use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 
 pub type ConnectionId = u64;
 
@@ -15,6 +15,12 @@ struct WsSubscriber {
 pub struct WsBroker {
     next_id: std::sync::Arc<AtomicU64>,
     inner: std::sync::Arc<RwLock<HashMap<ConnectionId, WsSubscriber>>>,
+}
+
+impl Default for WsBroker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WsBroker {

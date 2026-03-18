@@ -32,10 +32,8 @@ pub async fn handle_get_first_server_cluster(context: web::Data<AppContext>) -> 
         }
         Err(_) => {
             log::error!("[handle_get_first_server_cluster] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -105,10 +103,8 @@ pub async fn handle_get_first_server_cluster_nodes(context: web::Data<AppContext
         }
         Err(_) => {
             log::error!("[handle_get_first_server_cluster_nodes] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
@@ -227,10 +223,8 @@ pub async fn handle_deploy_hello_world_pod(context: web::Data<AppContext>) -> Ht
         }
         Err(_) => {
             log::error!("[handle_deploy_hello_world_pod] DB/block error");
-            return HttpResponse::ServiceUnavailable().json(api_error(
-                "Database temporarily unavailable",
-                json!({}),
-            ));
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
