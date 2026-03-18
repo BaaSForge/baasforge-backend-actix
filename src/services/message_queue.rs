@@ -31,10 +31,10 @@ pub struct RetryPolicy {
 }
 
 impl RetryPolicy {
-    /// Delay in milliseconds before the next attempt. Formula: 1000 * 3^(1 + retry_num).
-    /// retry_num 0 => 3s, 1 => 9s, 2 => 27s.
+    /// Delay in milliseconds before the next attempt. Formula: 1000 * 5^(1 + retry_num).
+    /// retry_num 0 => 4s, 1 => 16s, 2 => 64s.
     pub fn retry_delay_ms(&self, retry_num: u32) -> u64 {
-        const BASE_SECS: u64 = 3;
+        const BASE_SECS: u64 = 4;
         1000 * BASE_SECS.pow(1 + retry_num)
     }
 

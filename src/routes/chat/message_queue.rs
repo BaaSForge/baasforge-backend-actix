@@ -22,8 +22,8 @@ pub const CHAT_DEAD_LETTER_EXCHANGE: &str = "chat_session_dead_letter_exchange";
 pub const CHAT_DEAD_LETTER_QUEUE: &str = "chat_session_dead_letter_queue";
 pub const CHAT_DEAD_LETTER_BINDING: &str = "chat_session.#";
 
-/// Max retries for chat: we try retry_num 0, 1, 2, 3 (4 attempts); after retry_num 3 fails, send to DLQ.
-pub const CHAT_MAX_RETRIES: u32 = 3;
+/// Max retries for chat: we try retry_num 0, 1 (2 attempts); after retry_num 1 fails, send to DLQ.
+pub const CHAT_MAX_RETRIES: u32 = 1;
 
 pub fn chat_retry_policy() -> RetryPolicy {
     RetryPolicy {
