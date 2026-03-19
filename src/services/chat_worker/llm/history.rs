@@ -27,7 +27,7 @@ pub enum UpstreamHistoryEntry {
     Assistant {
         text: String,
         tool_calls: Option<Vec<UpstreamToolCall>>,
-        /// Extended-thinking blocks for replay (e.g. Claude; before text / tool_use in the assistant message).
+        /// Extended-thinking blocks for replay (Claude extended thinking; Gemini thought summaries + signatures).
         thinking_blocks: Option<Vec<ThinkingBlock>>,
     },
     ToolResult {

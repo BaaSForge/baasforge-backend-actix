@@ -84,6 +84,12 @@ pub struct Settings {
     pub openai_reasoning_effort: Option<String>,
     pub gemini_api_key: Option<String>,
     pub gemini_model: String,
+    /// `GEMINI_THINKING_ENABLED=false` disables thinking even if level/budget are set.
+    pub gemini_thinking_explicitly_disabled: bool,
+    /// Gemini 3: `minimal` / `low` / `medium` / `high` (mutually exclusive with budget in the API).
+    pub gemini_thinking_level: Option<String>,
+    /// Gemini 2.5: token budget; `-1` = dynamic. Omit env var to leave thinking off (unless level is set).
+    pub gemini_thinking_budget: Option<i32>,
     pub anthropic_api_key: Option<String>,
     pub anthropic_model: String,
     /// Anthropic extended thinking: present only when enabled (see `ANTHROPIC_THINKING_ENABLED`) and
@@ -141,6 +147,34 @@ impl Settings {
             .filter(|s| !s.is_empty());
         let gemini_api_key = env::var("GEMINI_API_KEY").ok();
         let gemini_model = env::var("GEMINI_MODEL").expect("GEMINI_MODEL must be set");
+        let gemini_thinking_enabled_flag: Option<bool> =
+            match env::var("GEMINI_THINKING_ENABLED") {
+                Ok(s) if s.trim().is_empty() => None,
+                Ok(s) => match parse_env_bool(s.trim()) {
+                    Ok(b) => Some(b),
+                    Err(msg) => {
+                        return Err(
+                            format!("GEMINI_THINKING_ENABLED: {}", msg).into(),
+                        );
+                    }
+                },
+                Err(_) => None,
+            };
+        let gemini_thinking_explicitly_disabled = gemini_thinking_enabled_flag == Some(false);
+        let gemini_thinking_level = env::var("GEMINI_THINKING_LEVEL")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let gemini_thinking_budget = env::var("GEMINI_THINKING_BUDGET")
+            .ok()
+            .and_then(|s| {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    t.parse().ok()
+                }
+            });
         let anthropic_api_key = env::var("ANTHROPIC_API_KEY").ok();
         let anthropic_model = env::var("ANTHROPIC_MODEL").expect("ANTHROPIC_MODEL must be set");
         let anthropic_thinking_enabled_flag: Option<bool> =
@@ -184,6 +218,9 @@ impl Settings {
             openai_reasoning_effort,
             gemini_api_key,
             gemini_model,
+            gemini_thinking_explicitly_disabled,
+            gemini_thinking_level,
+            gemini_thinking_budget,
             anthropic_api_key,
             anthropic_model,
             anthropic_thinking_budget_tokens,

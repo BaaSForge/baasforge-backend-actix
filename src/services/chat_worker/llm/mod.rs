@@ -17,6 +17,14 @@ pub mod tools;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+/// Gemini thinking-related env (`GEMINI_THINKING_*`). See `.env` comments.
+#[derive(Clone, Debug)]
+pub struct GeminiThinkingEnv {
+    pub explicitly_disabled: bool,
+    pub level: Option<String>,
+    pub budget: Option<i32>,
+}
+
 /// Result of LLM generation: either completed fully or stopped by user (partial text + optional tool calls).
 #[derive(Debug)]
 pub enum GenerateOutcome {
@@ -48,6 +56,7 @@ pub enum LlmClient {
     Gemini {
         api_key: String,
         model: String,
+        thinking: GeminiThinkingEnv,
     },
     Claude {
         api_key: String,
@@ -94,10 +103,15 @@ impl LlmClient {
                 )
                 .await
             }
-            LlmClient::Gemini { api_key, model } => {
+            LlmClient::Gemini {
+                api_key,
+                model,
+                thinking,
+            } => {
                 gemini::call_gemini_stream(
                     api_key,
                     model,
+                    thinking,
                     pool,
                     session_messages,
                     user_text,
@@ -157,6 +171,11 @@ pub fn build_llm_client(settings: &Settings) -> Result<LlmClient, BoxError> {
             Ok(LlmClient::Gemini {
                 api_key: key,
                 model: settings.gemini_model.clone(),
+                thinking: GeminiThinkingEnv {
+                    explicitly_disabled: settings.gemini_thinking_explicitly_disabled,
+                    level: settings.gemini_thinking_level.clone(),
+                    budget: settings.gemini_thinking_budget,
+                },
             })
         }
         LlmProvider::Anthropic => {
