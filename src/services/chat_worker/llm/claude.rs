@@ -36,16 +36,6 @@ const ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MAX_TOKENS: u32 = 8192;
 
-/// Official API model IDs (https://docs.anthropic.com/en/docs/about-claude/models/overview).
-fn api_model_id(config_model: &str) -> &'static str {
-    match config_model {
-        "claude-sonnet-4-6" => "claude-sonnet-4-6",
-        "claude-sonnet-4-5" | "claude-sonnet-4-5-20250929" => "claude-sonnet-4-5-20250929",
-        "claude-4-sonnet-20250514" | "claude-sonnet-4-20250514" => "claude-sonnet-4-20250514",
-        _ => "claude-sonnet-4-20250514",
-    }
-}
-
 // ---- Claude API message types (type-safe, maps to Anthropic Messages API) ----
 // See: https://docs.anthropic.com/en/api/messages
 
@@ -135,11 +125,11 @@ fn build_request_body(
     system_prompt: &str,
     messages: &[ClaudeMessage],
     tools_json: Vec<Value>,
-    api_model: &str,
+    model: &str,
 ) -> Value {
     let messages_value = serde_json::to_value(messages).expect("ClaudeMessage serialization");
     serde_json::json!({
-        "model": api_model,
+        "model": model,
         "max_tokens": MAX_TOKENS,
         "stream": true,
         "system": system_prompt,
@@ -298,7 +288,6 @@ pub async fn call_claude_stream(
     let system_prompt = system_prompt_for_agent(&agent);
     let tools_list = to_tools_json(&agent);
     let tool_count = tools_list.len();
-    let api_model = api_model_id(model);
 
     let entries = session_messages_to_upstream_entries(session_messages, user_text);
     let messages = entries_to_claude_messages(&entries);
@@ -309,7 +298,7 @@ pub async fn call_claude_stream(
         );
     }
 
-    let body = build_request_body(system_prompt, &messages, tools_list.clone(), api_model);
+    let body = build_request_body(system_prompt, &messages, tools_list.clone(), model);
 
     let url = format!("{}/v1/messages", ANTHROPIC_API_BASE);
     let response = reqwest::Client::new()
@@ -338,7 +327,7 @@ pub async fn call_claude_stream(
     let mut tool_use_by_index: HashMap<usize, (String, String, Value)> = HashMap::new();
     let mut accumulated_tool_input: HashMap<usize, String> = HashMap::new();
 
-    tracing::info!(tool_count, api_model, "Claude: stream started with tools");
+    tracing::info!(tool_count, model, "Claude: stream started with tools");
 
     loop {
         let event = match read_one_sse_event(&mut stream, &mut buf).await {
