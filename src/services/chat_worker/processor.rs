@@ -1,6 +1,9 @@
 use crate::database::{DbPool, block_on_db_tokio};
-use crate::models::chat_messages::{ChatAgentType, ChatMessageStatus, TextPayload};
-use crate::routes::ws::user_channel;
+use crate::models::chat_messages::{
+    ChatAgentType, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, TextPayload,
+};
+use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
+use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::load_history_for_agent;
 use crate::services::chat_worker::llm::tools::{tool_context_for_chat_session, with_tool_context};
@@ -100,25 +103,46 @@ pub async fn process_one(
             let has_thinking = text_payload.has_thinking_stored();
             if has_content || has_tool_calls || has_thinking {
                 let payload = Some(serde_json::to_value(&text_payload)?);
-                block_on_db_tokio(pool, move |conn| {
-                    let base = diesel::update(
-                        chat_messages::table
-                            .filter(chat_messages::id.eq(placeholder_ai_message_id))
-                            .filter(chat_messages::status.ne(ChatMessageStatus::Stopped)),
-                    );
+                let placeholder_id = placeholder_ai_message_id;
+                let updated_row = block_on_db_tokio(pool, move |conn| {
+                    let q = chat_messages::table
+                        .filter(chat_messages::id.eq(placeholder_id))
+                        .filter(chat_messages::status.ne(ChatMessageStatus::Stopped));
                     // When there are requested tool calls, leave status as Generating until all tool messages complete.
                     if has_tool_calls {
-                        base.set(chat_messages::payload.eq(payload)).execute(conn)
+                        diesel::update(q)
+                            .set(chat_messages::payload.eq(payload))
+                            .returning(ChatMessageRow::as_returning())
+                            .get_result(conn)
+                            .optional()
                     } else {
-                        base.set((
-                            chat_messages::payload.eq(payload),
-                            chat_messages::status.eq(ChatMessageStatus::Completed),
-                        ))
-                        .execute(conn)
+                        diesel::update(q)
+                            .set((
+                                chat_messages::payload.eq(payload),
+                                chat_messages::status.eq(ChatMessageStatus::Completed),
+                            ))
+                            .returning(ChatMessageRow::as_returning())
+                            .get_result(conn)
+                            .optional()
                     }
                 })
                 .await
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                if let Some(row) = updated_row {
+                    let message = ChatMessageResponse::from(row);
+                    let event =
+                        WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                            project_id,
+                            session_id,
+                            message,
+                        });
+                    let mut guard = redis_conn.lock().await;
+                    publish_event_to_channel(&mut *guard, &channel, &event)
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                            e.to_string().into()
+                        })?;
+                }
                 info!(%project_id, %session_id, "Processed and saved AI response");
             }
             Ok(GenerateOutcome::Completed(text_payload))

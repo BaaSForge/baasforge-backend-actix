@@ -6,7 +6,9 @@ use crate::models::chat_messages::{
     ChatAgentType, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
     ChatSessionRoleType, TextPayload,
 };
-use crate::routes::ws::events::{ChatSessionMessageCreatedPayload, WsServerEvent};
+use crate::routes::ws::events::{
+    ChatSessionMessageCreatedPayload, ChatSessionMessageUpdatedPayload, WsServerEvent,
+};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
 use diesel::prelude::*;
@@ -74,8 +76,9 @@ fn has_requested_tool_calls(text_payload: &TextPayload) -> bool {
 }
 
 /// Creates the AI response message row with the given payload (e.g. tool-calls-only response)
-/// and publishes ChatSessionMessageCreated to Redis. Call this before executing tool calls
-/// so the client sees the AI message before tool-result messages.
+/// and publishes to Redis (`ChatSessionMessageCreated` on insert, or `ChatSessionMessageUpdated`
+/// when the row already exists, e.g. the queue-time placeholder). Call before executing tool calls
+/// so the client sees `requested_tool_calls` before tool-result messages.
 /// When the payload has any requested_tool_calls, the message is saved with status Generating; it will be
 /// set to Completed or Failed once all invoked tool messages have finished.
 pub async fn create_ai_message_with_payload_and_publish(
@@ -136,27 +139,42 @@ pub async fn create_ai_message_with_payload_and_publish(
             diesel::result::DatabaseErrorKind::UniqueViolation,
             _,
         ))) => {
-            // Row already exists (e.g. created when first chunk arrived); update with payload.
+            // Row already exists (e.g. queue-time placeholder); update with payload and notify.
             let payload_value = serde_json::to_value(text_payload).map_err(|e| e.to_string())?;
             let update_status = if has_requested_tool_calls(text_payload) {
                 ChatMessageStatus::Generating
             } else {
                 ChatMessageStatus::Completed
             };
-            block_on_db_tokio(pool, move |conn| {
+            let mid = response_message_id;
+            let updated_row = block_on_db_tokio(pool, move |conn| {
                 diesel::update(
                     chat_messages::table
-                        .filter(chat_messages::id.eq(response_message_id))
+                        .filter(chat_messages::id.eq(mid))
                         .filter(chat_messages::status.ne(ChatMessageStatus::Stopped)),
                 )
                 .set((
                     chat_messages::payload.eq(Some(payload_value)),
                     chat_messages::status.eq(update_status),
                 ))
-                .execute(conn)
+                .returning(ChatMessageRow::as_returning())
+                .get_result(conn)
+                .optional()
             })
             .await
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+            if let Some(row) = updated_row {
+                let channel = user_channel(user_id);
+                let message = ChatMessageResponse::from(row);
+                let event =
+                    WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                        project_id,
+                        session_id,
+                        message,
+                    });
+                let mut guard = redis_conn.lock().await;
+                publish_event_to_channel(&mut *guard, &channel, &event).await?;
+            }
         }
         Err(e) => return Err(e.into()),
     }
