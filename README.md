@@ -14,7 +14,9 @@ diesel migration generate create_users_table
 ```bash
 ./queue_setup_http.sh
 ```
-Loads from `.env`: `RABBIT_URL`, `RABBITMQ_MANAGEMENT_URL`, `RETRY_DELAY_EXCHANGE`, `RETRY_DELAY_TTL_MS`. User/password are parsed from `RABBIT_URL`.
+Loads from `.env`: `RABBIT_URL`, `RABBITMQ_MANAGEMENT_URL`, `RETRY_DELAY_EXCHANGE`, `RETRY_DELAY_TTL_MS`, `CHAT_CONSUMER_TIMEOUT_SECS`. User/password are parsed from `RABBIT_URL`.
+
+**Semantics:** each queue message is one LLM step (thinking + content/tool **retrieval** for that step); **tool callings** are follow-on **separate** messages, so `CHAT_CONSUMER_TIMEOUT_SECS` only needs to cover one consumer pass, not the whole tool chain. See [docs/chat-queue.md](docs/chat-queue.md).
 
 ** It doesn't use `.env.local` at all, just `.env` **
 

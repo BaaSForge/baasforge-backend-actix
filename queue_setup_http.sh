@@ -2,6 +2,7 @@
 # One-time queue setup via RabbitMQ Management HTTP API.
 # Run once per environment. Creates the exchanges/queues the API and chat worker expect.
 # Requires: curl. Loads all settings from .env (no defaults in this script).
+# Queue semantics and CHAT_CONSUMER_TIMEOUT_SECS sizing: see docs/chat-queue.md
 
 # IMPORTANT: This file only imports .env file, not .env.local overrides.
 
@@ -16,8 +17,8 @@ else
   exit 1
 fi
 
-if [ -z "$RABBITMQ_MANAGEMENT_URL" ] || [ -z "$RETRY_DELAY_EXCHANGE" ]; then
-  echo ".env must set RABBITMQ_MANAGEMENT_URL, RETRY_DELAY_EXCHANGE" >&2
+if [ -z "$RABBITMQ_MANAGEMENT_URL" ] || [ -z "$RETRY_DELAY_EXCHANGE" ] || [ -z "$CHAT_CONSUMER_TIMEOUT_SECS" ]; then
+  echo ".env must set RABBITMQ_MANAGEMENT_URL, RETRY_DELAY_EXCHANGE, CHAT_CONSUMER_TIMEOUT_SECS" >&2
   exit 1
 fi
 
@@ -45,9 +46,8 @@ curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
   "$MGMT/api/exchanges/$VHOST/chat_session_exchange" \
   -d '{"type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}}'
 
-# x-consumer-timeout: if a consumer doesn't ack within this time (ms), broker closes the channel and requeues (e.g. after crash). From CHAT_CONSUMER_TIMEOUT_SECS (default 60).
+# x-consumer-timeout: if a consumer doesn't ack within this time (ms), broker closes the channel and requeues (e.g. after crash). CHAT_CONSUMER_TIMEOUT_SECS in .env — size for one queue message (see docs/chat-queue.md).
 # Note: if the queue already exists without this argument, you must delete and recreate it for the argument to apply.
-CHAT_CONSUMER_TIMEOUT_SECS="${CHAT_CONSUMER_TIMEOUT_SECS:-60}"
 CHAT_CONSUMER_TIMEOUT_MS=$((CHAT_CONSUMER_TIMEOUT_SECS * 1000))
 echo "Declaring chat_session_work_queue (durable, consumer_timeout=${CHAT_CONSUMER_TIMEOUT_SECS}s)..."
 curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \

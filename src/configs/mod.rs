@@ -72,7 +72,8 @@ pub struct Settings {
     pub retry_delay_exchange: String,
     /// TTL in milliseconds for messages in retry delay queues (e.g. 3000 = 3 seconds).
     pub retry_delay_ttl_ms: u32,
-    /// Chat session queue: if a consumer doesn't ack within this time (seconds), RabbitMQ closes the channel and requeues (e.g. after crash). Used by queue_setup_http.sh for x-consumer-timeout.
+    /// Chat session queue: if a consumer doesn't ack within this time (seconds), RabbitMQ closes the channel and requeues (e.g. after crash). Used by queue_setup_http.sh for `x-consumer-timeout`.
+    /// Size this for **one** queue message (one LLM pass + retrievals for that step); tool **executions** are separate messages—see `docs/chat-queue.md`.
     pub chat_consumer_timeout_secs: u64,
     /// TTL in seconds for Redis keys that mark stopped message IDs (e.g. 600 = 10 minutes). Used when user stops generating so workers can skip or abort streaming for those messages.
     pub stopped_messages_ids_cache_ttl_secs: u64,

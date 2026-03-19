@@ -102,6 +102,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let settings = Settings::new()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+    info!(
+        timeout_secs = settings.chat_consumer_timeout_secs,
+        "CHAT_CONSUMER_TIMEOUT_SECS from env — `x-consumer-timeout` must cover one queue message (one LLM pass); see docs/chat-queue.md. Re-run queue_setup_http.sh after changing."
+    );
     let llm_provider = settings.llm_provider;
     let llm_client = build_llm_client(&settings)?;
     info!(provider = %llm_provider, "Using LLM provider");
@@ -137,12 +141,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     info!("Chat worker started. Consuming from work queue.");
 
-    while let Some(delivery_result) = consumer.next().await {
+    'consumer: while let Some(delivery_result) = consumer.next().await {
         let delivery = match delivery_result {
             Ok(d) => d,
             Err(e) => {
                 tracing::error!("Consumer error: {}", e);
-                continue;
+                // Channel is dead (e.g. consumer ack timeout); exit so the supervisor can restart with a fresh connection.
+                return Err(std::io::Error::other(format!("consumer error: {e}")).into());
             }
         };
 
@@ -219,133 +224,90 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
 
             let retry_num = payload.retry_num;
-            let pool = pool.clone();
-            let redis_conn = redis_conn.clone();
-            let llm_client = llm_client.clone();
-            let acker = delivery.acker.clone();
-            let retry_channel = retry_channel.clone();
-            let rabbit_publisher = rabbit_publisher.clone();
-            let retry_delay_exchange = retry_delay_exchange.clone();
             let delivery_data = delivery.data.clone();
             let retry_routing_key = routing_key.clone();
             let retry_policy = chat_retry_policy();
             let dead_letter_spec = chat_dead_letter_spec();
 
-            tokio::spawn(async move {
-                let result = process_one(
-                    &pool,
-                    &llm_client,
-                    &redis_conn,
-                    &rabbit_publisher,
-                    user_id,
-                    project_id,
-                    session_id,
-                    &user_text,
-                    response_message_id,
-                    agent.clone(),
-                )
-                .await;
+            // Await here (not tokio::spawn): ack must follow processing for RabbitMQ x-consumer-timeout,
+            // and prefetch=1 already serializes deliveries until we ack.
+            let result = process_one(
+                &pool,
+                &llm_client,
+                &redis_conn,
+                &rabbit_publisher,
+                user_id,
+                project_id,
+                session_id,
+                &user_text,
+                response_message_id,
+                agent.clone(),
+            )
+            .await;
 
-                match &result {
-                    Ok(outcome) => {
-                        // Continuation is scheduled only when LLM returned tool calls (tools will eventually call maybe_complete_invoking_message and publish).
-                        let will_schedule_continuation = matches!(
-                            outcome,
-                            GenerateOutcome::Completed(p)
-                                if p.requested_tool_calls.as_ref().is_some_and(|c| !c.is_empty())
+            match &result {
+                Ok(outcome) => {
+                    // Continuation is scheduled only when LLM returned tool calls (tools will eventually call maybe_complete_invoking_message and publish).
+                    let will_schedule_continuation = matches!(
+                        outcome,
+                        GenerateOutcome::Completed(p)
+                            if p.requested_tool_calls.as_ref().is_some_and(|c| !c.is_empty())
+                    );
+                    generation_lifecycle::notify_if_generation_loop_finished(
+                        &redis_conn,
+                        user_id,
+                        project_id,
+                        session_id,
+                        will_schedule_continuation,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    if retry_policy.should_dead_letter(retry_num) {
+                        tracing::error!(
+                            %project_id,
+                            %session_id,
+                            retry_num,
+                            "Process message failed after max retries, sending to dead letter: {}",
+                            e
                         );
-                        generation_lifecycle::notify_if_generation_loop_finished(
+                        // Update DB first so on reload the user sees Failed; then notify client.
+                        set_message_failed_and_notify(
+                            &pool,
                             &redis_conn,
                             user_id,
                             project_id,
                             session_id,
-                            will_schedule_continuation,
+                            response_message_id,
+                            agent.clone(),
                         )
                         .await;
-                    }
-                    Err(e) => {
-                        if retry_policy.should_dead_letter(retry_num) {
-                            tracing::error!(
-                                %project_id,
-                                %session_id,
-                                retry_num,
-                                "Process message failed after max retries, sending to dead letter: {}",
-                                e
-                            );
-                            // Update DB first so on reload the user sees Failed; then notify client.
-                            set_message_failed_and_notify(
-                                &pool,
-                                &redis_conn,
-                                user_id,
-                                project_id,
-                                session_id,
-                                response_message_id,
-                                agent.clone(),
-                            )
-                            .await;
-                            if let Err(dl_e) = publish_to_dead_letter(
-                                &retry_channel,
-                                &dead_letter_spec.exchange_name,
-                                &retry_routing_key,
-                                &delivery_data,
-                            )
-                            .await
-                            {
-                                tracing::error!("Failed to publish to dead letter: {}", dl_e);
-                            }
-                        } else {
-                            tracing::error!(
-                                %project_id,
-                                %session_id,
-                                retry_num,
-                                "Process message failed, sending to retry delay: {}",
-                                e
-                            );
-                            let next_retry_num = retry_num + 1;
-                            let mut payload_for_retry: ChatSessionQueueMessage =
-                                match serde_json::from_slice(&delivery_data) {
-                                    Ok(p) => p,
-                                    Err(parse_e) => {
-                                        tracing::error!(
-                                            "Failed to parse message for retry: {}",
-                                            parse_e
-                                        );
-                                        set_message_failed_and_notify(
-                                            &pool,
-                                            &redis_conn,
-                                            user_id,
-                                            project_id,
-                                            session_id,
-                                            response_message_id,
-                                            agent.clone(),
-                                        )
-                                        .await;
-                                        if let Err(dl_e) = publish_to_dead_letter(
-                                            &retry_channel,
-                                            &dead_letter_spec.exchange_name,
-                                            &retry_routing_key,
-                                            &delivery_data,
-                                        )
-                                        .await
-                                        {
-                                            tracing::error!(
-                                                "Failed to publish to dead letter: {}",
-                                                dl_e
-                                            );
-                                        }
-                                        if acker.ack(BasicAckOptions::default()).await.is_err() {
-                                            tracing::warn!("Failed to ack delivery");
-                                        }
-                                        return;
-                                    }
-                                };
-                            payload_for_retry.retry_num = next_retry_num;
-                            let payload_bytes = match serde_json::to_vec(&payload_for_retry) {
-                                Ok(b) => b,
-                                Err(ser_e) => {
+                        if let Err(dl_e) = publish_to_dead_letter(
+                            &retry_channel,
+                            &dead_letter_spec.exchange_name,
+                            &retry_routing_key,
+                            &delivery_data,
+                        )
+                        .await
+                        {
+                            tracing::error!("Failed to publish to dead letter: {}", dl_e);
+                        }
+                    } else {
+                        tracing::error!(
+                            %project_id,
+                            %session_id,
+                            retry_num,
+                            "Process message failed, sending to retry delay: {}",
+                            e
+                        );
+                        let next_retry_num = retry_num + 1;
+                        let mut payload_for_retry: ChatSessionQueueMessage =
+                            match serde_json::from_slice(&delivery_data) {
+                                Ok(p) => p,
+                                Err(parse_e) => {
                                     tracing::error!(
-                                        "Failed to serialize message for retry: {}",
-                                        ser_e
+                                        "Failed to parse message for retry: {}",
+                                        parse_e
                                     );
                                     set_message_failed_and_notify(
                                         &pool,
@@ -357,23 +319,34 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                         agent.clone(),
                                     )
                                     .await;
-                                    if acker.ack(BasicAckOptions::default()).await.is_err() {
+                                    if let Err(dl_e) = publish_to_dead_letter(
+                                        &retry_channel,
+                                        &dead_letter_spec.exchange_name,
+                                        &retry_routing_key,
+                                        &delivery_data,
+                                    )
+                                    .await
+                                    {
+                                        tracing::error!(
+                                            "Failed to publish to dead letter: {}",
+                                            dl_e
+                                        );
+                                    }
+                                    if delivery.acker.ack(BasicAckOptions::default()).await.is_err()
+                                    {
                                         tracing::warn!("Failed to ack delivery");
                                     }
-                                    return;
+                                    continue 'consumer;
                                 }
                             };
-                            if let Err(retry_e) = publish_to_retry_delay(
-                                &retry_channel,
-                                &retry_delay_exchange,
-                                &retry_routing_key,
-                                &payload_bytes,
-                                retry_num,
-                                &retry_policy,
-                            )
-                            .await
-                            {
-                                tracing::error!("Failed to publish to retry delay: {}", retry_e);
+                        payload_for_retry.retry_num = next_retry_num;
+                        let payload_bytes = match serde_json::to_vec(&payload_for_retry) {
+                            Ok(b) => b,
+                            Err(ser_e) => {
+                                tracing::error!(
+                                    "Failed to serialize message for retry: {}",
+                                    ser_e
+                                );
                                 set_message_failed_and_notify(
                                     &pool,
                                     &redis_conn,
@@ -384,15 +357,41 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                     agent.clone(),
                                 )
                                 .await;
+                                if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {
+                                    tracing::warn!("Failed to ack delivery");
+                                }
+                                continue 'consumer;
                             }
+                        };
+                        if let Err(retry_e) = publish_to_retry_delay(
+                            &retry_channel,
+                            &retry_delay_exchange,
+                            &retry_routing_key,
+                            &payload_bytes,
+                            retry_num,
+                            &retry_policy,
+                        )
+                        .await
+                        {
+                            tracing::error!("Failed to publish to retry delay: {}", retry_e);
+                            set_message_failed_and_notify(
+                                &pool,
+                                &redis_conn,
+                                user_id,
+                                project_id,
+                                session_id,
+                                response_message_id,
+                                agent.clone(),
+                            )
+                            .await;
                         }
                     }
                 }
+            }
 
-                if acker.ack(BasicAckOptions::default()).await.is_err() {
-                    tracing::warn!("Failed to ack delivery");
-                }
-            });
+            if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {
+                tracing::warn!("Failed to ack delivery");
+            }
         } else {
             // Non-TEXT: create message in DB, publish Redis "new message created", then type-specific handler.
             let user_id = payload.user_id.expect("validated");
