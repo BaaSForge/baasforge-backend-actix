@@ -80,11 +80,14 @@ pub struct Settings {
     pub redis_url: String,
     pub openai_api_key: Option<String>,
     pub openai_model: String,
+    /// Chat Completions: `reasoning_effort` for reasoning models (e.g. gpt-5.x, o3, o4-mini). See .env comments.
+    pub openai_reasoning_effort: Option<String>,
     pub gemini_api_key: Option<String>,
     pub gemini_model: String,
     pub anthropic_api_key: Option<String>,
     pub anthropic_model: String,
-    /// If set and > 0, enables Anthropic extended thinking with this token budget (Claude only).
+    /// Anthropic extended thinking: present only when enabled (see `ANTHROPIC_THINKING_ENABLED`) and
+    /// `ANTHROPIC_THINKING_BUDGET_TOKENS` is > 0. Passed to the Messages API as `thinking.budget_tokens`.
     pub anthropic_thinking_budget_tokens: Option<u32>,
     pub llm_provider: LlmProvider,
 }
@@ -132,15 +135,33 @@ impl Settings {
             .or_else(|_| env::var("OPENAI_KEY"))
             .ok();
         let openai_model = env::var("OPENAI_MODEL").expect("OPENAI_MODEL must be set");
+        let openai_reasoning_effort: Option<String> = env::var("OPENAI_REASONING_EFFORT")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         let gemini_api_key = env::var("GEMINI_API_KEY").ok();
         let gemini_model = env::var("GEMINI_MODEL").expect("GEMINI_MODEL must be set");
         let anthropic_api_key = env::var("ANTHROPIC_API_KEY").ok();
         let anthropic_model = env::var("ANTHROPIC_MODEL").expect("ANTHROPIC_MODEL must be set");
-        let anthropic_thinking_budget_tokens: Option<u32> =
+        let anthropic_thinking_enabled_flag: Option<bool> =
+            match env::var("ANTHROPIC_THINKING_ENABLED") {
+                Ok(s) if s.trim().is_empty() => None,
+                Ok(s) => Some(
+                    parse_env_bool(s.trim()).map_err(|msg| {
+                        format!("ANTHROPIC_THINKING_ENABLED: {}", msg)
+                    })?,
+                ),
+                Err(_) => None,
+            };
+        let anthropic_thinking_budget_raw: Option<u32> =
             env::var("ANTHROPIC_THINKING_BUDGET_TOKENS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .filter(|&n| n > 0);
+        let anthropic_thinking_budget_tokens: Option<u32> = match anthropic_thinking_enabled_flag {
+            Some(false) => None,
+            Some(true) | None => anthropic_thinking_budget_raw,
+        };
         let llm_provider_str = env::var("LLM_PROVIDER").expect("LLM_PROVIDER must be set");
         let llm_provider = LlmProvider::try_from(llm_provider_str)?;
 
@@ -160,6 +181,7 @@ impl Settings {
             redis_url,
             openai_api_key,
             openai_model,
+            openai_reasoning_effort,
             gemini_api_key,
             gemini_model,
             anthropic_api_key,
@@ -167,5 +189,17 @@ impl Settings {
             anthropic_thinking_budget_tokens,
             llm_provider,
         })
+    }
+}
+
+/// Parses typical env truthy/falsey strings (e.g. `true`, `1`, `on`, `false`, `0`, `off`).
+fn parse_env_bool(s: &str) -> Result<bool, String> {
+    match s.trim().to_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        other => Err(format!(
+            "expected true/false, 1/0, yes/no, or on/off; got {:?}",
+            other
+        )),
     }
 }

@@ -78,8 +78,8 @@ pub async fn call_gemini_stream(
     let system_prompt = system_prompt_for_agent(&agent);
     let declarations: Vec<FunctionDeclaration> = to_gemini_declarations_for_agent(&agent);
     let mut full_text = String::new();
+    // Incremented only when we publish a non-final assistant text chunk to Redis.
     let mut chunk_index: u32 = 0;
-    let mut message_created = false;
 
     let entries = session_messages_to_upstream_entries(session_messages, user_text);
     let mut request = client.generate_content().with_system_prompt(system_prompt);
@@ -166,20 +166,6 @@ pub async fn call_gemini_stream(
         }
         let text: String = chunk.text().to_string();
         if !text.is_empty() {
-            if let Some(ref conn) = redis_conn {
-                ai_message::ensure_ai_message_created_and_publish(
-                    pool,
-                    conn,
-                    session_id,
-                    message_id,
-                    user_id,
-                    project_id,
-                    agent.clone(),
-                )
-                .await
-                .map_err(|e| format!("ensure_ai_message_created_and_publish: {}", e))?;
-            }
-            message_created = true;
             full_text.push_str(&text);
             if let Some(ref conn) = redis_conn {
                 let mut guard = conn.lock().await;
@@ -227,8 +213,8 @@ pub async fn call_gemini_stream(
             })
             .collect();
 
-        // Publish invoker message to client before executing tools so client sees correct order.
-        if !message_created {
+        // No streamed assistant text was published to Redis; persist tool-call payload for the client.
+        if chunk_index == 0 {
             let invoker_payload = TextPayload {
                 text: full_text.clone(),
                 requested_tool_calls: Some(requested.clone()),
@@ -263,7 +249,7 @@ pub async fn call_gemini_stream(
         tracing::info!("Gemini: no tool calls in any stream chunk (function_call_count=0)");
     }
 
-    if message_created && let Some(ref conn) = redis_conn {
+    if chunk_index > 0 && let Some(ref conn) = redis_conn {
         let payload = ChatSessionNewMessageChunkPayload::new(
             project_id,
             session_id,

@@ -42,6 +42,8 @@ pub enum LlmClient {
     OpenAi {
         credentials: ::openai::Credentials,
         model: String,
+        /// Chat Completions `reasoning_effort` when set (reasoning-capable models only).
+        reasoning_effort: Option<String>,
     },
     Gemini {
         api_key: String,
@@ -70,10 +72,15 @@ impl LlmClient {
         agent: ChatAgentType,
     ) -> Result<GenerateOutcome, BoxError> {
         match self {
-            LlmClient::OpenAi { credentials, model } => {
+            LlmClient::OpenAi {
+                credentials,
+                model,
+                reasoning_effort,
+            } => {
                 openai::call_gpt_stream(
                     credentials,
                     model,
+                    reasoning_effort.as_deref(),
                     pool,
                     session_messages,
                     user_text,
@@ -140,6 +147,7 @@ pub fn build_llm_client(settings: &Settings) -> Result<LlmClient, BoxError> {
             Ok(LlmClient::OpenAi {
                 credentials: ::openai::Credentials::new(key, ""),
                 model: settings.openai_model.clone(),
+                reasoning_effort: settings.openai_reasoning_effort.clone(),
             })
         }
         LlmProvider::Gemini => {

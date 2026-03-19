@@ -1,7 +1,16 @@
+// OpenAI Chat Completions via HTTP (reqwest + serde_json). Uses `openai` crate types for messages only.
+// Reasoning: request field `reasoning_effort` (Chat Completions API) — see
+// https://platform.openai.com/docs/guides/reasoning and
+// https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+// Streamed model reasoning may appear on chunk `choices[].delta.reasoning_content` when the model/API exposes it
+// (not all models stream visible reasoning; raw reasoning tokens are often omitted — use Responses API + summaries for that).
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessageType, ChatSessionRoleType, RequestedToolCall, TextPayload,
+    ThinkingBlock,
 };
-use crate::routes::ws::events::{ChatSessionNewMessageChunkPayload, WsServerEvent};
+use crate::routes::ws::events::{
+    ChatSessionNewMessageChunkPayload, ChatSessionNewThinkingChunkPayload, WsServerEvent,
+};
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::services::chat_worker::ai_message;
@@ -23,9 +32,22 @@ use serde_json::Value;
 
 struct StreamChunk {
     content: Option<String>,
+    /// Streamed chain-of-thought / reasoning text when the API includes it on the delta (e.g. some reasoning models).
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<(u64, String, String, String)>>, // index, id, name, args
     function_call: Option<(String, String)>,                // legacy: name, args
     finish_reason: Option<String>,
+}
+
+fn thinking_blocks_from_accumulated_reasoning(reasoning: &str) -> Option<Vec<ThinkingBlock>> {
+    if reasoning.is_empty() {
+        None
+    } else {
+        Some(vec![ThinkingBlock {
+            thinking: reasoning.to_string(),
+            signature: None,
+        }])
+    }
 }
 
 fn openai_msg(
@@ -61,6 +83,10 @@ fn to_openai_functions_for_agent(
 /// Tool-call request and tool results are always separate messages (never combined):
 /// - One Assistant message with tool_calls (the request).
 /// - Then one Tool-role message per result, each with its own tool_call_id and content.
+///
+/// Stored `thinking_blocks` from prior turns are not re-sent: unlike Anthropic extended thinking,
+/// Chat Completions has no stable assistant-message shape for raw reasoning replay; reasoning
+/// context is model-internal. We still persist thinking in DB / WS for the UI.
 fn entries_to_openai_messages(
     entries: &[UpstreamHistoryEntry],
     system_prompt: &str,
@@ -137,15 +163,19 @@ fn entries_to_openai_messages(
 
 fn parse_sse_chunk(data: &str) -> Option<StreamChunk> {
     let root: Value = serde_json::from_str(data).ok()?;
-    let delta = root.get("choices")?.as_array()?.first()?.get("delta")?;
+    let choice = root.get("choices")?.as_array()?.first()?;
+    let delta = choice.get("delta")?;
     let content = delta
         .get("content")
         .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
         .map(String::from);
-    let finish_reason = root
-        .get("choices")?
-        .as_array()?
-        .first()?
+    let reasoning_content = delta
+        .get("reasoning_content")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let finish_reason = choice
         .get("finish_reason")
         .and_then(|v| v.as_str())
         .map(String::from);
@@ -187,8 +217,17 @@ fn parse_sse_chunk(data: &str) -> Option<StreamChunk> {
                     .to_string(),
             )
         });
+    if content.is_none()
+        && reasoning_content.is_none()
+        && tool_calls.is_none()
+        && function_call.is_none()
+        && finish_reason.is_none()
+    {
+        return None;
+    }
     Some(StreamChunk {
         content,
+        reasoning_content,
         tool_calls,
         function_call,
         finish_reason,
@@ -198,6 +237,7 @@ fn parse_sse_chunk(data: &str) -> Option<StreamChunk> {
 async fn stream_openai_tools(
     credentials: &Credentials,
     model: &str,
+    reasoning_effort: Option<&str>,
     messages: Vec<ChatCompletionMessage>,
     functions: &[openai::chat::ChatCompletionFunctionDefinition],
 ) -> Result<mpsc::Receiver<StreamChunk>, BoxError> {
@@ -210,13 +250,21 @@ async fn stream_openai_tools(
             })
         })
         .collect();
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "messages": messages,
         "stream": true,
         "tools": tools_json,
         "tool_choice": "auto"
     });
+    if let Some(effort) = reasoning_effort.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert(
+                "reasoning_effort".to_string(),
+                Value::String(effort.to_string()),
+            );
+        }
+    }
     let url = format!("{}chat/completions", credentials.base_url());
     let response = reqwest::Client::new()
         .post(&url)
@@ -274,6 +322,7 @@ async fn stream_openai_tools(
 pub async fn call_gpt_stream(
     credentials: &Credentials,
     model: &str,
+    reasoning_effort: Option<&str>,
     pool: &crate::database::DbPool,
     session_messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
     user_text: &str,
@@ -289,43 +338,71 @@ pub async fn call_gpt_stream(
     let system_prompt = system_prompt_for_agent(&agent);
     let messages = entries_to_openai_messages(&entries, system_prompt);
     let functions = to_openai_functions_for_agent(&agent);
-    let mut rx = stream_openai_tools(credentials, model, messages, &functions)
-        .await
-        .map_err(|e| format!("OpenAI stream: {}", e))?;
+    let mut rx = stream_openai_tools(
+        credentials,
+        model,
+        reasoning_effort,
+        messages,
+        &functions,
+    )
+    .await
+    .map_err(|e| format!("OpenAI stream: {}", e))?;
 
     let mut full_text = String::new();
+    let mut full_thinking = String::new();
     let mut chunk_index: u32 = 0;
-    let mut message_created = false;
+    let mut thinking_chunk_index: u32 = 0;
     let mut is_tool_response = false;
     let mut acc: Vec<(String, String, String)> = Vec::new(); // id, name, args
     let mut last_finish_reason = String::new();
 
-    tracing::info!(tools = functions.len(), "OpenAI stream started");
+    tracing::info!(
+        tools = functions.len(),
+        model,
+        ?reasoning_effort,
+        "OpenAI stream started"
+    );
 
     while let Some(chunk) = rx.recv().await {
         if chunk.tool_calls.is_some() || chunk.function_call.is_some() {
             is_tool_response = true;
         }
+        if let Some(r) = chunk.reasoning_content.as_ref().filter(|s| !s.is_empty()) {
+            full_thinking.push_str(r);
+            if let Some(ref conn) = redis_conn {
+                let mut guard = conn.lock().await;
+                if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                    return Ok(GenerateOutcome::Stopped(TextPayload {
+                        text: full_text,
+                        requested_tool_calls: None,
+                        thinking_blocks: thinking_blocks_from_accumulated_reasoning(&full_thinking),
+                    }));
+                }
+                let payload = ChatSessionNewThinkingChunkPayload::new(
+                    project_id,
+                    session_id,
+                    message_id,
+                    thinking_chunk_index,
+                    r.clone(),
+                    false,
+                );
+                let ws_event = WsServerEvent::ChatSessionNewThinkingChunk(payload);
+                if let Err(e) = publish_event_to_channel(&mut *guard, topic, &ws_event).await {
+                    tracing::warn!("Failed to publish OpenAI thinking chunk to Redis: {}", e);
+                }
+                thinking_chunk_index += 1;
+            }
+        }
         if let Some(c) = chunk.content.as_ref().filter(|s| !s.is_empty()) {
             full_text.push_str(c);
             if !is_tool_response {
                 if let Some(ref conn) = redis_conn {
-                    ai_message::ensure_ai_message_created_and_publish(
-                        pool,
-                        conn,
-                        session_id,
-                        message_id,
-                        user_id,
-                        project_id,
-                        agent.clone(),
-                    )
-                    .await?;
                     let mut guard = conn.lock().await;
                     if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
                         return Ok(GenerateOutcome::Stopped(TextPayload {
                             text: full_text,
                             requested_tool_calls: None,
-                            ..Default::default()
+                            thinking_blocks: thinking_blocks_from_accumulated_reasoning(&full_thinking),
                         }));
                     }
                     let payload = ChatSessionNewMessageChunkPayload::new(
@@ -344,7 +421,6 @@ pub async fn call_gpt_stream(
                     .await;
                     chunk_index += 1;
                 }
-                message_created = true;
             }
         }
         if let Some(ref tcs) = chunk.tool_calls {
@@ -386,6 +462,10 @@ pub async fn call_gpt_stream(
         || last_finish_reason == "tool_calls"
         || last_finish_reason == "function_call";
 
+    let had_content_stream = !full_text.is_empty() || !full_thinking.is_empty();
+    let thinking_blocks = thinking_blocks_from_accumulated_reasoning(&full_thinking);
+    let published_stream_chunks = chunk_index > 0 || thinking_chunk_index > 0;
+
     let requested_tool_calls_out: Option<Vec<RequestedToolCall>> = if has_tool_calls {
         let to_run: Vec<_> = acc
             .into_iter()
@@ -408,11 +488,11 @@ pub async fn call_gpt_stream(
                 }
             })
             .collect();
-        if !message_created {
+        if !had_content_stream {
             let payload = TextPayload {
                 text: full_text.clone(),
                 requested_tool_calls: Some(requested.clone()),
-                ..Default::default()
+                thinking_blocks: thinking_blocks.clone(),
             };
             if let Some(ref conn) = redis_conn {
                 ai_message::create_ai_message_with_payload_and_publish(
@@ -443,7 +523,25 @@ pub async fn call_gpt_stream(
         None
     };
 
-    if message_created && let Some(ref conn) = redis_conn {
+    if published_stream_chunks && let Some(ref conn) = redis_conn {
+        let mut guard = conn.lock().await;
+        if thinking_chunk_index > 0 {
+            let thinking_done = ChatSessionNewThinkingChunkPayload::new(
+                project_id,
+                session_id,
+                message_id,
+                thinking_chunk_index,
+                String::new(),
+                true,
+            );
+            let _ = publish_event_to_channel(
+                &mut *guard,
+                topic,
+                &WsServerEvent::ChatSessionNewThinkingChunk(thinking_done),
+            )
+            .await;
+        }
+        // Close assistant text stream (including thinking-only turns: chunk_index may be 0).
         let payload = ChatSessionNewMessageChunkPayload::new(
             project_id,
             session_id,
@@ -452,7 +550,6 @@ pub async fn call_gpt_stream(
             String::new(),
             true,
         );
-        let mut guard = conn.lock().await;
         let _ = publish_event_to_channel(
             &mut *guard,
             topic,
@@ -464,6 +561,6 @@ pub async fn call_gpt_stream(
     Ok(GenerateOutcome::Completed(TextPayload {
         text: full_text,
         requested_tool_calls: requested_tool_calls_out,
-        ..Default::default()
+        thinking_blocks,
     }))
 }
