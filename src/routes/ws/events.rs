@@ -6,6 +6,8 @@ use uuid::Uuid;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsServerEvent {
     ChatSessionNewMessageChunk(ChatSessionNewMessageChunkPayload),
+    /// Streamed reasoning text (e.g. Claude extended thinking). Client should append to `message.thinking`, not `content` / text payload.
+    ChatSessionNewThinkingChunk(ChatSessionNewThinkingChunkPayload),
     ChatSessionMessageCreated(ChatSessionMessageCreatedPayload),
     ChatSessionMessageStatusChange(ChatSessionMessageStatusChangePayload),
     ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload),
@@ -98,6 +100,36 @@ impl ChatSessionNewMessageChunkPayload {
             message_id,
             chunk_index,
             content,
+            done,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChatSessionNewThinkingChunkPayload {
+    pub project_id: Uuid,
+    pub session_id: Uuid,
+    pub message_id: Uuid,
+    pub chunk_index: u32,
+    pub thinking: String,
+    pub done: bool,
+}
+
+impl ChatSessionNewThinkingChunkPayload {
+    pub fn new(
+        project_id: Uuid,
+        session_id: Uuid,
+        message_id: Uuid,
+        chunk_index: u32,
+        thinking: String,
+        done: bool,
+    ) -> Self {
+        Self {
+            project_id,
+            session_id,
+            message_id,
+            chunk_index,
+            thinking,
             done,
         }
     }

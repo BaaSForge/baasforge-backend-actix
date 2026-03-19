@@ -444,7 +444,7 @@ pub async fn maybe_complete_invoking_message(
             type_: ChatMessageType::Text,
             payload: Some(ChatMessagePayload::Text(TextPayload {
                 text: String::new(),
-                requested_tool_calls: None,
+                ..Default::default()
             })),
             response_message_id,
             retry_num: 0,

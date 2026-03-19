@@ -1,5 +1,5 @@
 use crate::database::{DbPool, block_on_db_tokio};
-use crate::models::chat_messages::{ChatAgentType, ChatMessageStatus};
+use crate::models::chat_messages::{ChatAgentType, ChatMessageStatus, TextPayload};
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::load_history_for_agent;
@@ -11,6 +11,14 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
 use uuid::Uuid;
+
+fn text_payload_has_storable_content(p: &TextPayload) -> bool {
+    !p.text.is_empty()
+        || p.requested_tool_calls
+            .as_ref()
+            .is_some_and(|c| !c.is_empty())
+        || p.has_thinking_stored()
+}
 
 pub async fn process_one(
     pool: &DbPool,
@@ -59,12 +67,7 @@ pub async fn process_one(
 
     match outcome {
         GenerateOutcome::Stopped(text_payload) => {
-            if !text_payload.text.is_empty()
-                || text_payload
-                    .requested_tool_calls
-                    .as_ref()
-                    .is_some_and(|c| !c.is_empty())
-            {
+            if text_payload_has_storable_content(&text_payload) {
                 let payload = Some(serde_json::to_value(&text_payload)?);
                 block_on_db_tokio(pool, move |conn| {
                     diesel::update(
@@ -94,7 +97,8 @@ pub async fn process_one(
                 .requested_tool_calls
                 .as_ref()
                 .is_some_and(|c| !c.is_empty());
-            if has_content || has_tool_calls {
+            let has_thinking = text_payload.has_thinking_stored();
+            if has_content || has_tool_calls || has_thinking {
                 let payload = Some(serde_json::to_value(&text_payload)?);
                 block_on_db_tokio(pool, move |conn| {
                     let base = diesel::update(

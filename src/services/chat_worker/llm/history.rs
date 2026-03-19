@@ -5,7 +5,7 @@
 //! separate messages; we never combine them into one.
 
 use crate::models::chat_messages::{
-    ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload,
+    ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload, ThinkingBlock,
 };
 use serde_json::Value;
 
@@ -27,6 +27,8 @@ pub enum UpstreamHistoryEntry {
     Assistant {
         text: String,
         tool_calls: Option<Vec<UpstreamToolCall>>,
+        /// Extended-thinking blocks for replay (e.g. Claude; before text / tool_use in the assistant message).
+        thinking_blocks: Option<Vec<ThinkingBlock>>,
     },
     ToolResult {
         tool_call_id: String,
@@ -149,8 +151,19 @@ pub fn session_messages_to_upstream_entries(
                                 })
                                 .collect()
                         });
-                    if !text.is_empty() || tool_calls.is_some() {
-                        out.push(UpstreamHistoryEntry::Assistant { text, tool_calls });
+                    let thinking_blocks = tp
+                        .thinking_blocks
+                        .clone()
+                        .filter(|b| !b.is_empty());
+                    if !text.is_empty()
+                        || tool_calls.is_some()
+                        || thinking_blocks.is_some()
+                    {
+                        out.push(UpstreamHistoryEntry::Assistant {
+                            text,
+                            tool_calls,
+                            thinking_blocks,
+                        });
                     }
                 }
             }
@@ -162,6 +175,7 @@ pub fn session_messages_to_upstream_entries(
                         ChatSessionRoleType::Ai => UpstreamHistoryEntry::Assistant {
                             text,
                             tool_calls: None,
+                            thinking_blocks: None,
                         },
                     };
                     out.push(entry);

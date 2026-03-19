@@ -50,6 +50,8 @@ pub enum LlmClient {
     Claude {
         api_key: String,
         model: String,
+        /// `None` disables extended thinking on the request.
+        thinking_budget_tokens: Option<u32>,
     },
 }
 
@@ -102,10 +104,15 @@ impl LlmClient {
                 )
                 .await
             }
-            LlmClient::Claude { api_key, model } => {
+            LlmClient::Claude {
+                api_key,
+                model,
+                thinking_budget_tokens,
+            } => {
                 claude::call_claude_stream(
                     api_key,
                     model,
+                    *thinking_budget_tokens,
                     pool,
                     session_messages,
                     user_text,
@@ -151,6 +158,7 @@ pub fn build_llm_client(settings: &Settings) -> Result<LlmClient, BoxError> {
             Ok(LlmClient::Claude {
                 api_key: key,
                 model: settings.anthropic_model.clone(),
+                thinking_budget_tokens: settings.anthropic_thinking_budget_tokens,
             })
         }
     }

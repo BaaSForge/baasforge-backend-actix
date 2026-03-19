@@ -83,6 +83,8 @@ pub struct Settings {
     pub gemini_model: String,
     pub anthropic_api_key: Option<String>,
     pub anthropic_model: String,
+    /// If set and > 0, enables Anthropic extended thinking with this token budget (Claude only).
+    pub anthropic_thinking_budget_tokens: Option<u32>,
     pub llm_provider: LlmProvider,
 }
 
@@ -133,6 +135,11 @@ impl Settings {
         let gemini_model = env::var("GEMINI_MODEL").expect("GEMINI_MODEL must be set");
         let anthropic_api_key = env::var("ANTHROPIC_API_KEY").ok();
         let anthropic_model = env::var("ANTHROPIC_MODEL").expect("ANTHROPIC_MODEL must be set");
+        let anthropic_thinking_budget_tokens: Option<u32> =
+            env::var("ANTHROPIC_THINKING_BUDGET_TOKENS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|&n| n > 0);
         let llm_provider_str = env::var("LLM_PROVIDER").expect("LLM_PROVIDER must be set");
         let llm_provider = LlmProvider::try_from(llm_provider_str)?;
 
@@ -156,6 +163,7 @@ impl Settings {
             gemini_model,
             anthropic_api_key,
             anthropic_model,
+            anthropic_thinking_budget_tokens,
             llm_provider,
         })
     }

@@ -76,7 +76,7 @@ fn entries_to_openai_messages(
                     messages.push(openai_msg(ChatCompletionMessageRole::User, text.clone()));
                 }
             }
-            UpstreamHistoryEntry::Assistant { text, tool_calls } => {
+            UpstreamHistoryEntry::Assistant { text, tool_calls, .. } => {
                 let content = if text.trim().is_empty() {
                     None
                 } else {
@@ -325,6 +325,7 @@ pub async fn call_gpt_stream(
                         return Ok(GenerateOutcome::Stopped(TextPayload {
                             text: full_text,
                             requested_tool_calls: None,
+                            ..Default::default()
                         }));
                     }
                     let payload = ChatSessionNewMessageChunkPayload::new(
@@ -411,6 +412,7 @@ pub async fn call_gpt_stream(
             let payload = TextPayload {
                 text: full_text.clone(),
                 requested_tool_calls: Some(requested.clone()),
+                ..Default::default()
             };
             if let Some(ref conn) = redis_conn {
                 ai_message::create_ai_message_with_payload_and_publish(
@@ -462,5 +464,6 @@ pub async fn call_gpt_stream(
     Ok(GenerateOutcome::Completed(TextPayload {
         text: full_text,
         requested_tool_calls: requested_tool_calls_out,
+        ..Default::default()
     }))
 }

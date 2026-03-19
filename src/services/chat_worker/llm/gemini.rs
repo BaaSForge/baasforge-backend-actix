@@ -91,7 +91,7 @@ pub async fn call_gemini_stream(
                     request = request.with_user_message(text.clone());
                 }
             }
-            UpstreamHistoryEntry::Assistant { text, tool_calls } => {
+            UpstreamHistoryEntry::Assistant { text, tool_calls, .. } => {
                 if let Some(tcs) = tool_calls.as_ref() {
                     if !text.trim().is_empty() {
                         request = request.with_model_message(text.trim().to_string());
@@ -187,6 +187,7 @@ pub async fn call_gemini_stream(
                     return Ok(GenerateOutcome::Stopped(TextPayload {
                         text: full_text,
                         requested_tool_calls: None,
+                        ..Default::default()
                     }));
                 }
                 let payload = ChatSessionNewMessageChunkPayload::new(
@@ -231,6 +232,7 @@ pub async fn call_gemini_stream(
             let invoker_payload = TextPayload {
                 text: full_text.clone(),
                 requested_tool_calls: Some(requested.clone()),
+                ..Default::default()
             };
             if let Some(ref conn) = redis_conn {
                 ai_message::create_ai_message_with_payload_and_publish(
@@ -280,5 +282,6 @@ pub async fn call_gemini_stream(
     Ok(GenerateOutcome::Completed(TextPayload {
         text: full_text,
         requested_tool_calls,
+        ..Default::default()
     }))
 }

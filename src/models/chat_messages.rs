@@ -3,7 +3,7 @@ use diesel::Insertable;
 use diesel::Queryable;
 use diesel::Selectable;
 use diesel_derive_enum::DbEnum;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -26,12 +26,64 @@ pub struct RequestedToolCall {
     pub thought_signature: Option<String>,
 }
 
-/// Payload for Text messages: streamed text and optional requested tool calls.
+fn serialize_signature_for_db<S>(v: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match v {
+        None => serializer.serialize_none(),
+        Some(s) if s.is_empty() => serializer.serialize_none(),
+        Some(s) => serializer.serialize_str(s),
+    }
+}
+
+/// One extended-thinking segment: visible `thinking` text plus optional opaque `signature` (Anthropic replay).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ThinkingBlock {
+    pub thinking: String,
+    /// Opaque Anthropic replay token; must be sent back with `thinking` in message history.
+    /// Always written to JSON as `null` or a string so the key is never dropped on save.
+    #[serde(default, serialize_with = "serialize_signature_for_db")]
+    pub signature: Option<String>,
+}
+
+/// Payload for Text messages: streamed text and optional requested tool calls.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct TextPayload {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub requested_tool_calls: Option<Vec<RequestedToolCall>>,
+    /// Reasoning segments (e.g. Claude extended thinking).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub thinking_blocks: Option<Vec<ThinkingBlock>>,
+}
+
+impl TextPayload {
+    /// Concatenated visible thinking for clients (WS/API) without storing a duplicate column.
+    pub fn thinking_display(&self) -> Option<String> {
+        let blocks = self.thinking_blocks.as_ref()?;
+        let mut out = String::new();
+        for b in blocks {
+            out.push_str(&b.thinking);
+        }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+
+    pub fn has_thinking_stored(&self) -> bool {
+        self.thinking_blocks.as_ref().is_some_and(|b| {
+            b.iter().any(|blk| {
+                !blk.thinking.is_empty()
+                    || blk
+                        .signature
+                        .as_ref()
+                        .is_some_and(|s| !s.is_empty())
+            })
+        })
+    }
 }
 
 #[derive(Debug, DbEnum, Serialize, Clone, Deserialize)]
