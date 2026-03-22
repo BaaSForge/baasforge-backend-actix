@@ -18,6 +18,8 @@ Loads from `.env`: `RABBIT_URL`, `RABBITMQ_MANAGEMENT_URL`, `RETRY_DELAY_EXCHANG
 
 See [docs/chat-queue.md](docs/chat-queue.md) for how the chat queue, worker, WebSocket, and LLM interact.
 
+See [docs/chat-agents.md](docs/chat-agents.md) for how we use Planner, analyzer, and programmer agents in chat (separate LLM calls and context).
+
 ** It doesn't use `.env.local` at all, just `.env` **
 
 ## To fix libpg issue (library not found)

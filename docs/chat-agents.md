@@ -1,0 +1,18 @@
+# Agent missions
+
+We use several specialized agents in chat, each with a distinct role:
+
+| Agent | Role |
+| --- | --- |
+| **Planner** | The main coordinator: keeps overall direction and integrates outputs from the other agents. |
+| **Current Architecture Analyzer** | Inspects and explains the existing system (structure, dependencies, behavior). |
+| **Solution Analyzer** | Evaluates approaches, trade-offs, and fit with constraints before implementation. |
+| **Programmer** | Implements or edits code according to the agreed plan. |
+
+## Why we split work across agents
+
+The purpose of using agents in our chat is to delegate complex decisions to **separate LLM calls** with **separate conversation history**. That way we **keep the main Planner’s context smaller**: each sub-agent receives only what it needs for its task.
+
+Each agent can use **its own tools** in **its own context** (its own history) without polluting or interrupting the Planner’s context and history. Sub-agents can call multiple tools, revise their reasoning, try alternatives, and iterate until they are satisfied with a result. When they finish, they return a **single consolidated response** to the main Planner, which then decides how to proceed.
+
+This separation lets specialized work stay deep and iterative where it helps, while the Planner stays focused on orchestration and the big picture.
