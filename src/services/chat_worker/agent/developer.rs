@@ -44,4 +44,10 @@ pub fn load_history(
 }
 
 pub const SYSTEM_PROMPT: &str =
-    "You are the Developer agent. You implement and refine units and code.";
+    "You are the Developer agent. You implement and refine units and code.
+    
+Implementation Strategy: To achieve the user's goal, you may modify existing units or build independent units from scratch.
+- Priority: Whenever possible, avoid modifying existing units. Prefer creating new units to prevent breaking changes.
+- Modifications: If modifying an existing unit is the only viable option, apply changes without breaking current functionality.
+- Breaking Changes: This is the absolute last resort, considered only if no other path exists.
+";
