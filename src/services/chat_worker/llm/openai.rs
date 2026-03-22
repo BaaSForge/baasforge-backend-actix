@@ -333,6 +333,7 @@ pub async fn call_gpt_stream(
     project_id: uuid::Uuid,
     session_id: uuid::Uuid,
     agent: ChatAgentType,
+    queue_invoking_message_id: Option<uuid::Uuid>,
 ) -> Result<GenerateOutcome, BoxError> {
     let entries = session_messages_to_upstream_entries(session_messages, user_text);
     let system_prompt = system_prompt_for_agent(&agent);
@@ -504,6 +505,7 @@ pub async fn call_gpt_stream(
                     project_id,
                     &payload,
                     agent.clone(),
+                    queue_invoking_message_id,
                 )
                 .await?;
             }

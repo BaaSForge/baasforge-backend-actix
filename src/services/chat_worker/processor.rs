@@ -34,6 +34,8 @@ pub async fn process_one(
     user_text: &str,
     placeholder_ai_message_id: Uuid,
     agent: ChatAgentType,
+    // Same as `ChatSessionQueueMessage::invoking_message_id` for this job (Planner: None; sub-agent: parent tool row).
+    queue_invoking_message_id: Option<Uuid>,
 ) -> Result<GenerateOutcome, Box<dyn std::error::Error + Send + Sync>> {
     let agent_for_history = agent.clone();
     let session_messages = block_on_db_tokio(pool, move |conn| {
@@ -43,6 +45,9 @@ pub async fn process_one(
     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
     let channel = user_channel(user_id);
+    // Tool rows published from this LLM pass must reference `placeholder_ai_message_id` (this AI Text
+    // message), whether the agent is Planner or a nested sub-agent — so nested tool calls chain
+    // under the correct parent message.
     let tool_ctx = tool_context_for_chat_session(
         rabbit_publisher.clone(),
         user_id,
@@ -64,6 +69,7 @@ pub async fn process_one(
             project_id,
             session_id,
             agent,
+            queue_invoking_message_id,
         ),
     )
     .await?;

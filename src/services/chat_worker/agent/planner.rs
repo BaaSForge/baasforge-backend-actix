@@ -3,9 +3,7 @@ use crate::models::chat_messages::{
     ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::schema::chat_messages;
-use crate::services::chat_worker::llm::tools::{
-    load_latest_releases,
-};
+use crate::services::chat_worker::llm::tools::{analyze_architecture_tool, load_latest_releases};
 use diesel::prelude::*;
 use diesel::result::Error;
 use serde_json::Value;
@@ -16,6 +14,7 @@ const HISTORY_LIMIT: i64 = 50;
 
 pub fn tool_names() -> &'static [&'static str] {
     &[
+        analyze_architecture_tool::TOOL_NAME,
         load_latest_releases::TOOL_NAME,
     ]
 }

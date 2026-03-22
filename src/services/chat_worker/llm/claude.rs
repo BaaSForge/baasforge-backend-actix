@@ -417,6 +417,7 @@ pub async fn call_claude_stream(
     project_id: Uuid,
     session_id: Uuid,
     agent: ChatAgentType,
+    queue_invoking_message_id: Option<Uuid>,
 ) -> Result<GenerateOutcome, BoxError> {
     let system_prompt = system_prompt_for_agent(&agent);
     let tools_list = to_tools_json(&agent);
@@ -665,6 +666,7 @@ pub async fn call_claude_stream(
                         project_id,
                         &payload,
                         agent.clone(),
+                        queue_invoking_message_id,
                     )
                     .await
                     .map_err(|e| format!("ai_message: {}", e))?;

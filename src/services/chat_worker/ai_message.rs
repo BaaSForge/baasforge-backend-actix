@@ -28,6 +28,7 @@ pub async fn ensure_ai_message_created_and_publish(
     user_id: Uuid,
     project_id: Uuid,
     agent: ChatAgentType,
+    invoking_message_id: Option<Uuid>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inserted_row = block_on_db_tokio(pool, move |conn| {
         let row = diesel::insert_into(chat_messages::table)
@@ -38,6 +39,7 @@ pub async fn ensure_ai_message_created_and_publish(
                 chat_messages::type_.eq(ChatMessageType::Text),
                 chat_messages::payload.eq(None::<serde_json::Value>),
                 chat_messages::status.eq(ChatMessageStatus::Generating),
+                chat_messages::invoking_message_id.eq(invoking_message_id),
                 chat_messages::agent.eq(Some(agent)),
             ))
             .on_conflict(chat_messages::id)
@@ -81,6 +83,12 @@ fn has_requested_tool_calls(text_payload: &TextPayload) -> bool {
 /// so the client sees `requested_tool_calls` before tool-result messages.
 /// When the payload has any requested_tool_calls, the message is saved with status Generating; it will be
 /// set to Completed or Failed once all invoked tool messages have finished.
+///
+/// Inserts or updates the **current** AI `Text` row for this generation (`response_message_id`).
+/// **`queue_invoking_message_id`** must match [`ensure_ai_message_created_and_publish`] for the same
+/// queue delivery (Planner continuation: `None`; sub-agent run: parent tool row id). If this path
+/// inserts first (rare), the row gets the correct parent; if [`ensure_ai_message_created_and_publish`]
+/// inserted first, the conflict branch updates payload/status only and leaves `invoking_message_id` intact.
 pub async fn create_ai_message_with_payload_and_publish(
     pool: &DbPool,
     redis_conn: &Arc<Mutex<MultiplexedConnection>>,
@@ -90,6 +98,7 @@ pub async fn create_ai_message_with_payload_and_publish(
     project_id: Uuid,
     text_payload: &TextPayload,
     agent: ChatAgentType,
+    queue_invoking_message_id: Option<Uuid>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let payload_value = serde_json::to_value(text_payload).map_err(|e| e.to_string())?;
     let initial_status = if has_requested_tool_calls(text_payload) {
@@ -106,6 +115,7 @@ pub async fn create_ai_message_with_payload_and_publish(
                 chat_messages::type_.eq(ChatMessageType::Text),
                 chat_messages::payload.eq(Some(payload_value)),
                 chat_messages::status.eq(initial_status),
+                chat_messages::invoking_message_id.eq(queue_invoking_message_id),
                 chat_messages::agent.eq(Some(agent)),
             ))
             .on_conflict(chat_messages::id)

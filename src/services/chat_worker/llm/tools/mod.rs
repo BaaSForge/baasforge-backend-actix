@@ -5,19 +5,23 @@
 //! - **`TOOL_NAME: &'static str`** — Unique tool name for the LLM.
 //! - **`MESSAGE_TYPE: ChatMessageType`** — Message type for queue/DB messages produced by this tool.
 //! - **`spec() -> ToolSpec`** — Name, description, and JSON schema for parameters (for LLM declarations).
-//! - **`handler(...)`** — Async fn that processes a consumed queue message (same signature for all tools).
+//! - **`handler(...)`** — Async fn that processes a consumed queue message (same signature for all tools: DB pool, Redis, ids, payload JSON, optional Rabbit publisher).
 //! - **`payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError>`** — Builds queue payload from LLM args (used by [`tool_context_for_chat_session`]).
 //! - **`gemini_declaration() -> FunctionDeclaration`** — Gemini declaration with parameter schema (used in `llm/gemini.rs`).
+//! - **Parameter descriptions** — For each argument field, define a `pub const ARG_<NAME>_DESCRIPTION: &str` and use it in both `#[schemars(description = ARG_<NAME>_DESCRIPTION)]` on the args struct and in `params_schema()` (OpenAI/Claude) so Gemini and other providers stay aligned.
 //!
 //! To add a new tool: add `mod my_tool;`, add `my_tool::spec()` to [`all_tool_specs`],
 //! add `(my_tool::MESSAGE_TYPE, my_tool::handler)` to [`tool_message_handlers`],
 //! add `(my_tool::TOOL_NAME, my_tool::MESSAGE_TYPE, my_tool::payload_from_args)` to [`tool_queue_registry`],
 //! and add `(my_tool::TOOL_NAME, my_tool::gemini_declaration)` in `gemini_declaration_fns_by_name` in `llm/gemini.rs`.
+//! Long-running async tools (e.g. `analyze_architecture_tool`) skip [`on_tool_message_finished`] in [`spawn_tool_message_handler`].
 
+pub mod analyze_architecture_tool;
 pub mod load_latest_production_release_units;
 pub mod load_latest_releases;
 
 /// Re-exported for use in [`crate::models::chat_messages::ChatMessagePayload`].
+pub use analyze_architecture_tool::ToolAnalyzeArchitecturePayload;
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
 pub use load_latest_releases::ToolFetchLatestReleasesPayload;
 
@@ -96,6 +100,11 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             load_latest_releases::MESSAGE_TYPE,
             load_latest_releases::payload_from_args,
         ),
+        (
+            analyze_architecture_tool::TOOL_NAME,
+            analyze_architecture_tool::MESSAGE_TYPE,
+            analyze_architecture_tool::payload_from_args,
+        ),
     ]
 }
 
@@ -112,8 +121,17 @@ fn tool_queue_registry_for_agent(
 
 /// Builds a [`ToolContext`] with one callback per tool for this agent (only tools in [`crate::services::chat_worker::agent::tool_names_for_agent`]). Each callback
 /// converts args to a queue payload and publishes. Use at the entry point (e.g. processor) before
-/// calling [`with_tool_context`]. `invoking_message_id` is the AI message that requested the tool
-/// calls; tool messages will reference it so the parent can be set to Completed/Failed when all are done.
+/// calling [`with_tool_context`].
+///
+/// **`invoking_message_id`** must be the id of the **current AI `Text` message** being generated in
+/// this `process_one` pass (the message whose payload will contain `requested_tool_calls`). Every
+/// queued **tool** row then gets `invoking_message_id = that id`, whether the agent is Planner or a
+/// nested sub-agent — so e.g. `P → tool → sub-agent Text X → tools under X` all point at the right
+/// parent ([`maybe_complete_invoking_message`] counts direct children of the invoker AI message).
+///
+/// Special case: async tools like [`analyze_architecture_tool`] publish a **separate** queue
+/// message for a sub-agent run; that message sets `invoking_message_id` to the **tool row** id so
+/// the sub-agent’s `Text` output is nested under the tool (see `ChatSessionQueueMessage` docs).
 /// `agent` is stored on the queue message so the worker can set it on the created message row.
 pub fn tool_context_for_chat_session(
     publisher: Arc<SharedRabbitPublisher>,
@@ -169,6 +187,7 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
     vec![
         load_latest_production_release_units::spec(),
         load_latest_releases::spec(),
+        analyze_architecture_tool::spec(),
     ]
 }
 
@@ -241,6 +260,7 @@ pub struct ToolMessageContext {
     pub session_id: Uuid,
     pub message_id: Uuid,
     pub user_id: Uuid,
+    pub message_type: ChatMessageType,
     /// Tool message payload from the queue (same as stored on the message). Handlers can use
     /// tool-call args without querying the DB.
     pub payload: Option<Value>,
@@ -258,10 +278,22 @@ pub type ToolMessageHandler = Arc<
         + Sync,
 >;
 
-/// Wraps an async handler that takes payload into a [`ToolMessageHandler`].
+/// Wraps an async handler that takes payload (and optional Rabbit publisher) into a [`ToolMessageHandler`].
 fn wrap_handler_with_payload<F, Fut>(handler: F) -> ToolMessageHandler
 where
-    F: Fn(DbPool, RedisConn, Uuid, Uuid, Uuid, Uuid, Option<Value>) -> Fut + Send + Sync + 'static,
+    F: Fn(
+        DbPool,
+        RedisConn,
+        Uuid,
+        Uuid,
+        Uuid,
+        Uuid,
+        Option<Value>,
+        Option<Arc<SharedRabbitPublisher>>,
+    ) -> Fut
+        + Send
+        + Sync
+        + 'static,
     Fut: Future<Output = Result<(), BoxError>> + Send + 'static,
 {
     Arc::new(move |ctx: ToolMessageContext| {
@@ -273,6 +305,7 @@ where
             ctx.message_id,
             ctx.user_id,
             ctx.payload,
+            ctx.rabbit_publisher.clone(),
         ))
     })
 }
@@ -320,6 +353,10 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                     load_latest_releases::MESSAGE_TYPE,
                     wrap_handler_with_payload(load_latest_releases::handler),
                 ),
+                (
+                    analyze_architecture_tool::MESSAGE_TYPE,
+                    wrap_handler_with_payload(analyze_architecture_tool::handler),
+                ),
             ]
         })
         .as_slice()
@@ -333,9 +370,13 @@ fn tool_message_handler(type_: ChatMessageType) -> Option<ToolMessageHandler> {
         .map(|(_, h)| h.clone())
 }
 
-/// After a tool message completes (success or failure), check whether the invoking AI message
-/// has all its tool messages done; if so, set the AI message status to Completed or Failed,
-/// and when a publisher is provided, publish a continuation message to RabbitMQ so the LLM continues (same as POST when user sends a new message).
+/// After a tool message completes (success or failure), check whether the **invoking AI `Text` message**
+/// (`invoking_message_id` here) has all of its **direct tool** children done (`invoking_message_id` on
+/// those tool rows equals this id). Nested sub-agent `Text` rows that point at a **tool** row instead
+/// are not counted here unless [`maybe_complete_invoking_message`] is called with that sub-agent’s id.
+///
+/// If all such children are done, set that AI message to Completed or Failed and optionally publish a
+/// continuation to RabbitMQ.
 pub async fn maybe_complete_invoking_message(
     pool: &DbPool,
     redis_conn: &RedisConn,
@@ -483,6 +524,17 @@ pub fn spawn_tool_message_handler(type_: ChatMessageType, ctx: ToolMessageContex
     if let Some(handler) = tool_message_handler(type_) {
         tokio::spawn(async move {
             let result = handler(ctx.clone()).await;
+            // Async tools: do not run completion (no Failed/Completed on tool row, no maybe_complete).
+            if ctx.message_type == ChatMessageType::ToolAnalyzeArchitecture {
+                if let Err(e) = &result {
+                    tracing::error!(
+                        %ctx.message_id,
+                        "analyze_architecture_tool handler failed: {}",
+                        e
+                    );
+                }
+                return;
+            }
             on_tool_message_finished(&ctx, result).await;
         });
         true

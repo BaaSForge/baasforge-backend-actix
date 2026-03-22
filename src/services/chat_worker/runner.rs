@@ -182,6 +182,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let (user_id, user_text) = match payload.as_text_message_for_processing() {
                 Some(x) => x,
                 None => {
+                    tracing::error!(
+                        %project_id,
+                        %session_id,
+                        %response_message_id,
+                        "Text queue message missing user_id after validate; acking and skipping"
+                    );
                     let _ = delivery.acker.ack(BasicAckOptions::default()).await;
                     continue;
                 }
@@ -212,6 +218,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 user_id,
                 project_id,
                 agent.clone(),
+                payload.invoking_message_id,
             )
             .await
             {
@@ -242,6 +249,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 &user_text,
                 response_message_id,
                 agent.clone(),
+                payload.invoking_message_id,
             )
             .await;
 
@@ -461,6 +469,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     session_id,
                     message_id: response_message_id,
                     user_id,
+                    message_type: payload.type_.clone(),
                     payload: payload_json,
                     invoking_message_id: payload.invoking_message_id,
                     rabbit_publisher: Some(rabbit_publisher.clone()),

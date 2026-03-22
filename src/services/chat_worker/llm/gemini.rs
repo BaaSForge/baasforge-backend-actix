@@ -23,7 +23,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::tools::{self, load_latest_production_release_units, load_latest_releases};
+use super::tools::{
+    self, analyze_architecture_tool, load_latest_production_release_units, load_latest_releases,
+};
 use super::{BoxError, GeminiThinkingEnv};
 use crate::services::chat_worker::agent::tool_names_for_agent;
 use serde_json::Value;
@@ -40,6 +42,10 @@ fn gemini_declaration_fns_by_name() -> &'static [(
         (
             load_latest_releases::TOOL_NAME,
             load_latest_releases::gemini_declaration,
+        ),
+        (
+            analyze_architecture_tool::TOOL_NAME,
+            analyze_architecture_tool::gemini_declaration,
         ),
     ]
 }
@@ -108,6 +114,7 @@ pub async fn call_gemini_stream(
     project_id: Uuid,
     session_id: Uuid,
     agent: ChatAgentType,
+    queue_invoking_message_id: Option<Uuid>,
 ) -> Result<GenerateOutcome, BoxError> {
     let client = Gemini::with_model(api_key, gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
@@ -376,6 +383,7 @@ pub async fn call_gemini_stream(
                     project_id,
                     &invoker_payload,
                     agent.clone(),
+                    queue_invoking_message_id,
                 )
                 .await
                 .map_err(|e| format!("ai_message: {}", e))?;

@@ -6,10 +6,14 @@ use crate::models::projects::ProjectReleaseResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Description for the `limit` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
+pub const ARG_LIMIT_DESCRIPTION: &str =
+    "Required maximum number of releases to return (20 to max 100).";
+
 /// Args for load_latest_releases. Schema from this struct is used for Gemini; GPT and Claude use params_schema() in spec().
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFetchLatestReleasesArgs {
-    #[schemars(description = "Required maximum number of releases to return (20 to max 100).")]
+    #[schemars(description = ARG_LIMIT_DESCRIPTION)]
     pub limit: i64,
 }
 
@@ -30,6 +34,7 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_latest_releases;
+use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -71,7 +76,7 @@ fn params_schema() -> Value {
         "properties": {
             "limit": {
                 "type": "integer",
-                "description": "Required maximum number of releases to return (20 to max 100)."
+                "description": ARG_LIMIT_DESCRIPTION
             }
         },
         "required": ["limit"]
@@ -82,7 +87,7 @@ fn params_schema() -> Value {
 pub const TOOL_NAME: &str = "load_latest_releases";
 
 /// Single source for GPT and Claude: name, description, and parameters (params_schema).
-/// Gemini uses the same name and description but gets parameters from the args struct via `gemini_declaration()` (gemini_rust only supports struct-derived schemas); keep `ToolFetchLatestReleasesArgs` and `params_schema()` in sync.
+/// Gemini uses the same name and description but gets parameters from the args struct via `gemini_declaration()`; per-field text is shared via [`ARG_LIMIT_DESCRIPTION`].
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
@@ -102,6 +107,7 @@ pub async fn handler(
     message_id: Uuid,
     user_id: Uuid,
     payload: Option<Value>,
+    _rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
 ) -> Result<(), BoxError> {
     let existing = payload
         .as_ref()

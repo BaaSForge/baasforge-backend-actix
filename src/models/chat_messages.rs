@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::models::projects::ProjectUnitResponse;
 use crate::services::chat_worker::llm::tools::{
-    ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
+    ToolAnalyzeArchitecturePayload, ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
 };
 
 /// One requested tool call from the LLM (GPT tool_call_id optional; Gemini has no id).
@@ -104,6 +104,7 @@ pub enum ChatMessageType {
     Units,
     ToolFetchRelevantUnits,
     ToolFetchLatestReleases,
+    ToolAnalyzeArchitecture,
 }
 
 #[derive(Debug, DbEnum, Serialize, Clone, Deserialize, PartialEq)]
@@ -136,6 +137,7 @@ pub enum ChatMessagePayload {
     Units(Vec<ProjectUnitResponse>),
     ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
     ToolFetchLatestReleases(ToolFetchLatestReleasesPayload),
+    ToolAnalyzeArchitecture(ToolAnalyzeArchitecturePayload),
 }
 
 impl ChatMessagePayload {
@@ -163,6 +165,10 @@ impl ChatMessagePayload {
                 let p = serde_json::from_value::<ToolFetchLatestReleasesPayload>(v)?;
                 ChatMessagePayload::ToolFetchLatestReleases(p)
             }
+            ChatMessageType::ToolAnalyzeArchitecture => {
+                let p = serde_json::from_value::<ToolAnalyzeArchitecturePayload>(v)?;
+                ChatMessagePayload::ToolAnalyzeArchitecture(p)
+            }
         };
         Ok(Some(payload))
     }
@@ -179,6 +185,18 @@ impl ChatMessagePayload {
     // }
 }
 
+/// Parent / provenance for nested chat rows. Conventions:
+///
+/// - **Planner (or any agent) “root” AI `Text` replies** — `NULL` (not a child of another message).
+/// - **Tool rows** (`tool_*`) — parent is the **AI `Text` message** that listed that tool in
+///   `requested_tool_calls` (Planner or sub-agent).
+/// - **Sub-agent `Text` rows** spawned by async tools (e.g. architecture analyzer) — parent is the
+///   **tool message row** that triggered that nested LLM run (so the tree can hang under the tool).
+/// - **Further nesting** — tool calls issued inside a sub-agent pass reference that sub-agent’s AI
+///   `Text` message id via [`crate::services::chat_worker::processor::process_one`] / tool context
+///   (same mechanism as Planner).
+///
+/// Example chain: `P (planner Text, null) → T (tool, P) → X (analyzer Text, T) → T2 (tool, X)`.
 #[derive(Debug, Queryable, Selectable)]
 #[diesel(table_name = crate::schema::chat_messages)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -191,6 +209,7 @@ pub struct ChatMessageRow {
     pub payload: Option<Value>,
     pub status: ChatMessageStatus,
     pub created_at: DateTime<Utc>,
+    /// See struct-level docs; `NULL` for root AI replies and user messages.
     pub invoking_message_id: Option<Uuid>,
     /// Set only for AI role messages; NULL for user messages.
     pub agent: Option<ChatAgentType>,
@@ -225,6 +244,7 @@ pub struct ChatMessageResponse {
     pub payload: Option<ChatMessagePayload>,
     pub status: ChatMessageStatus,
     pub created_at: DateTime<Utc>,
+    /// Same semantics as [`ChatMessageRow::invoking_message_id`].
     pub invoking_message_id: Option<Uuid>,
     /// Present only for AI role messages.
     pub agent: Option<ChatAgentType>,

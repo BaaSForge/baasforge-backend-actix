@@ -65,7 +65,9 @@ pub struct ChatSessionQueueMessage {
     /// Retry attempt count. 0 = first attempt; incremented each time the message is sent to the retry delay queue.
     #[serde(default)]
     pub retry_num: u32,
-    /// When set, this message is a tool-invoked message; the AI message with this id should move to Completed/Failed once all its tool messages are done.
+    /// Parent id for this row when consumed from the queue (copied to `chat_messages.invoking_message_id`).
+    /// See [`crate::models::chat_messages::ChatMessageRow`] for the full hierarchy (tool rows → invoker
+    /// AI message; sub-agent `Text` → outer tool row; nested tools → sub-agent AI message).
     #[serde(default)]
     pub invoking_message_id: Option<Uuid>,
     /// Agent that will handle this LLM call (used for system prompt and for the AI message row).
@@ -88,16 +90,33 @@ impl ChatSessionQueueMessage {
         Ok(())
     }
 
+    /// Resolves `user_id` and the string passed to [`crate::services::chat_worker::processor::process_one`]
+    /// as the current user turn. For `type` [`ChatMessageType::Text`], [`Self::validate`] must have ensured
+    /// `user_id` is set. If `payload` is missing or not [`ChatMessagePayload::Text`], `user_text` is empty
+    /// and the worker still runs the LLM (sub-agents may rely on history only).
     pub fn as_text_message_for_processing(&self) -> Option<(Uuid, String)> {
         if !matches!(self.type_, ChatMessageType::Text) {
             return None;
         }
         let user_id = self.user_id?;
-        let text = match &self.payload {
+        let user_text = match &self.payload {
             Some(ChatMessagePayload::Text(p)) => p.text.clone(),
-            _ => return None,
+            Some(_) => {
+                tracing::warn!(
+                    response_message_id = %self.response_message_id,
+                    "chat queue: type is text but payload is not Text; using empty user_text"
+                );
+                String::new()
+            }
+            None => {
+                tracing::warn!(
+                    response_message_id = %self.response_message_id,
+                    "chat queue: type is text but payload is missing; using empty user_text"
+                );
+                String::new()
+            }
         };
-        Some((user_id, text))
+        Some((user_id, user_text))
     }
 }
 

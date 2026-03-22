@@ -6,10 +6,13 @@ use crate::models::projects::ProjectUnitResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Description for the `query` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
+pub const ARG_QUERY_DESCRIPTION: &str = "Search query to filter or find relevant units in the latest production release (e.g. user's question, keywords, or a short phrase). Must not be empty.";
+
 /// Args for load_latest_production_release_units. Schema from this struct is used for Gemini; GPT and Claude use params_schema() in spec().
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFetchRelevantUnitsArgs {
-    #[schemars(description = "Search query to filter or find relevant units in the latest production release (e.g. user's question, keywords, or a short phrase). Must not be empty.")]
+    #[schemars(description = ARG_QUERY_DESCRIPTION)]
     pub query: String,
 }
 
@@ -28,6 +31,7 @@ use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent}
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
+use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::chat_worker::db::load_units_for_latest_production_release;
 use diesel::prelude::*;
 use serde_json::{Value, json};
@@ -70,7 +74,7 @@ fn params_schema() -> Value {
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Search query to filter or find relevant units in the latest production release (e.g. user's question, keywords, or a short phrase). Must not be empty."
+                "description": ARG_QUERY_DESCRIPTION
             }
         },
         "required": ["query"]
@@ -81,7 +85,7 @@ fn params_schema() -> Value {
 pub const TOOL_NAME: &str = "load_latest_production_release_units";
 
 /// Single source for GPT and Claude: name, description, and parameters (params_schema).
-/// Gemini uses the same name and description but gets parameters from the args struct via `gemini_declaration()` (gemini_rust only supports struct-derived schemas); keep `ToolFetchRelevantUnitsArgs` and `params_schema()` in sync.
+/// Gemini uses the same name and description but gets parameters from the args struct via `gemini_declaration()`; per-field text is shared via [`ARG_QUERY_DESCRIPTION`].
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
@@ -101,6 +105,7 @@ pub async fn handler(
     message_id: Uuid,
     user_id: Uuid,
     payload: Option<Value>,
+    _rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
 ) -> Result<(), BoxError> {
     let existing = payload
         .as_ref()

@@ -41,7 +41,9 @@ pub enum UpstreamHistoryEntry {
 fn is_tool_result_type(type_: &ChatMessageType) -> bool {
     matches!(
         type_,
-        ChatMessageType::ToolFetchRelevantUnits | ChatMessageType::ToolFetchLatestReleases
+        ChatMessageType::ToolFetchRelevantUnits
+            | ChatMessageType::ToolFetchLatestReleases
+            | ChatMessageType::ToolAnalyzeArchitecture
     )
 }
 
@@ -65,6 +67,11 @@ fn tool_result_from_payload(
             serde_json::to_string(p).unwrap_or_default(),
         ),
         Some(ChatMessagePayload::ToolFetchLatestReleases(p)) => (
+            p.tool_call_id.clone(),
+            p.tool_name.clone(),
+            serde_json::to_string(p).unwrap_or_default(),
+        ),
+        Some(ChatMessagePayload::ToolAnalyzeArchitecture(p)) => (
             p.tool_call_id.clone(),
             p.tool_name.clone(),
             serde_json::to_string(p).unwrap_or_default(),
