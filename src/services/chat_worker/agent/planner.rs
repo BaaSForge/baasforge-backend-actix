@@ -4,7 +4,7 @@ use crate::models::chat_messages::{
 };
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::tools::{
-    load_latest_production_release_units, load_latest_releases,
+    load_latest_releases,
 };
 use diesel::prelude::*;
 use diesel::result::Error;
@@ -16,7 +16,6 @@ const HISTORY_LIMIT: i64 = 50;
 
 pub fn tool_names() -> &'static [&'static str] {
     &[
-        load_latest_production_release_units::TOOL_NAME,
         load_latest_releases::TOOL_NAME,
     ]
 }
