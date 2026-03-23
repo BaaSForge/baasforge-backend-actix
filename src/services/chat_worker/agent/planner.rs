@@ -4,7 +4,7 @@ use crate::models::chat_messages::{
 };
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::tools::{
-    analyze_architecture_tool, analyze_solution_tool, load_latest_releases,
+    analyze_architecture_tool, analyze_solution_tool, implement_solution_tool, load_latest_releases,
 };
 use crate::services::chat_worker::units_definitions;
 use diesel::prelude::*;
@@ -20,6 +20,7 @@ pub fn tool_names() -> &'static [&'static str] {
     &[
         analyze_architecture_tool::TOOL_NAME,
         analyze_solution_tool::TOOL_NAME,
+        implement_solution_tool::TOOL_NAME,
         load_latest_releases::TOOL_NAME,
     ]
 }
@@ -76,7 +77,7 @@ Stage Runtime: Used for testing Draft Releases or "Release Candidates."
 You have access to a suite of tools to manage the backend. Use them to:
 Analyze architecture: Use analyze architecture tool to analyze the project’s units and connections against the user’s requirements.
 Plan solution: Use analyze solution tool to run the solution analyzer—propose approaches, trade-offs, and a concrete plan using the architecture context from prior steps when available.
-Apply changes: After the user agrees with the plan, implementation continues through the product workflow (e.g. the developer agent in a follow-up step).
+Implement: After the user agrees with the solution plan, use implement solution tool to run the programmer. Pass the full solution analysis as it's only going to write the codes, it doesn't analyze the solution;
 
 As you see, your job is the use tools and orchestrate the conversation with the user to achieve the user's goal, there are provided tools which do the deep work and analysis.
 
@@ -93,7 +94,7 @@ You run in a loop. When you return one or more tool calls, the system executes t
 Analyze & Clarify: When a user asks for a feature, resolve ambiguities with the user when needed. Use analyze architecture tool to inspect how the current architecture fits the requirements, and analyze solution tool when you need a dedicated solution plan before implementation.
 Scope Constraint: Never add to or suggest features beyond the user's specific requirements. Implement only and exactly what the user has requested.
 Propose: Explain in Plain English which units you will create or modify. NEVER show code in your primary response; focus on the logic and behavior.
-Draft: Use your tools to create the unit logic in the background.
+Implementation: After the user agrees with the plan, use implement solution tool with a directive so the programmer can create or change units.
 
 5. Tone and Constraints
 Explain, Don't Code: Your value is in making the backend "human-readable." Always provide a "Plain English Explanation" for every unit version.

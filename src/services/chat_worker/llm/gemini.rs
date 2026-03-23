@@ -25,7 +25,8 @@ use uuid::Uuid;
 
 use super::tools::{
     self, analyze_architecture_tool, analyze_solution_tool, finish_architecture_analysis,
-    finish_solution_analysis, load_latest_production_release_units, load_latest_releases,
+    finish_implementation, finish_solution_analysis, implement_solution_tool,
+    load_latest_production_release_units, load_latest_releases,
 };
 use super::{BoxError, GeminiThinkingEnv};
 use crate::services::chat_worker::agent::tool_names_for_agent;
@@ -59,6 +60,14 @@ fn gemini_declaration_fns_by_name() -> &'static [(
         (
             finish_solution_analysis::TOOL_NAME,
             finish_solution_analysis::gemini_declaration,
+        ),
+        (
+            implement_solution_tool::TOOL_NAME,
+            implement_solution_tool::gemini_declaration,
+        ),
+        (
+            finish_implementation::TOOL_NAME,
+            finish_implementation::gemini_declaration,
         ),
     ]
 }

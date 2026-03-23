@@ -28,10 +28,11 @@ pub fn system_prompt_for_agent(agent: &ChatAgentType) -> &'static str {
     }
 }
 
-/// Fourth argument meaning depends on agent. For [`ChatAgentType::ArchitectureAnalyzer`] and
-/// [`ChatAgentType::SolutionAnalyzer`] it **must** be the DB id of the corresponding nested analyze tool
-/// row (`ToolAnalyzeArchitecture` / `ToolAnalyzeSolution`, same as queue `invoking_message_id` for that job);
-/// history is only that nested subtree. For other agents, see each `load_history` (Planner: unused; etc.).
+/// Fourth argument meaning depends on agent. For [`ChatAgentType::ArchitectureAnalyzer`],
+/// [`ChatAgentType::SolutionAnalyzer`], and [`ChatAgentType::Developer`] it **must** be the DB id of the
+/// corresponding tool row (`ToolAnalyzeArchitecture` / `ToolAnalyzeSolution` / `ToolImplementSolution`,
+/// same as queue `invoking_message_id` for that job); history is only that nested subtree. For other agents,
+/// see each `load_history` (Planner: unused; etc.).
 pub fn load_history_for_agent(
     conn: &mut PooledConn,
     session_id: Uuid,

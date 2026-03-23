@@ -1,5 +1,5 @@
 //! Shared history loading for nested sub-agents whose conversation hangs under an async tool row
-//! (e.g. `ToolAnalyzeArchitecture`, `ToolAnalyzeSolution`).
+//! (e.g. `ToolAnalyzeArchitecture`, `ToolAnalyzeSolution`, `ToolImplementSolution`).
 //!
 //! History is scoped only by the **subtree** rooted at the anchor tool row (`invoking_message_id`
 //! edges). All **completed** messages in that subtree are included—no extra filter by tool type or

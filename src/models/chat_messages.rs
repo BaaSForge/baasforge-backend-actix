@@ -11,7 +11,7 @@ use crate::models::projects::ProjectUnitResponse;
 use crate::services::chat_worker::llm::tools::{
     ToolAnalyzeArchitecturePayload, ToolAnalyzeSolutionPayload, ToolFetchLatestReleasesPayload,
     ToolFetchRelevantUnitsPayload, ToolFinishArchitectureAnalysisPayload,
-    ToolFinishSolutionAnalysisPayload,
+    ToolFinishImplementationPayload, ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload,
 };
 
 /// One requested tool call from the LLM (GPT tool_call_id optional; Gemini has no id).
@@ -110,6 +110,8 @@ pub enum ChatMessageType {
     ToolFinishArchitectureAnalysis,
     ToolAnalyzeSolution,
     ToolFinishSolutionAnalysis,
+    ToolImplementSolution,
+    ToolFinishImplementation,
 }
 
 #[derive(Debug, DbEnum, Serialize, Clone, Deserialize, PartialEq)]
@@ -146,6 +148,8 @@ pub enum ChatMessagePayload {
     ToolFinishArchitectureAnalysis(ToolFinishArchitectureAnalysisPayload),
     ToolAnalyzeSolution(ToolAnalyzeSolutionPayload),
     ToolFinishSolutionAnalysis(ToolFinishSolutionAnalysisPayload),
+    ToolImplementSolution(ToolImplementSolutionPayload),
+    ToolFinishImplementation(ToolFinishImplementationPayload),
 }
 
 impl ChatMessagePayload {
@@ -188,6 +192,14 @@ impl ChatMessagePayload {
             ChatMessageType::ToolFinishSolutionAnalysis => {
                 let p = serde_json::from_value::<ToolFinishSolutionAnalysisPayload>(v)?;
                 ChatMessagePayload::ToolFinishSolutionAnalysis(p)
+            }
+            ChatMessageType::ToolImplementSolution => {
+                let p = serde_json::from_value::<ToolImplementSolutionPayload>(v)?;
+                ChatMessagePayload::ToolImplementSolution(p)
+            }
+            ChatMessageType::ToolFinishImplementation => {
+                let p = serde_json::from_value::<ToolFinishImplementationPayload>(v)?;
+                ChatMessagePayload::ToolFinishImplementation(p)
             }
         };
         Ok(Some(payload))

@@ -1,63 +1,95 @@
 use crate::database::PooledConn;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
+    ChatMessageType, ChatSessionRoleType,
 };
 use crate::schema::chat_messages;
+use crate::services::chat_worker::agent::nested_branch_history::load_nested_branch_history;
+use crate::services::chat_worker::llm::tools::{
+    finish_implementation, load_latest_production_release_units,
+};
 use crate::services::chat_worker::units_definitions;
 use diesel::prelude::*;
 use diesel::result::Error;
+use diesel::OptionalExtension;
 use serde_json::Value;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
-const FETCH_LIMIT: i64 = 50;
-const HISTORY_LIMIT: i64 = 50;
-
-pub fn tool_names() -> &'static [&'static str] {
-    &[]
+fn synthetic_first_user_text(
+    conn: &mut PooledConn,
+    session_id: Uuid,
+    anchor: Uuid,
+) -> Result<Option<String>, Error> {
+    let payload_val: Option<Value> = chat_messages::table
+        .filter(chat_messages::id.eq(anchor))
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(chat_messages::type_.eq(ChatMessageType::ToolImplementSolution))
+        .select(chat_messages::payload)
+        .first(conn)
+        .optional()?
+        .flatten();
+    let Some(directive) = payload_val.and_then(|v| {
+        v.get("args")?
+            .get("directive")?
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }) else {
+        return Ok(None);
+    };
+    let mut out = String::new();
+    out.push_str("## Directive (execute exactly)\n\n");
+    out.push_str(&directive);
+    Ok(Some(out))
 }
 
+pub fn tool_names() -> &'static [&'static str] {
+    &[
+        load_latest_production_release_units::TOOL_NAME,
+        finish_implementation::TOOL_NAME,
+    ]
+}
+
+/// Loads history **only** under the nested branch rooted at the `ToolImplementSolution` DB row.
+///
+/// Prepends a synthetic user message: latest completed solution summary (if any) plus the tool `directive`.
 pub fn load_history(
     conn: &mut PooledConn,
     session_id: Uuid,
-    _thread_anchor_message_id: Option<Uuid>,
+    implement_solution_tool_message_id: Option<Uuid>,
 ) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
-    let rows = chat_messages::table
-        .filter(chat_messages::chat_session_id.eq(session_id))
-        .order(chat_messages::id.desc())
-        .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
-        .limit(FETCH_LIMIT)
-        .select(ChatMessageRow::as_select())
-        .load::<ChatMessageRow>(conn)?;
-
-    let filtered: Vec<_> = rows
-        .into_iter()
-        .filter(|row| match row.role {
-            ChatSessionRoleType::User => true,
-            ChatSessionRoleType::Ai => {
-                row.agent.as_ref() == Some(&ChatAgentType::Developer) || row.agent.is_none()
-            }
-        })
-        .take(HISTORY_LIMIT as usize)
-        .map(|row| (row.role, row.type_, row.payload))
-        .collect();
-
-    let out: Vec<_> = filtered.into_iter().rev().collect();
-    Ok(out)
+    let synthetic_first = match implement_solution_tool_message_id {
+        None => None,
+        Some(anchor) => synthetic_first_user_text(conn, session_id, anchor)?,
+    };
+    load_nested_branch_history(
+        conn,
+        session_id,
+        implement_solution_tool_message_id,
+        ChatMessageType::ToolImplementSolution,
+        "developer",
+        synthetic_first,
+    )
 }
 
-const SYSTEM_PROMPT_CORE: &str =
-    "You are the Developer agent. You implement and refine units and code.
-    
-Implementation Strategy: To achieve the user's goal, you may modify existing units or build independent units from scratch.
-- Priority: Whenever possible, avoid modifying existing units. Prefer creating new units to prevent breaking changes.
-- Modifications: If modifying an existing unit is the only viable option, apply changes without breaking current functionality.
-- Breaking Changes: This is the absolute last resort, considered only if no other path exists.
-";
+const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the Programmer for a "No-Code" backend platform. You implement units: create or modify the exact units requested. You do not replan, justify trade-offs, or restate the agreed solution—the user message gives you the analysis summary and a directive; follow both.
+
+1. Behavior
+- Use only your tools. Do not deliver long prose; short status between tool calls is fine.
+- Prefer new units over edits when both work; if you must change an existing unit, preserve behavior outside the requested delta.
+
+2. Tool use
+Do not repeat identical tool calls.
+
+3. Execution loop
+When you need data, issue tool_calls and wait for results. When implementation is complete, you MUST call finish implementation with a concise summary—never end this run without that tool.
+
+4. Ending
+Your final action is always finish implementation with an implementation_summary for the planner (what was created or changed)."#;
 
 pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::new(|| {
     let combined = format!(
-        "{SYSTEM_PROMPT_CORE}\n\n## Unit type reference (detailed)\n\nUse the following when implementing or modifying units so behavior stays consistent with platform unit semantics.\n\n{}",
+        "{SYSTEM_PROMPT_CORE}\n\n## Unit type reference (detailed)\n\n{}",
         units_definitions::all_details(),
     );
     Box::leak(combined.into_boxed_str())
