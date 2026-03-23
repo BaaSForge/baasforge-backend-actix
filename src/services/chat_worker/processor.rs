@@ -35,8 +35,8 @@ pub async fn process_one(
     placeholder_ai_message_id: Uuid,
     agent: ChatAgentType,
     // Same as `ChatSessionQueueMessage::invoking_message_id`: parent for the new AI Text row (None = main
-    // thread; Some = nested under that id). For [`ChatAgentType::ArchitectureAnalyzer`] that parent is
-    // the `ToolAnalyzeArchitecture` row id — used as history root for nested-only context.
+    // thread; Some = nested under that id). For [`ChatAgentType::ArchitectureAnalyzer`] / [`ChatAgentType::SolutionAnalyzer`]
+    // that parent is the corresponding analyze-tool row id — used as history root for nested-only context.
     queue_invoking_message_id: Option<Uuid>,
 ) -> Result<GenerateOutcome, Box<dyn std::error::Error + Send + Sync>> {
     let agent_for_history = agent.clone();

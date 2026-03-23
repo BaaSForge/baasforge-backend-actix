@@ -45,6 +45,8 @@ fn is_tool_result_type(type_: &ChatMessageType) -> bool {
             | ChatMessageType::ToolFetchLatestReleases
             | ChatMessageType::ToolAnalyzeArchitecture
             | ChatMessageType::ToolFinishArchitectureAnalysis
+            | ChatMessageType::ToolAnalyzeSolution
+            | ChatMessageType::ToolFinishSolutionAnalysis
     )
 }
 
@@ -78,6 +80,16 @@ fn tool_result_from_payload(
             serde_json::to_string(p).unwrap_or_default(),
         ),
         Some(ChatMessagePayload::ToolFinishArchitectureAnalysis(p)) => (
+            p.tool_call_id.clone(),
+            p.tool_name.clone(),
+            serde_json::to_string(p).unwrap_or_default(),
+        ),
+        Some(ChatMessagePayload::ToolAnalyzeSolution(p)) => (
+            p.tool_call_id.clone(),
+            p.tool_name.clone(),
+            serde_json::to_string(p).unwrap_or_default(),
+        ),
+        Some(ChatMessagePayload::ToolFinishSolutionAnalysis(p)) => (
             p.tool_call_id.clone(),
             p.tool_name.clone(),
             serde_json::to_string(p).unwrap_or_default(),

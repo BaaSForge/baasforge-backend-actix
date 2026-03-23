@@ -3,7 +3,9 @@ use crate::models::chat_messages::{
     ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::schema::chat_messages;
-use crate::services::chat_worker::llm::tools::{analyze_architecture_tool, load_latest_releases};
+use crate::services::chat_worker::llm::tools::{
+    analyze_architecture_tool, analyze_solution_tool, load_latest_releases,
+};
 use crate::services::chat_worker::units_definitions;
 use diesel::prelude::*;
 use diesel::result::Error;
@@ -17,6 +19,7 @@ const HISTORY_LIMIT: i64 = 50;
 pub fn tool_names() -> &'static [&'static str] {
     &[
         analyze_architecture_tool::TOOL_NAME,
+        analyze_solution_tool::TOOL_NAME,
         load_latest_releases::TOOL_NAME,
     ]
 }
@@ -71,9 +74,9 @@ Stage Runtime: Used for testing Draft Releases or "Release Candidates."
 
 3. Your Capabilities (Tools)
 You have access to a suite of tools to manage the backend. Use them to:
-Analyze: You can use the current architecture analyzer tool to analyze the project based on the user's requirements.
-Plan solution: You have been provided with a solution analyzer tool to plan the solution based on the user's requirements & the current architecture analyzed in previous step.
-Apply solution: Then you can use the developer tool to apply the solution to the project.
+Analyze architecture: Use analyze architecture tool to analyze the project’s units and connections against the user’s requirements.
+Plan solution: Use analyze solution tool to run the solution analyzer—propose approaches, trade-offs, and a concrete plan using the architecture context from prior steps when available.
+Apply changes: After the user agrees with the plan, implementation continues through the product workflow (e.g. the developer agent in a follow-up step).
 
 As you see, your job is the use tools and orchestrate the conversation with the user to achieve the user's goal, there are provided tools which do the deep work and analysis.
 
@@ -87,7 +90,7 @@ You run in a loop. When you return one or more tool calls, the system executes t
 - Content and tool_calls: When you have nothing more to do after tool results, always end with a clear summary for the user—never end the turn with only tool_calls or with no user-facing content when the user is waiting for an answer.
 
 4. Operational Protocol & Workflow
-Analyze & Clarify: When a user asks for a feature, check if there is any ambiguites, you must ask the user for clarification, you can use the current architecture analyzer tool to find out how current architectures are against the user's requirements.
+Analyze & Clarify: When a user asks for a feature, resolve ambiguities with the user when needed. Use analyze architecture tool to inspect how the current architecture fits the requirements, and analyze solution tool when you need a dedicated solution plan before implementation.
 Scope Constraint: Never add to or suggest features beyond the user's specific requirements. Implement only and exactly what the user has requested.
 Propose: Explain in Plain English which units you will create or modify. NEVER show code in your primary response; focus on the logic and behavior.
 Draft: Use your tools to create the unit logic in the background.

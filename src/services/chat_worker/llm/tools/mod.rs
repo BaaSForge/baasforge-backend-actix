@@ -20,13 +20,17 @@
 //! mark the tool row failed and run [`maybe_complete_invoking_message`] so the parent AI message can unblock.
 
 pub mod analyze_architecture_tool;
+pub mod analyze_solution_tool;
 pub mod finish_architecture_analysis;
+pub mod finish_solution_analysis;
 pub mod load_latest_production_release_units;
 pub mod load_latest_releases;
 
 /// Re-exported for use in [`crate::models::chat_messages::ChatMessagePayload`].
 pub use analyze_architecture_tool::ToolAnalyzeArchitecturePayload;
+pub use analyze_solution_tool::ToolAnalyzeSolutionPayload;
 pub use finish_architecture_analysis::ToolFinishArchitectureAnalysisPayload;
+pub use finish_solution_analysis::ToolFinishSolutionAnalysisPayload;
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
 pub use load_latest_releases::ToolFetchLatestReleasesPayload;
 
@@ -115,6 +119,16 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             finish_architecture_analysis::MESSAGE_TYPE,
             finish_architecture_analysis::payload_from_args,
         ),
+        (
+            analyze_solution_tool::TOOL_NAME,
+            analyze_solution_tool::MESSAGE_TYPE,
+            analyze_solution_tool::payload_from_args,
+        ),
+        (
+            finish_solution_analysis::TOOL_NAME,
+            finish_solution_analysis::MESSAGE_TYPE,
+            finish_solution_analysis::payload_from_args,
+        ),
     ]
 }
 
@@ -139,7 +153,7 @@ fn tool_queue_registry_for_agent(
 /// by that AI Text message” (not the session root, not the tool’s own id). [`maybe_complete_invoking_message`]
 /// is later called with **that AI Text message’s id** to complete the turn once all those tool rows finish.
 ///
-/// Special case: async tools like [`analyze_architecture_tool`] publish a **separate** queue
+/// Special case: async tools like [`analyze_architecture_tool`] and [`analyze_solution_tool`] publish a **separate** queue
 /// message for a sub-agent run; that message sets `invoking_message_id` to the **tool row** id so
 /// the sub-agent’s `Text` output is nested under the tool (see `ChatSessionQueueMessage` docs).
 /// `agent` is stored on the queue message so the worker can set it on the created message row.
@@ -199,6 +213,8 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
         load_latest_releases::spec(),
         analyze_architecture_tool::spec(),
         finish_architecture_analysis::spec(),
+        analyze_solution_tool::spec(),
+        finish_solution_analysis::spec(),
     ]
 }
 
@@ -330,6 +346,8 @@ pub fn tool_message_type_skips_generic_invoker_completion(type_: &ChatMessageTyp
     matches!(
         type_,
         ChatMessageType::ToolAnalyzeArchitecture | ChatMessageType::ToolFinishArchitectureAnalysis
+            | ChatMessageType::ToolAnalyzeSolution
+            | ChatMessageType::ToolFinishSolutionAnalysis
     )
 }
 
@@ -384,6 +402,14 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                 (
                     finish_architecture_analysis::MESSAGE_TYPE,
                     wrap_handler_with_payload(finish_architecture_analysis::handler),
+                ),
+                (
+                    analyze_solution_tool::MESSAGE_TYPE,
+                    wrap_handler_with_payload(analyze_solution_tool::handler),
+                ),
+                (
+                    finish_solution_analysis::MESSAGE_TYPE,
+                    wrap_handler_with_payload(finish_solution_analysis::handler),
                 ),
             ]
         })

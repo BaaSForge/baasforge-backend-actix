@@ -1,57 +1,94 @@
 use crate::database::PooledConn;
-use crate::models::chat_messages::{
-    ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
-};
+use crate::models::chat_messages::{ChatMessageType, ChatSessionRoleType};
 use crate::schema::chat_messages;
+use crate::services::chat_worker::agent::nested_branch_history::load_nested_branch_history;
+use crate::services::chat_worker::llm::tools::{
+    finish_solution_analysis, load_latest_production_release_units,
+};
 use crate::services::chat_worker::units_definitions;
 use diesel::prelude::*;
 use diesel::result::Error;
+use diesel::OptionalExtension;
 use serde_json::Value;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
-const FETCH_LIMIT: i64 = 50;
-const HISTORY_LIMIT: i64 = 50;
-
-pub fn tool_names() -> &'static [&'static str] {
-    &[]
+fn synthetic_first_user_text(
+    conn: &mut PooledConn,
+    session_id: Uuid,
+    anchor: Uuid,
+) -> Result<Option<String>, Error> {
+    let payload_val: Option<Value> = chat_messages::table
+        .filter(chat_messages::id.eq(anchor))
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(chat_messages::type_.eq(ChatMessageType::ToolAnalyzeSolution))
+        .select(chat_messages::payload)
+        .first(conn)
+        .optional()?
+        .flatten();
+    Ok(payload_val.and_then(|v| {
+        let s = v.get("args")?.get("intent")?.as_str()?.trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    }))
 }
 
+pub fn tool_names() -> &'static [&'static str] {
+    &[
+        load_latest_production_release_units::TOOL_NAME,
+        finish_solution_analysis::TOOL_NAME,
+    ]
+}
+
+/// Loads history **only** under the nested branch rooted at the `ToolAnalyzeSolution` DB row.
+///
+/// Reads `args.intent` from the anchor row for the optional synthetic first user line.
 pub fn load_history(
     conn: &mut PooledConn,
     session_id: Uuid,
-    _thread_anchor_message_id: Option<Uuid>,
+    analyze_solution_tool_message_id: Option<Uuid>,
 ) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
-    let rows = chat_messages::table
-        .filter(chat_messages::chat_session_id.eq(session_id))
-        .order(chat_messages::id.desc())
-        .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
-        .limit(FETCH_LIMIT)
-        .select(ChatMessageRow::as_select())
-        .load::<ChatMessageRow>(conn)?;
-
-    let filtered: Vec<_> = rows
-        .into_iter()
-        .filter(|row| match row.role {
-            ChatSessionRoleType::User => true,
-            ChatSessionRoleType::Ai => {
-                row.agent.as_ref() == Some(&ChatAgentType::SolutionAnalyzer) || row.agent.is_none()
-            }
-        })
-        .take(HISTORY_LIMIT as usize)
-        .map(|row| (row.role, row.type_, row.payload))
-        .collect();
-
-    let out: Vec<_> = filtered.into_iter().rev().collect();
-    Ok(out)
+    let synthetic_first = match analyze_solution_tool_message_id {
+        None => None,
+        Some(anchor) => synthetic_first_user_text(conn, session_id, anchor)?,
+    };
+    load_nested_branch_history(
+        conn,
+        session_id,
+        analyze_solution_tool_message_id,
+        ChatMessageType::ToolAnalyzeSolution,
+        "solution_analyzer",
+        synthetic_first,
+    )
 }
 
-const SYSTEM_PROMPT_CORE: &str =
-    "You are the Solution Analyzer. You analyze user problems and propose solutions.";
+const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the Solution Analyzer for a "No-Code" backend platform. You evaluate approaches, trade-offs, and fit with constraints before implementation. You propose a clear plan in plain language—never show the user raw code.
+
+1. The Environment & Context
+You work after architecture context is available when the planner needs a structured solution plan. Units are the building blocks;
+
+2. The Technical Hierarchy
+Units: Small, single-purpose functions (Lambda-style). Each has a Version, Hidden Code, and a Plain English Explanation. Units can trigger one another to create complex workflows.
+Your output informs the planner and user: what to build or change, what to reuse, risks, and sequencing—without writing implementation code.
+
+3. Tool Use
+Use tools to load factual data about the project (e.g. current units in production) when your plan depends on it. Do not call the same tool repeatedly with the same or equivalent inputs. If you already have the result in the conversation, use it. Only invoke a tool when you need fresh data or a new action.
+
+3.1. Execution Loop (How Your Turns Work)
+You run in a loop. When you return one or more tool calls, the system executes those tools and then invokes you again with the same conversation history plus the tool results appended. Use this flow correctly:
+- When you need data or an action: Return a response that includes tool_calls. Do not invent or assume tool results; wait for the next turn.
+- When you receive tool results: On the next invocation you will see the tool results in the conversation. Process them and respond with natural-language content if you need to.
+- Content and tool_calls: While you still need more data, you may combine natural-language content with further tool_calls. When your solution analysis is complete, you MUST call the tool finish solution analysis—never end the analyzer run without it. Do not assume the workflow is done from assistant text alone.
+
+4. Ending the Discussion
+Your final action in this analyzer session is always a call to finish solution analysis with a concise solution summary for the planner and user. After you have gathered enough information, do not stop at narrative-only turns: call finish solution analysis so the planner can continue. Until then, you may use assistant content to explain progress between tool calls."#;
 
 pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::new(|| {
     let combined = format!(
-        "{SYSTEM_PROMPT_CORE}\n\n## Unit type reference (detailed)\n\nUse the following when shaping solutions and deciding how units should compose or change.\n\n{}",
+        "{SYSTEM_PROMPT_CORE}\n\n## Unit type reference (detailed)\n\nUse the following when shaping solution options and how units should compose or change.\n\n{}",
         units_definitions::all_details(),
     );
     Box::leak(combined.into_boxed_str())
