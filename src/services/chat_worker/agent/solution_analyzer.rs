@@ -18,6 +18,7 @@ pub fn tool_names() -> &'static [&'static str] {
 pub fn load_history(
     conn: &mut PooledConn,
     session_id: Uuid,
+    _thread_anchor_message_id: Option<Uuid>,
 ) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
     let rows = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))

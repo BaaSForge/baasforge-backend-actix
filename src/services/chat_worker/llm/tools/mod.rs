@@ -14,14 +14,19 @@
 //! add `(my_tool::MESSAGE_TYPE, my_tool::handler)` to [`tool_message_handlers`],
 //! add `(my_tool::TOOL_NAME, my_tool::MESSAGE_TYPE, my_tool::payload_from_args)` to [`tool_queue_registry`],
 //! and add `(my_tool::TOOL_NAME, my_tool::gemini_declaration)` in `gemini_declaration_fns_by_name` in `llm/gemini.rs`.
-//! Long-running async tools (e.g. `analyze_architecture_tool`) skip [`on_tool_message_finished`] in [`spawn_tool_message_handler`].
+//!
+//! Agent-style and finish-style tools listed in [`tool_message_type_skips_generic_invoker_completion`]
+//! do not run [`on_tool_message_finished`] on success (custom lifecycle). On handler error they still
+//! mark the tool row failed and run [`maybe_complete_invoking_message`] so the parent AI message can unblock.
 
 pub mod analyze_architecture_tool;
+pub mod finish_architecture_analysis;
 pub mod load_latest_production_release_units;
 pub mod load_latest_releases;
 
 /// Re-exported for use in [`crate::models::chat_messages::ChatMessagePayload`].
 pub use analyze_architecture_tool::ToolAnalyzeArchitecturePayload;
+pub use finish_architecture_analysis::ToolFinishArchitectureAnalysisPayload;
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
 pub use load_latest_releases::ToolFetchLatestReleasesPayload;
 
@@ -105,6 +110,11 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             analyze_architecture_tool::MESSAGE_TYPE,
             analyze_architecture_tool::payload_from_args,
         ),
+        (
+            finish_architecture_analysis::TOOL_NAME,
+            finish_architecture_analysis::MESSAGE_TYPE,
+            finish_architecture_analysis::payload_from_args,
+        ),
     ]
 }
 
@@ -123,11 +133,11 @@ fn tool_queue_registry_for_agent(
 /// converts args to a queue payload and publishes. Use at the entry point (e.g. processor) before
 /// calling [`with_tool_context`].
 ///
-/// **`invoking_message_id`** must be the id of the **current AI `Text` message** being generated in
-/// this `process_one` pass (the message whose payload will contain `requested_tool_calls`). Every
-/// queued **tool** row then gets `invoking_message_id = that id`, whether the agent is Planner or a
-/// nested sub-agent — so e.g. `P → tool → sub-agent Text X → tools under X` all point at the right
-/// parent ([`maybe_complete_invoking_message`] counts direct children of the invoker AI message).
+/// **`invoking_message_id`** here is the id of the **current AI `Text` message** being generated in
+/// this `process_one` pass (the row that will hold `requested_tool_calls`). Each queued **tool** row
+/// stores that same value in its DB column `invoking_message_id` — meaning “this tool was requested
+/// by that AI Text message” (not the session root, not the tool’s own id). [`maybe_complete_invoking_message`]
+/// is later called with **that AI Text message’s id** to complete the turn once all those tool rows finish.
 ///
 /// Special case: async tools like [`analyze_architecture_tool`] publish a **separate** queue
 /// message for a sub-agent run; that message sets `invoking_message_id` to the **tool row** id so
@@ -188,6 +198,7 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
         load_latest_production_release_units::spec(),
         load_latest_releases::spec(),
         analyze_architecture_tool::spec(),
+        finish_architecture_analysis::spec(),
     ]
 }
 
@@ -264,7 +275,10 @@ pub struct ToolMessageContext {
     /// Tool message payload from the queue (same as stored on the message). Handlers can use
     /// tool-call args without querying the DB.
     pub payload: Option<Value>,
-    /// When set, this tool message was invoked by the AI message with this id; when all such tool messages are done, that message's status is updated to Completed or Failed.
+    /// Id of the **AI `Text` message** that listed this tool in `requested_tool_calls` (same value as the
+    /// tool row’s DB column `invoking_message_id`). This is **not** [`Self::message_id`] (the tool row),
+    /// and **not** the session root unless the invoker happens to be the root planner turn. When all
+    /// tool siblings sharing this invoker are done, that AI message is completed and a queue continuation may run.
     pub invoking_message_id: Option<Uuid>,
     /// When set, after all tool messages for the invoking message are done we publish a continuation message to RabbitMQ so the LLM continues generating (same as POST flow).
     pub rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
@@ -310,6 +324,15 @@ where
     })
 }
 
+/// Tool types that manage their own invoker / parent completion (or defer it to another tool).
+/// All other tool types always go through [`on_tool_message_finished`] after the handler returns.
+pub fn tool_message_type_skips_generic_invoker_completion(type_: &ChatMessageType) -> bool {
+    matches!(
+        type_,
+        ChatMessageType::ToolAnalyzeArchitecture | ChatMessageType::ToolFinishArchitectureAnalysis
+    )
+}
+
 /// Called after a tool handler returns. If the handler failed, persists Failed (DB + WS) for the tool message;
 /// then runs [`maybe_complete_invoking_message`] so the invoker is marked Completed or Failed when all its tools are done.
 pub async fn on_tool_message_finished(ctx: &ToolMessageContext, result: Result<(), BoxError>) {
@@ -325,15 +348,16 @@ pub async fn on_tool_message_finished(ctx: &ToolMessageContext, result: Result<(
         )
         .await;
     }
-    if let Some(inv_id) = ctx.invoking_message_id {
+    if let Some(invoking_message_id) = ctx.invoking_message_id {
         maybe_complete_invoking_message(
             &ctx.pool,
             &ctx.redis_conn,
             ctx.rabbit_publisher.as_ref(),
-            inv_id,
+            invoking_message_id,
             ctx.user_id,
             ctx.project_id,
             ctx.session_id,
+            true,
         )
         .await;
     }
@@ -357,6 +381,10 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                     analyze_architecture_tool::MESSAGE_TYPE,
                     wrap_handler_with_payload(analyze_architecture_tool::handler),
                 ),
+                (
+                    finish_architecture_analysis::MESSAGE_TYPE,
+                    wrap_handler_with_payload(finish_architecture_analysis::handler),
+                ),
             ]
         })
         .as_slice()
@@ -370,13 +398,24 @@ fn tool_message_handler(type_: ChatMessageType) -> Option<ToolMessageHandler> {
         .map(|(_, h)| h.clone())
 }
 
-/// After a tool message completes (success or failure), check whether the **invoking AI `Text` message**
-/// (`invoking_message_id` here) has all of its **direct tool** children done (`invoking_message_id` on
-/// those tool rows equals this id). Nested sub-agent `Text` rows that point at a **tool** row instead
-/// are not counted here unless [`maybe_complete_invoking_message`] is called with that sub-agent’s id.
+/// After a tool message completes (success or failure), check whether the **AI `Text` message that
+/// triggered those tools** is ready to finish.
 ///
-/// If all such children are done, set that AI message to Completed or Failed and optionally publish a
-/// continuation to RabbitMQ.
+/// **`invoking_message_id`** must be the **id of that AI `Text` row** (the one that will be set
+/// to Completed/Failed), i.e. the same id stored on each tool row as the column `invoking_message_id`.
+/// It is **not** a tool message id, and **not** “the root ancestor” of the session — it is exactly the
+/// message that listed `requested_tool_calls`. Nested sub-agent `Text` rows that hang under a **tool**
+/// row are completed via a separate call with **that** sub-agent AI message’s id.
+///
+/// Direct tool children are rows whose **column** `invoking_message_id` equals `invoking_message_id`.
+///
+/// If all such children are done, update that AI message and optionally publish a continuation whose
+/// `agent` and `invoking_message_id` are copied from **that invoker row** (its column `invoking_message_id`
+/// is where the turn hangs in the tree — `NULL` for main-thread planner, or the outer tool row for nested agents).
+///
+/// When `publish_queue_continuation` is `false`, the invoker row is still updated and WS status is sent,
+/// but no RabbitMQ continuation is published (used when completing a nested sub-agent `Text` row so the
+/// worker does not schedule another pass for that sub-agent).
 pub async fn maybe_complete_invoking_message(
     pool: &DbPool,
     redis_conn: &RedisConn,
@@ -385,6 +424,7 @@ pub async fn maybe_complete_invoking_message(
     user_id: Uuid,
     project_id: Uuid,
     session_id: Uuid,
+    publish_queue_continuation: bool,
 ) {
     let (total, done, failed_count): (i64, i64, i64) = match block_on_db_tokio(pool, move |conn| {
         let total: i64 = chat_messages::table
@@ -431,8 +471,9 @@ pub async fn maybe_complete_invoking_message(
     let new_status_for_db = new_status.clone();
     let is_failed = failed_count > 0;
     let rows_updated = match block_on_db_tokio(pool, move |conn| {
-        let base =
-            diesel::update(chat_messages::table.filter(chat_messages::id.eq(invoking_message_id)));
+        let base = diesel::update(
+            chat_messages::table.filter(chat_messages::id.eq(invoking_message_id)),
+        );
         let rows = if is_failed {
             base.set(chat_messages::status.eq(new_status_for_db))
                 .execute(conn)?
@@ -476,8 +517,39 @@ pub async fn maybe_complete_invoking_message(
     }
     drop(guard);
 
-    // Publish to RabbitMQ so the worker runs process_one again and the LLM continues (same as when user sends a new message: User + Text with empty string).
-    if let Some(publisher) = rabbit_publisher {
+    // Publish to RabbitMQ so the worker runs process_one again and the LLM continues.
+    // Read **the invoker AI Text row** (`invoking_message_id`): its `agent` and **column**
+    // `invoking_message_id` (thread parent — main thread vs nested under a tool) go on the queue message.
+    let (queue_agent, queue_invoking_message_id) =
+        match block_on_db_tokio(pool, move |conn| {
+            chat_messages::table
+                .filter(chat_messages::id.eq(invoking_message_id))
+                .select((chat_messages::agent, chat_messages::invoking_message_id))
+                .first::<(Option<ChatAgentType>, Option<Uuid>)>(conn)
+                .optional()
+        })
+        .await
+        {
+            Ok(Some((agent, inv))) => (agent.unwrap_or(ChatAgentType::Planner), inv),
+            Ok(None) => {
+                tracing::warn!(
+                    %invoking_message_id,
+                    "maybe_complete_invoking_message: invoker row missing for queue routing; using Planner + no invoking id"
+                );
+                (ChatAgentType::Planner, None)
+            }
+            Err(e) => {
+                tracing::error!(
+                    %invoking_message_id,
+                    "maybe_complete_invoking_message: failed to load invoker row for queue routing: {}; using Planner + no invoking id",
+                    e
+                );
+                (ChatAgentType::Planner, None)
+            }
+        };
+
+    if publish_queue_continuation {
+        if let Some(publisher) = rabbit_publisher {
         let response_message_id = new_uuid();
         let queue_message = ChatSessionQueueMessage {
             user_id: Some(user_id),
@@ -489,8 +561,8 @@ pub async fn maybe_complete_invoking_message(
             })),
             response_message_id,
             retry_num: 0,
-            invoking_message_id: None,
-            agent: ChatAgentType::Planner,
+            invoking_message_id: queue_invoking_message_id,
+            agent: queue_agent.clone(),
         };
         if let Err(e) = chat_message_queue::publish_with_publisher(
             publisher,
@@ -511,8 +583,11 @@ pub async fn maybe_complete_invoking_message(
             tracing::info!(
                 %invoking_message_id,
                 %response_message_id,
+                ?queue_agent,
+                ?queue_invoking_message_id,
                 "Published message to queue so LLM continues after tool calls"
             );
+        }
         }
     }
 }
@@ -524,14 +599,22 @@ pub fn spawn_tool_message_handler(type_: ChatMessageType, ctx: ToolMessageContex
     if let Some(handler) = tool_message_handler(type_) {
         tokio::spawn(async move {
             let result = handler(ctx.clone()).await;
-            // Async tools: do not run completion (no Failed/Completed on tool row, no maybe_complete).
-            if ctx.message_type == ChatMessageType::ToolAnalyzeArchitecture {
-                if let Err(e) = &result {
-                    tracing::error!(
-                        %ctx.message_id,
-                        "analyze_architecture_tool handler failed: {}",
-                        e
-                    );
+            if tool_message_type_skips_generic_invoker_completion(&ctx.message_type) {
+                match &result {
+                    Ok(()) => return,
+                    Err(e) => {
+                        tracing::error!(
+                            %ctx.message_id,
+                            ?ctx.message_type,
+                            "Tool handler failed (agent/finish tool): {}",
+                            e
+                        );
+                        on_tool_message_finished(
+                            &ctx,
+                            Err(e.to_string().into()),
+                        )
+                        .await;
+                    }
                 }
                 return;
             }

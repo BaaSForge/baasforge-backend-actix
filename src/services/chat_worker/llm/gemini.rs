@@ -24,7 +24,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::tools::{
-    self, analyze_architecture_tool, load_latest_production_release_units, load_latest_releases,
+    self, analyze_architecture_tool, finish_architecture_analysis,
+    load_latest_production_release_units, load_latest_releases,
 };
 use super::{BoxError, GeminiThinkingEnv};
 use crate::services::chat_worker::agent::tool_names_for_agent;
@@ -46,6 +47,10 @@ fn gemini_declaration_fns_by_name() -> &'static [(
         (
             analyze_architecture_tool::TOOL_NAME,
             analyze_architecture_tool::gemini_declaration,
+        ),
+        (
+            finish_architecture_analysis::TOOL_NAME,
+            finish_architecture_analysis::gemini_declaration,
         ),
     ]
 }

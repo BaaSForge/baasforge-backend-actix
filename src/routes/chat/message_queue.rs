@@ -65,9 +65,10 @@ pub struct ChatSessionQueueMessage {
     /// Retry attempt count. 0 = first attempt; incremented each time the message is sent to the retry delay queue.
     #[serde(default)]
     pub retry_num: u32,
-    /// Parent id for this row when consumed from the queue (copied to `chat_messages.invoking_message_id`).
-    /// See [`crate::models::chat_messages::ChatMessageRow`] for the full hierarchy (tool rows → invoker
-    /// AI message; sub-agent `Text` → outer tool row; nested tools → sub-agent AI message).
+    /// Parent id for the **new** AI `Text` row when consumed (copied to `chat_messages.invoking_message_id`).
+    /// Same meaning as on DB rows: `None` = main-thread turn; `Some(outer_tool_id)` = nested under that tool.
+    /// After tools finish, continuations copy this from the **completed invoker AI Text row** (its column
+    /// `invoking_message_id`), not from the tool row id and not from a “root ancestor” shortcut.
     #[serde(default)]
     pub invoking_message_id: Option<Uuid>,
     /// Agent that will handle this LLM call (used for system prompt and for the AI message row).

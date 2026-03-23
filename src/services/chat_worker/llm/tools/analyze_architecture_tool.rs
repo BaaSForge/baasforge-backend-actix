@@ -82,7 +82,9 @@ pub fn payload_from_args(
 }
 
 /// Queues a new LLM run for [`ChatAgentType::ArchitectureAnalyzer`] with the intent as the user text.
-/// Does not mark this tool message completed/failed and does not complete the invoking Planner message.
+/// Does not mark this tool message completed/failed and does not complete the invoking Planner message;
+/// the analyzer must call `finish_architecture_analysis` when done, which fills this tool row and completes the planner invoker.
+/// See [`super::tool_message_type_skips_generic_invoker_completion`]: on success the generic invoker completion path is skipped.
 pub async fn handler(
     _pool: DbPool,
     _redis_conn: Arc<Mutex<redis::aio::MultiplexedConnection>>,

@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::models::projects::ProjectUnitResponse;
 use crate::services::chat_worker::llm::tools::{
     ToolAnalyzeArchitecturePayload, ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
+    ToolFinishArchitectureAnalysisPayload,
 };
 
 /// One requested tool call from the LLM (GPT tool_call_id optional; Gemini has no id).
@@ -105,6 +106,7 @@ pub enum ChatMessageType {
     ToolFetchRelevantUnits,
     ToolFetchLatestReleases,
     ToolAnalyzeArchitecture,
+    ToolFinishArchitectureAnalysis,
 }
 
 #[derive(Debug, DbEnum, Serialize, Clone, Deserialize, PartialEq)]
@@ -138,6 +140,7 @@ pub enum ChatMessagePayload {
     ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
     ToolFetchLatestReleases(ToolFetchLatestReleasesPayload),
     ToolAnalyzeArchitecture(ToolAnalyzeArchitecturePayload),
+    ToolFinishArchitectureAnalysis(ToolFinishArchitectureAnalysisPayload),
 }
 
 impl ChatMessagePayload {
@@ -168,6 +171,10 @@ impl ChatMessagePayload {
             ChatMessageType::ToolAnalyzeArchitecture => {
                 let p = serde_json::from_value::<ToolAnalyzeArchitecturePayload>(v)?;
                 ChatMessagePayload::ToolAnalyzeArchitecture(p)
+            }
+            ChatMessageType::ToolFinishArchitectureAnalysis => {
+                let p = serde_json::from_value::<ToolFinishArchitectureAnalysisPayload>(v)?;
+                ChatMessagePayload::ToolFinishArchitectureAnalysis(p)
             }
         };
         Ok(Some(payload))
@@ -209,7 +216,9 @@ pub struct ChatMessageRow {
     pub payload: Option<Value>,
     pub status: ChatMessageStatus,
     pub created_at: DateTime<Utc>,
-    /// See struct-level docs; `NULL` for root AI replies and user messages.
+    /// Parent link in the tree. On **tool** rows, this is the **AI `Text` message id** that requested
+    /// the tool (not the tool row’s id, not necessarily the session root). On **AI `Text`** rows, this
+    /// is where that turn hangs (`NULL` = main thread; `Some(tool_id)` = nested under that tool).
     pub invoking_message_id: Option<Uuid>,
     /// Set only for AI role messages; NULL for user messages.
     pub agent: Option<ChatAgentType>,

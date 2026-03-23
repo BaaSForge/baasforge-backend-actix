@@ -2,6 +2,7 @@ use crate::database::PooledConn;
 use crate::models::projects::{ProjectReleaseResponse, ProjectUnitResponse};
 use crate::schema::{project_releases, project_units};
 use diesel::prelude::*;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 // TODO: use vector db instead of postgres
@@ -60,6 +61,28 @@ pub fn load_units_for_latest_production_release(
         // .filter(project_units::id.eq_any(&unit_ids))
         .select(ProjectUnitResponse::as_select())
         .load::<ProjectUnitResponse>(conn)
+}
+
+// Order matches `unit_ids` (omits unknown ids).
+pub fn load_project_units_by_ids(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    unit_ids: &[Uuid],
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    if unit_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let rows: Vec<ProjectUnitResponse> = project_units::table
+        .filter(project_units::project_id.eq(project_id))
+        .filter(project_units::id.eq_any(unit_ids))
+        .select(ProjectUnitResponse::as_select())
+        .load::<ProjectUnitResponse>(conn)?;
+    let mut by_id: HashMap<Uuid, ProjectUnitResponse> =
+        rows.into_iter().map(|u| (u.id, u)).collect();
+    Ok(unit_ids
+        .iter()
+        .filter_map(|id| by_id.remove(id))
+        .collect())
 }
 
 pub fn load_latest_releases(
