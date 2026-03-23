@@ -2,7 +2,6 @@ use crate::database::DbPool;
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessagePayload, ChatMessageType, ChatSessionRoleType,
 };
-use crate::models::projects::ProjectUnitResponse;
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::services::chat_worker::llm::tools::{BoxError, ToolSpec};
 use crate::services::message_queue::SharedRabbitPublisher;

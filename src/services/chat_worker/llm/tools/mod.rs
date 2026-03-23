@@ -21,22 +21,26 @@
 
 pub mod analyze_architecture_tool;
 pub mod analyze_solution_tool;
+pub mod create_unit;
 pub mod finish_architecture_analysis;
 pub mod finish_implementation;
 pub mod finish_solution_analysis;
 pub mod implement_solution_tool;
 pub mod load_latest_production_release_units;
 pub mod load_latest_releases;
+pub mod modify_unit;
 
 /// Re-exported for use in [`crate::models::chat_messages::ChatMessagePayload`].
 pub use analyze_architecture_tool::ToolAnalyzeArchitecturePayload;
 pub use analyze_solution_tool::ToolAnalyzeSolutionPayload;
+pub use create_unit::ToolCreateUnitPayload;
 pub use finish_architecture_analysis::ToolFinishArchitectureAnalysisPayload;
 pub use finish_implementation::ToolFinishImplementationPayload;
 pub use finish_solution_analysis::ToolFinishSolutionAnalysisPayload;
 pub use implement_solution_tool::ToolImplementSolutionPayload;
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
 pub use load_latest_releases::ToolFetchLatestReleasesPayload;
+pub use modify_unit::ToolModifyUnitPayload;
 
 use crate::database::{DbPool, block_on_db_tokio};
 use crate::libs::ids::new_uuid;
@@ -143,6 +147,16 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             finish_implementation::MESSAGE_TYPE,
             finish_implementation::payload_from_args,
         ),
+        (
+            create_unit::TOOL_NAME,
+            create_unit::MESSAGE_TYPE,
+            create_unit::payload_from_args,
+        ),
+        (
+            modify_unit::TOOL_NAME,
+            modify_unit::MESSAGE_TYPE,
+            modify_unit::payload_from_args,
+        ),
     ]
 }
 
@@ -231,6 +245,8 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
         finish_solution_analysis::spec(),
         implement_solution_tool::spec(),
         finish_implementation::spec(),
+        create_unit::spec(),
+        modify_unit::spec(),
     ]
 }
 
@@ -436,6 +452,14 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                 (
                     finish_implementation::MESSAGE_TYPE,
                     wrap_handler_with_payload(finish_implementation::handler),
+                ),
+                (
+                    create_unit::MESSAGE_TYPE,
+                    wrap_handler_with_payload(create_unit::handler),
+                ),
+                (
+                    modify_unit::MESSAGE_TYPE,
+                    wrap_handler_with_payload(modify_unit::handler),
                 ),
             ]
         })

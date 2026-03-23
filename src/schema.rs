@@ -196,9 +196,9 @@ diesel::table! {
         #[max_length = 50]
         version -> Varchar,
         parent_unit_id -> Nullable<Uuid>,
-        unit_type -> ProjectUnitType,
         is_draft -> Bool,
         chat_session_id -> Nullable<Uuid>,
+        unit_type -> ProjectUnitType,
     }
 }
 

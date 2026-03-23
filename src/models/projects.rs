@@ -50,9 +50,32 @@ pub enum PlatformEnvironmentType {
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectUnitType {
-    Controller,
-    Model,
-    View,
+    Bootstrap,
+    Action,
+    Api,
+    Command,
+    Flow,
+    Gateway,
+    Projection,
+    Query,
+    Runtime,
+    Schema,
+    Timer,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = crate::schema::project_units)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct ProjectUnitInsert {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub code: Option<String>,
+    pub explanation: Option<String>,
+    pub version: String,
+    pub parent_unit_id: Option<Uuid>,
+    pub unit_type: ProjectUnitType,
+    pub is_draft: bool,
+    pub chat_session_id: Option<Uuid>,
 }
 
 #[derive(Insertable)]

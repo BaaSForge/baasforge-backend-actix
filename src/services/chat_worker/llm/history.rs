@@ -49,6 +49,8 @@ fn is_tool_result_type(type_: &ChatMessageType) -> bool {
             | ChatMessageType::ToolFinishSolutionAnalysis
             | ChatMessageType::ToolImplementSolution
             | ChatMessageType::ToolFinishImplementation
+            | ChatMessageType::ToolCreateUnit
+            | ChatMessageType::ToolModifyUnit
     )
 }
 
@@ -102,6 +104,16 @@ fn tool_result_from_payload(
             serde_json::to_string(p).unwrap_or_default(),
         ),
         Some(ChatMessagePayload::ToolFinishImplementation(p)) => (
+            p.tool_call_id.clone(),
+            p.tool_name.clone(),
+            serde_json::to_string(p).unwrap_or_default(),
+        ),
+        Some(ChatMessagePayload::ToolCreateUnit(p)) => (
+            p.tool_call_id.clone(),
+            p.tool_name.clone(),
+            serde_json::to_string(p).unwrap_or_default(),
+        ),
+        Some(ChatMessagePayload::ToolModifyUnit(p)) => (
             p.tool_call_id.clone(),
             p.tool_name.clone(),
             serde_json::to_string(p).unwrap_or_default(),

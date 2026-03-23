@@ -5,7 +5,7 @@ use crate::models::chat_messages::{
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::nested_branch_history::load_nested_branch_history;
 use crate::services::chat_worker::llm::tools::{
-    finish_implementation, load_latest_production_release_units,
+    create_unit, finish_implementation, modify_unit,
 };
 use crate::services::chat_worker::units_definitions;
 use diesel::prelude::*;
@@ -45,7 +45,8 @@ fn synthetic_first_user_text(
 
 pub fn tool_names() -> &'static [&'static str] {
     &[
-        load_latest_production_release_units::TOOL_NAME,
+        create_unit::TOOL_NAME,
+        modify_unit::TOOL_NAME,
         finish_implementation::TOOL_NAME,
     ]
 }
@@ -77,6 +78,8 @@ const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the Programmer for a "No-Code"
 1. Behavior
 - Use only your tools. Do not deliver long prose; short status between tool calls is fine.
 - Prefer new units over edits when both work; if you must change an existing unit, preserve behavior outside the requested delta.
+- **Code language:** All implementation you put in the `code` field of create unit and modify unit must be **JavaScript**.
+- **modify_unit:** You cannot change the unit kind when revising; the new draft row keeps the parent unit’s type. To use a different kind, create a new unit with create_unit instead. Pass `unit_id` as the exact `id` field (a full hyphenated UUID), not a label or paraphrase or inside any backticks or double quotes.
 
 2. Tool use
 Do not repeat identical tool calls.

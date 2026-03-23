@@ -9,9 +9,10 @@ use uuid::Uuid;
 
 use crate::models::projects::ProjectUnitResponse;
 use crate::services::chat_worker::llm::tools::{
-    ToolAnalyzeArchitecturePayload, ToolAnalyzeSolutionPayload, ToolFetchLatestReleasesPayload,
-    ToolFetchRelevantUnitsPayload, ToolFinishArchitectureAnalysisPayload,
-    ToolFinishImplementationPayload, ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload,
+    ToolAnalyzeArchitecturePayload, ToolAnalyzeSolutionPayload, ToolCreateUnitPayload,
+    ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
+    ToolFinishArchitectureAnalysisPayload, ToolFinishImplementationPayload,
+    ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload, ToolModifyUnitPayload,
 };
 
 /// One requested tool call from the LLM (GPT tool_call_id optional; Gemini has no id).
@@ -112,6 +113,8 @@ pub enum ChatMessageType {
     ToolFinishSolutionAnalysis,
     ToolImplementSolution,
     ToolFinishImplementation,
+    ToolCreateUnit,
+    ToolModifyUnit,
 }
 
 #[derive(Debug, DbEnum, Serialize, Clone, Deserialize, PartialEq)]
@@ -150,6 +153,8 @@ pub enum ChatMessagePayload {
     ToolFinishSolutionAnalysis(ToolFinishSolutionAnalysisPayload),
     ToolImplementSolution(ToolImplementSolutionPayload),
     ToolFinishImplementation(ToolFinishImplementationPayload),
+    ToolCreateUnit(ToolCreateUnitPayload),
+    ToolModifyUnit(ToolModifyUnitPayload),
 }
 
 impl ChatMessagePayload {
@@ -200,6 +205,14 @@ impl ChatMessagePayload {
             ChatMessageType::ToolFinishImplementation => {
                 let p = serde_json::from_value::<ToolFinishImplementationPayload>(v)?;
                 ChatMessagePayload::ToolFinishImplementation(p)
+            }
+            ChatMessageType::ToolCreateUnit => {
+                let p = serde_json::from_value::<ToolCreateUnitPayload>(v)?;
+                ChatMessagePayload::ToolCreateUnit(p)
+            }
+            ChatMessageType::ToolModifyUnit => {
+                let p = serde_json::from_value::<ToolModifyUnitPayload>(v)?;
+                ChatMessagePayload::ToolModifyUnit(p)
             }
         };
         Ok(Some(payload))
