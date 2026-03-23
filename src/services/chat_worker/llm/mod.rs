@@ -32,19 +32,6 @@ pub enum GenerateOutcome {
     Stopped(TextPayload),
 }
 
-/// Extracts the text content from a message payload for LLM context.
-/// Expects Text payload shape `{ "text": "...", "requested_tool_calls": [...] }`.
-pub(crate) fn payload_to_string(payload: &Option<Value>) -> String {
-    match payload {
-        None => String::new(),
-        Some(v) => v
-            .get("text")
-            .and_then(|t| t.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| v.to_string()),
-    }
-}
-
 #[derive(Clone)]
 pub enum LlmClient {
     OpenAi {
