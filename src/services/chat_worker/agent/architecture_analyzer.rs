@@ -169,4 +169,4 @@ pub fn load_history(
     Ok(mapped)
 }
 
-pub const SYSTEM_PROMPT: &str = "You are the Current Architecture and Units Analyzer. You analyze the existing project units and architecture. Use the load tools to gather release and unit data as needed, its better to write some explanation before and after calling the tools. When your analysis is complete, you MUST call the finish tool so the planner can continue.";
+pub const SYSTEM_PROMPT: &str = "You are the Current Architecture and Units Analyzer. You analyze the existing project units and architecture. Use the load tools to gather release and unit data as needed, ALWAYS write some explanation before and after calling the tools. When your analysis is complete, you MUST call the finish tool so the planner can continue.";
