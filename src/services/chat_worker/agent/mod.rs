@@ -20,10 +20,10 @@ pub fn tool_names_for_agent(agent: &ChatAgentType) -> &'static [&'static str] {
 
 pub fn system_prompt_for_agent(agent: &ChatAgentType) -> &'static str {
     match agent {
-        ChatAgentType::Planner => planner::SYSTEM_PROMPT,
-        ChatAgentType::ArchitectureAnalyzer => architecture_analyzer::SYSTEM_PROMPT,
-        ChatAgentType::SolutionAnalyzer => solution_analyzer::SYSTEM_PROMPT,
-        ChatAgentType::Developer => developer::SYSTEM_PROMPT,
+        ChatAgentType::Planner => *planner::SYSTEM_PROMPT_WITH_UNIT_BRIEFS,
+        ChatAgentType::ArchitectureAnalyzer => *architecture_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
+        ChatAgentType::SolutionAnalyzer => *solution_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
+        ChatAgentType::Developer => *developer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
     }
 }
 

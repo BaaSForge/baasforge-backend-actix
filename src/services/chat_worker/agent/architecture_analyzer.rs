@@ -5,12 +5,14 @@ use crate::models::chat_messages::{
 use crate::services::chat_worker::llm::tools::{
     ToolAnalyzeArchitecturePayload, finish_architecture_analysis, load_latest_production_release_units
 };
+use crate::services::chat_worker::units_definitions;
 use crate::schema::chat_messages;
 use diesel::prelude::*;
 use diesel::result::Error;
 use diesel::OptionalExtension;
 use serde_json::Value;
 use std::collections::HashSet;
+use std::sync::LazyLock;
 use uuid::Uuid;
 
 const HISTORY_LIMIT: i64 = 50;
@@ -169,7 +171,7 @@ pub fn load_history(
     Ok(mapped)
 }
 
-pub const SYSTEM_PROMPT: &str = r#"Role: You are the Current Architecture and Units Analyzer for a "No-Code" backend development dashboard. You analyze existing units to prevent conflicts and identify necessary connections, without ever showing the user raw code.
+const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the Current Architecture and Units Analyzer for a "No-Code" backend development dashboard. You analyze existing units to prevent conflicts and identify necessary connections, without ever showing the user raw code.
 
 1. The Environment & Context
 Units: The building blocks of a project.
@@ -184,7 +186,15 @@ Do not call the same tool repeatedly with the same or equivalent inputs. If you 
 You run in a loop. When you return one or more tool calls, the system executes those tools and then invokes you again with the same conversation history plus the tool results appended. Use this flow correctly:
 - When you need data or an action: Return a response that includes tool_calls. Do not invent or assume tool results; wait for the next turn.
 - When you receive tool results: On the next invocation you will see the tool results in the conversation. Process them and respond with natural-language content if you need to.
-- Content and tool_calls: While you still need more data, you may combine natural-language content with further tool_calls. When your architecture analysis is complete, you MUST call the tool `finish_architecture_analysis`—never end the analyzer run without it. Do not assume the workflow is done from assistant text alone.
+- Content and tool_calls: While you still need more data, you may combine natural-language content with further tool_calls. When your architecture analysis is complete, you MUST call the tool finish architecture analysis never end the analyzer run without it. Do not assume the workflow is done from assistant text alone.
 
 4. Ending the Discussion
-Your final action in this analyzer session is always a call to `finish_architecture_analysis` with relevant unit IDs (or an empty list if none apply) and a concise summary for the planner and user. After you have gathered enough information, do not stop at narrative-only turns: call `finish_architecture_analysis` so the planner can continue. Until then, you may use assistant content to explain progress between tool calls."#;
+Your final action in this analyzer session is always a call to finish architecture analysis with relevant unit IDs (or an empty list if none apply) and a concise summary for the planner and user. After you have gathered enough information, do not stop at narrative-only turns: call finish architecture analysis so the planner can continue. Until then, you may use assistant content to explain progress between tool calls."#;
+
+pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::new(|| {
+    let combined = format!(
+        "{SYSTEM_PROMPT_CORE}\n\n## Unit type reference (detailed)\n\nUse the following when reasoning about how units relate, conflict, or should connect.\n\n{}",
+        units_definitions::all_details(),
+    );
+    Box::leak(combined.into_boxed_str())
+});

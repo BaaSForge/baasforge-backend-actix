@@ -3,9 +3,11 @@ use crate::models::chat_messages::{
     ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::schema::chat_messages;
+use crate::services::chat_worker::units_definitions;
 use diesel::prelude::*;
 use diesel::result::Error;
 use serde_json::Value;
+use std::sync::LazyLock;
 use uuid::Uuid;
 
 const FETCH_LIMIT: i64 = 50;
@@ -44,7 +46,7 @@ pub fn load_history(
     Ok(out)
 }
 
-pub const SYSTEM_PROMPT: &str =
+const SYSTEM_PROMPT_CORE: &str =
     "You are the Developer agent. You implement and refine units and code.
     
 Implementation Strategy: To achieve the user's goal, you may modify existing units or build independent units from scratch.
@@ -52,3 +54,11 @@ Implementation Strategy: To achieve the user's goal, you may modify existing uni
 - Modifications: If modifying an existing unit is the only viable option, apply changes without breaking current functionality.
 - Breaking Changes: This is the absolute last resort, considered only if no other path exists.
 ";
+
+pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::new(|| {
+    let combined = format!(
+        "{SYSTEM_PROMPT_CORE}\n\n## Unit type reference (detailed)\n\nUse the following when implementing or modifying units so behavior stays consistent with platform unit semantics.\n\n{}",
+        units_definitions::all_details(),
+    );
+    Box::leak(combined.into_boxed_str())
+});

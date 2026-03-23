@@ -3,9 +3,11 @@ use crate::models::chat_messages::{
     ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::schema::chat_messages;
+use crate::services::chat_worker::units_definitions;
 use diesel::prelude::*;
 use diesel::result::Error;
 use serde_json::Value;
+use std::sync::LazyLock;
 use uuid::Uuid;
 
 const FETCH_LIMIT: i64 = 50;
@@ -44,5 +46,13 @@ pub fn load_history(
     Ok(out)
 }
 
-pub const SYSTEM_PROMPT: &str =
+const SYSTEM_PROMPT_CORE: &str =
     "You are the Solution Analyzer. You analyze user problems and propose solutions.";
+
+pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::new(|| {
+    let combined = format!(
+        "{SYSTEM_PROMPT_CORE}\n\n## Unit type reference (detailed)\n\nUse the following when shaping solutions and deciding how units should compose or change.\n\n{}",
+        units_definitions::all_details(),
+    );
+    Box::leak(combined.into_boxed_str())
+});
