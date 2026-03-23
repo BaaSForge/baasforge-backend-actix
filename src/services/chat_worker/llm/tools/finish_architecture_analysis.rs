@@ -9,6 +9,7 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_project_units_by_ids;
+use super::analyze_architecture_tool;
 use super::{maybe_complete_invoking_message, BoxError, ToolAnalyzeArchitecturePayload, ToolSpec};
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
@@ -205,7 +206,7 @@ pub async fn handler(
         related_units,
         summary,
         tool_call_id: analyze_payload.tool_call_id,
-        tool_name: analyze_payload.tool_name,
+        tool_name: Some(analyze_architecture_tool::TOOL_NAME.to_string()),
     };
 
     let merged_json = serde_json::to_value(&merged)

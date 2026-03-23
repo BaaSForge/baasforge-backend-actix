@@ -76,6 +76,7 @@ pub struct ProjectUnitInsert {
     pub unit_type: ProjectUnitType,
     pub is_draft: bool,
     pub chat_session_id: Option<Uuid>,
+    pub is_deleted: bool,
 }
 
 #[derive(Insertable)]
@@ -113,6 +114,7 @@ pub struct ProjectUnitResponse {
     pub unit_type: ProjectUnitType,
     pub is_draft: bool,
     pub chat_session_id: Option<Uuid>,
+    pub is_deleted: bool,
 }
 
 #[derive(Serialize, Queryable, Selectable)]

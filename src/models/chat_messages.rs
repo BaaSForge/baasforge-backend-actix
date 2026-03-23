@@ -13,6 +13,7 @@ use crate::services::chat_worker::llm::tools::{
     ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
     ToolFinishArchitectureAnalysisPayload, ToolFinishImplementationPayload,
     ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload, ToolModifyUnitPayload,
+    ToolRemoveUnitPayload,
 };
 
 /// One requested tool call from the LLM (GPT tool_call_id optional; Gemini has no id).
@@ -115,6 +116,7 @@ pub enum ChatMessageType {
     ToolFinishImplementation,
     ToolCreateUnit,
     ToolModifyUnit,
+    ToolRemoveUnit,
 }
 
 #[derive(Debug, DbEnum, Serialize, Clone, Deserialize, PartialEq)]
@@ -155,6 +157,7 @@ pub enum ChatMessagePayload {
     ToolFinishImplementation(ToolFinishImplementationPayload),
     ToolCreateUnit(ToolCreateUnitPayload),
     ToolModifyUnit(ToolModifyUnitPayload),
+    ToolRemoveUnit(ToolRemoveUnitPayload),
 }
 
 impl ChatMessagePayload {
@@ -213,6 +216,10 @@ impl ChatMessagePayload {
             ChatMessageType::ToolModifyUnit => {
                 let p = serde_json::from_value::<ToolModifyUnitPayload>(v)?;
                 ChatMessagePayload::ToolModifyUnit(p)
+            }
+            ChatMessageType::ToolRemoveUnit => {
+                let p = serde_json::from_value::<ToolRemoveUnitPayload>(v)?;
+                ChatMessagePayload::ToolRemoveUnit(p)
             }
         };
         Ok(Some(payload))

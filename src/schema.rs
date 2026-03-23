@@ -199,6 +199,7 @@ diesel::table! {
         is_draft -> Bool,
         chat_session_id -> Nullable<Uuid>,
         unit_type -> ProjectUnitType,
+        is_deleted -> Bool,
     }
 }
 

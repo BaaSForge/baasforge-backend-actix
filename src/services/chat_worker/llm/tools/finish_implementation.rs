@@ -8,6 +8,7 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::tools::ToolImplementSolutionPayload;
+use super::implement_solution_tool;
 use super::{maybe_complete_invoking_message, BoxError, ToolSpec};
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
@@ -169,7 +170,7 @@ pub async fn handler(
         args: implement_payload.args,
         implementation_summary,
         tool_call_id: implement_payload.tool_call_id,
-        tool_name: implement_payload.tool_name,
+        tool_name: Some(implement_solution_tool::TOOL_NAME.to_string()),
     };
 
     let merged_json = serde_json::to_value(&merged)

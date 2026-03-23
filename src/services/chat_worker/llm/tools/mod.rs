@@ -29,6 +29,7 @@ pub mod implement_solution_tool;
 pub mod load_latest_production_release_units;
 pub mod load_latest_releases;
 pub mod modify_unit;
+pub mod remove_unit;
 
 /// Re-exported for use in [`crate::models::chat_messages::ChatMessagePayload`].
 pub use analyze_architecture_tool::ToolAnalyzeArchitecturePayload;
@@ -41,6 +42,7 @@ pub use implement_solution_tool::ToolImplementSolutionPayload;
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
 pub use load_latest_releases::ToolFetchLatestReleasesPayload;
 pub use modify_unit::ToolModifyUnitPayload;
+pub use remove_unit::ToolRemoveUnitPayload;
 
 use crate::database::{DbPool, block_on_db_tokio};
 use crate::libs::ids::new_uuid;
@@ -157,6 +159,11 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             modify_unit::MESSAGE_TYPE,
             modify_unit::payload_from_args,
         ),
+        (
+            remove_unit::TOOL_NAME,
+            remove_unit::MESSAGE_TYPE,
+            remove_unit::payload_from_args,
+        ),
     ]
 }
 
@@ -198,8 +205,10 @@ pub fn tool_context_for_chat_session(
         let publisher = publisher.clone();
         let message_type = message_type.clone();
         let agent = agent.clone();
+        // Own the name per callback so `payload_from_args` always receives this tool’s name (same as the map key).
+        let registered_tool_name = (*name).to_string();
         callbacks.insert(
-            (*name).to_string(),
+            registered_tool_name.clone(),
             Arc::new(move |args: Value, tool_call_id: Option<String>| {
                 let publisher = publisher.clone();
                 let user_id = user_id;
@@ -208,9 +217,10 @@ pub fn tool_context_for_chat_session(
                 let message_type = message_type.clone();
                 let payload_from_args = payload_from_args;
                 let agent = agent.clone();
+                let registered_tool_name = registered_tool_name.clone();
                 Box::pin(async move {
                     let response_message_id = new_uuid();
-                    let payload = payload_from_args(args, tool_call_id, name)
+                    let payload = payload_from_args(args, tool_call_id, registered_tool_name.as_str())
                         .map_err(|e| -> BoxError { e })?;
                     let message = ChatSessionQueueMessage {
                         user_id: Some(user_id),
@@ -247,6 +257,7 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
         finish_implementation::spec(),
         create_unit::spec(),
         modify_unit::spec(),
+        remove_unit::spec(),
     ]
 }
 
@@ -460,6 +471,10 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                 (
                     modify_unit::MESSAGE_TYPE,
                     wrap_handler_with_payload(modify_unit::handler),
+                ),
+                (
+                    remove_unit::MESSAGE_TYPE,
+                    wrap_handler_with_payload(remove_unit::handler),
                 ),
             ]
         })

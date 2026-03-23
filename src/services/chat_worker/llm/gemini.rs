@@ -26,7 +26,7 @@ use uuid::Uuid;
 use super::tools::{
     self, analyze_architecture_tool, analyze_solution_tool, create_unit, finish_architecture_analysis,
     finish_implementation, finish_solution_analysis, implement_solution_tool,
-    load_latest_production_release_units, load_latest_releases, modify_unit,
+    load_latest_production_release_units, load_latest_releases, modify_unit, remove_unit,
 };
 use super::{BoxError, GeminiThinkingEnv};
 use crate::services::chat_worker::agent::tool_names_for_agent;
@@ -76,6 +76,10 @@ fn gemini_declaration_fns_by_name() -> &'static [(
         (
             modify_unit::TOOL_NAME,
             modify_unit::gemini_declaration,
+        ),
+        (
+            remove_unit::TOOL_NAME,
+            remove_unit::gemini_declaration,
         ),
     ]
 }
@@ -290,6 +294,13 @@ pub async fn call_gemini_stream(
     {
         chunk_count += 1;
         for (fc, thought_sig) in chunk.function_calls_with_thoughts() {
+            if fc.name.trim().is_empty() {
+                tracing::warn!(
+                    chunk_index = chunk_count,
+                    "Gemini: skipping streamed function call with empty name (partial chunk?)"
+                );
+                continue;
+            }
             all_function_calls.push((
                 fc.name.clone(),
                 fc.args.clone(),

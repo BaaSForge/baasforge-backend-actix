@@ -141,7 +141,7 @@ pub async fn handler(
         .map(|p| p.args.clone())
         .ok_or_else(|| -> BoxError { "modify_unit: missing payload".into() })?;
     let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
-    let tool_name = existing.as_ref().and_then(|p| p.tool_name.clone());
+    let tool_name = Some(TOOL_NAME.to_string());
 
     let parent_id = args.unit_id;
     let new_id = new_uuid();
@@ -173,6 +173,7 @@ pub async fn handler(
             unit_type: parent.unit_type,
             is_draft: true,
             chat_session_id: Some(session_id),
+            is_deleted: false,
         };
         let row = diesel::insert_into(project_units::table)
             .values(&insert)

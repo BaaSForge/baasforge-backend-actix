@@ -117,7 +117,7 @@ pub async fn handler(
         .map(|p| p.args.clone())
         .unwrap_or_default();
     let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
-    let tool_name = existing.as_ref().and_then(|p| p.tool_name.clone());
+    let tool_name = Some(TOOL_NAME.to_string());
     let limit = args.limit;
 
     let releases = block_on_db_tokio(&pool, move |conn| {
