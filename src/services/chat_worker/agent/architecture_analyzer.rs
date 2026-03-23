@@ -3,7 +3,7 @@ use crate::models::chat_messages::{
     ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::services::chat_worker::llm::tools::{
-    finish_architecture_analysis, ToolAnalyzeArchitecturePayload,
+    ToolAnalyzeArchitecturePayload, finish_architecture_analysis, load_latest_production_release_units
 };
 use crate::schema::chat_messages;
 use diesel::prelude::*;
@@ -79,7 +79,7 @@ fn synthetic_intent_user_message(
 
 pub fn tool_names() -> &'static [&'static str] {
     &[
-        // load_latest_production_release_units::TOOL_NAME,
+        load_latest_production_release_units::TOOL_NAME,
         finish_architecture_analysis::TOOL_NAME,
     ]
 }
@@ -169,6 +169,4 @@ pub fn load_history(
     Ok(mapped)
 }
 
-// pub const SYSTEM_PROMPT: &str = "You are the Current Architecture and Units Analyzer. You analyze the existing project units and architecture. Use the load tools to gather release and unit data as needed. When your analysis is complete, you MUST call the finish tool so the planner can continue.";
-// pub const SYSTEM_PROMPT: &str = "You are the Current Architecture and Units Analyzer. When its your turn, first you write something explaining who you are, then you call the tool `load_latest_production_release_units`, then call finish_architecture_analysis, when you get a chance to generate and you provide you response, there is a loop on the messages and you will be called again, so send this messages I told you one by one";
-pub const SYSTEM_PROMPT: &str = "You are the Current Architecture and Units Analyzer. Just call finish_architecture_analysis tool, nothing else";
+pub const SYSTEM_PROMPT: &str = "You are the Current Architecture and Units Analyzer. You analyze the existing project units and architecture. Use the load tools to gather release and unit data as needed, its better to write some explanation before and after calling the tools. When your analysis is complete, you MUST call the finish tool so the planner can continue.";
