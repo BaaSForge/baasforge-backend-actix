@@ -27,7 +27,8 @@ pub struct ToolAnalyzeArchitectureArgs {
 pub struct ToolAnalyzeArchitecturePayload {
     pub args: ToolAnalyzeArchitectureArgs,
     pub related_units: Vec<ProjectUnitResponse>,
-    pub summary: String,
+    #[serde(default, alias = "summary")]
+    pub detailed_report: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,7 +75,7 @@ pub fn payload_from_args(
         ToolAnalyzeArchitecturePayload {
             args,
             related_units: vec![],
-            summary: String::new(),
+            detailed_report: String::new(),
             tool_call_id,
             tool_name: Some(tool_name.to_string()),
         },

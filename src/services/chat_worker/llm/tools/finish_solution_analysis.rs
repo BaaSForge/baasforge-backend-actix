@@ -29,13 +29,13 @@ pub struct ToolFinishSolutionAnalysisPayload {
     pub tool_name: Option<String>,
 }
 
-pub const ARG_SOLUTION_SUMMARY_DESCRIPTION: &str =
-    "Concise summary of the proposed solution, trade-offs, and next steps for the planner and the user.";
+pub const ARG_DETAILED_REPORT_DESCRIPTION: &str =
+    "Complete solution analysis for the planner and user: recommended approach, alternatives considered, trade-offs, risks, sequencing, and what to implement—not a short recap. Write this only after all tool-based investigation is finished; omit trial-and-error, exploration steps, and intermediate reasoning.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFinishSolutionAnalysisArgs {
-    #[schemars(description = ARG_SOLUTION_SUMMARY_DESCRIPTION)]
-    pub solution_summary: String,
+    #[schemars(description = ARG_DETAILED_REPORT_DESCRIPTION)]
+    pub detailed_report: String,
 }
 
 pub const MESSAGE_TYPE: ChatMessageType = ChatMessageType::ToolFinishSolutionAnalysis;
@@ -45,7 +45,7 @@ pub const TOOL_NAME: &str = "finish_solution_analysis";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Call this when you are done with the solution analysis. Pass a concise summary so the planner can continue.",
+        description: "Call this when you are done with the solution analysis. Pass detailed_report: the full analysis (not a brief summary) so the planner can continue.",
         parameters: params_schema(),
     }
 }
@@ -54,12 +54,12 @@ fn params_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "solution_summary": {
+            "detailed_report": {
                 "type": "string",
-                "description": ARG_SOLUTION_SUMMARY_DESCRIPTION
+                "description": ARG_DETAILED_REPORT_DESCRIPTION
             }
         },
-        "required": ["solution_summary"]
+        "required": ["detailed_report"]
     })
 }
 
@@ -164,11 +164,11 @@ pub async fn handler(
         .await
         .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
 
-    let solution_summary = finish_payload.args.solution_summary.clone();
+    let detailed_report = finish_payload.args.detailed_report.clone();
 
     let merged = ToolAnalyzeSolutionPayload {
         args: analyze_payload.args,
-        solution_summary,
+        detailed_report,
         tool_call_id: analyze_payload.tool_call_id,
         tool_name: Some(analyze_solution_tool::TOOL_NAME.to_string()),
     };

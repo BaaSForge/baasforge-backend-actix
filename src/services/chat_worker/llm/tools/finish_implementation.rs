@@ -29,13 +29,13 @@ pub struct ToolFinishImplementationPayload {
     pub tool_name: Option<String>,
 }
 
-pub const ARG_IMPLEMENTATION_SUMMARY_DESCRIPTION: &str =
-    "Brief summary for the planner: what units were created or changed and the outcome.";
+pub const ARG_DETAILED_REPORT_DESCRIPTION: &str =
+    "Complete implementation report for the planner and user: what was created, modified, or removed (unit identities and behavior), how it satisfies the directive, and any caveats—not a short recap. Write this only after all implementation tool calls are done; omit trial-and-error, exploration steps, and intermediate reasoning.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFinishImplementationArgs {
-    #[schemars(description = ARG_IMPLEMENTATION_SUMMARY_DESCRIPTION)]
-    pub implementation_summary: String,
+    #[schemars(description = ARG_DETAILED_REPORT_DESCRIPTION)]
+    pub detailed_report: String,
 }
 
 pub const MESSAGE_TYPE: ChatMessageType = ChatMessageType::ToolFinishImplementation;
@@ -45,7 +45,7 @@ pub const TOOL_NAME: &str = "finish_implementation";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Call when implementation is done. Pass a concise summary so the planner can continue.",
+        description: "Call when implementation is done. Pass detailed_report: the full account of what was done (not a brief summary) so the planner can continue.",
         parameters: params_schema(),
     }
 }
@@ -54,12 +54,12 @@ fn params_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "implementation_summary": {
+            "detailed_report": {
                 "type": "string",
-                "description": ARG_IMPLEMENTATION_SUMMARY_DESCRIPTION
+                "description": ARG_DETAILED_REPORT_DESCRIPTION
             }
         },
-        "required": ["implementation_summary"]
+        "required": ["detailed_report"]
     })
 }
 
@@ -164,11 +164,11 @@ pub async fn handler(
         .await
         .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
 
-    let implementation_summary = finish_payload.args.implementation_summary.clone();
+    let detailed_report = finish_payload.args.detailed_report.clone();
 
     let merged = ToolImplementSolutionPayload {
         args: implement_payload.args,
-        implementation_summary,
+        detailed_report,
         tool_call_id: implement_payload.tool_call_id,
         tool_name: Some(implement_solution_tool::TOOL_NAME.to_string()),
     };

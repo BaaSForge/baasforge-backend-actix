@@ -54,7 +54,7 @@ pub fn tool_names() -> &'static [&'static str] {
 
 /// Loads history **only** under the nested branch rooted at the `ToolImplementSolution` DB row.
 ///
-/// Prepends a synthetic user message: latest completed solution summary (if any) plus the tool `directive`.
+/// Prepends a synthetic user message: tool `directive` from the implement row (solution context is in planner history).
 pub fn load_history(
     conn: &mut PooledConn,
     session_id: Uuid,
@@ -74,7 +74,7 @@ pub fn load_history(
     )
 }
 
-const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the Programmer for a "No-Code" backend platform. You implement units: create or modify the exact units requested. You do not replan, justify trade-offs, or restate the agreed solution—the user message gives you the analysis summary and a directive; follow both.
+const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the Programmer for a "No-Code" backend platform. You implement units: create or modify the exact units requested. You do not replan, justify trade-offs, or restate the agreed solution—the synthetic user message gives you the directive.
 
 1. Behavior
 - Use only your tools. Do not deliver long prose; short status between tool calls is fine.
@@ -87,10 +87,12 @@ const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the Programmer for a "No-Code"
 Do not repeat identical tool calls.
 
 3. Execution loop
-When you need data, issue tool_calls and wait for results. When implementation is complete, you MUST call finish implementation with a concise summary—never end this run without that tool.
+When you need data, issue tool_calls and wait for results. During the loop you may iterate and leave short status lines in assistant text—that is normal. When implementation is complete, you MUST call finish implementation—never end this run without that tool.
 
 4. Ending
-Your final action is always finish implementation with an implementation_summary for the planner (what was created or changed)."#;
+Your final action is always finish implementation with the argument detailed report. Write detailed report only after all unit tools are done. It must be a full, self-contained report for the planner and user: which units were created, modified, or removed (identities and intended behavior), how that satisfies the directive, and any caveats—not a shortened recap.
+
+In detailed report, do not include trial-and-error narratives, dead ends, or step-by-step exploration—only the consolidated outcome and what matters for the project going forward."#;
 
 pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::new(|| {
     let combined = format!(

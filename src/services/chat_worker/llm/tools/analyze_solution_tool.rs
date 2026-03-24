@@ -25,7 +25,8 @@ pub struct ToolAnalyzeSolutionArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolAnalyzeSolutionPayload {
     pub args: ToolAnalyzeSolutionArgs,
-    pub solution_summary: String,
+    #[serde(default, alias = "solution_summary")]
+    pub detailed_report: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,7 +71,7 @@ pub fn payload_from_args(
     let args = serde_json::from_value::<ToolAnalyzeSolutionArgs>(args).unwrap_or_default();
     Ok(ChatMessagePayload::ToolAnalyzeSolution(ToolAnalyzeSolutionPayload {
         args,
-        solution_summary: String::new(),
+        detailed_report: String::new(),
         tool_call_id,
         tool_name: Some(tool_name.to_string()),
     }))

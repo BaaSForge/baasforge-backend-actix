@@ -33,8 +33,8 @@ pub struct ToolFinishArchitectureAnalysisPayload {
 pub const ARG_RELEVANT_UNITS_IDS_DESCRIPTION: &str =
     "IDs of the project units most relevant to this analysis (use ids from units returned by tools). Use an empty array when there is no related units at all.";
 
-pub const ARG_SUMMARY_DESCRIPTION: &str =
-    "Concise summary of the architecture analysis for the planner and the user.";
+pub const ARG_DETAILED_REPORT_DESCRIPTION: &str =
+    "Complete architecture analysis for the planner and user: full explanation of current units, relationships, gaps, and risks—not a short recap. Write this only after all tool-based investigation is finished; omit trial-and-error, exploration steps, and intermediate reasoning.";
 
 fn relevant_unit_ids_gemini_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
     serde_json::from_value(json!({
@@ -49,8 +49,8 @@ fn relevant_unit_ids_gemini_schema(_gen: &mut schemars::SchemaGenerator) -> sche
 pub struct ToolFinishArchitectureAnalysisArgs {
     #[schemars(schema_with = "relevant_unit_ids_gemini_schema")]
     pub relevant_units_ids: Vec<Uuid>,
-    #[schemars(description = ARG_SUMMARY_DESCRIPTION)]
-    pub summary: String,
+    #[schemars(description = ARG_DETAILED_REPORT_DESCRIPTION)]
+    pub detailed_report: String,
 }
 
 pub const MESSAGE_TYPE: ChatMessageType = ChatMessageType::ToolFinishArchitectureAnalysis;
@@ -60,7 +60,7 @@ pub const TOOL_NAME: &str = "finish_architecture_analysis";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Call this when you are done with the architecture analysis. Pass relevant unit IDs (from tools provided), or an empty list if the project has no relevant units yet, plus a concise summary so the planner can continue.",
+        description: "Call this when you are done with the architecture analysis. Pass relevant unit IDs (from tools provided), or an empty list if the project has no relevant units yet, plus detailed_report: the full analysis (not a brief summary).",
         parameters: params_schema(),
     }
 }
@@ -74,12 +74,12 @@ fn params_schema() -> Value {
                 "description": ARG_RELEVANT_UNITS_IDS_DESCRIPTION,
                 "items": { "type": "string", "format": "uuid" }
             },
-            "summary": {
+            "detailed_report": {
                 "type": "string",
-                "description": ARG_SUMMARY_DESCRIPTION
+                "description": ARG_DETAILED_REPORT_DESCRIPTION
             }
         },
-        "required": ["relevant_units_ids", "summary"]
+        "required": ["relevant_units_ids", "detailed_report"]
     })
 }
 
@@ -103,7 +103,7 @@ pub fn payload_from_args(
     ))
 }
 
-/// Merges summary and units into the outer `ToolAnalyzeArchitecture` row, marks this tool and that
+/// Merges detailed_report and units into the outer `ToolAnalyzeArchitecture` row, marks this tool and that
 /// row completed, completes the nested analyzer `Text` without queueing another analyzer pass, then
 /// runs [`maybe_complete_invoking_message`] on the planner invoker (same effect as
 /// [`super::on_tool_message_finished`] for the outer tool).
@@ -189,7 +189,7 @@ pub async fn handler(
         .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
 
     let unit_ids = finish_payload.args.relevant_units_ids.clone();
-    let summary = finish_payload.args.summary.clone();
+    let detailed_report = finish_payload.args.detailed_report.clone();
 
     let related_units: Vec<ProjectUnitResponse> = if unit_ids.is_empty() {
         vec![]
@@ -204,7 +204,7 @@ pub async fn handler(
     let merged = ToolAnalyzeArchitecturePayload {
         args: analyze_payload.args,
         related_units,
-        summary,
+        detailed_report,
         tool_call_id: analyze_payload.tool_call_id,
         tool_name: Some(analyze_architecture_tool::TOOL_NAME.to_string()),
     };

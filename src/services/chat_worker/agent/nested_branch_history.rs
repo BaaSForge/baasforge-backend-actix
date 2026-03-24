@@ -1,6 +1,10 @@
 //! Shared history loading for nested sub-agents whose conversation hangs under an async tool row
 //! (e.g. `ToolAnalyzeArchitecture`, `ToolAnalyzeSolution`, `ToolImplementSolution`).
 //!
+//! These subtrees are **not** visible to the Planner’s other messages or to other agents’ subtrees;
+//! each invocation is a separate branch. The Planner must put carry-over context in **intent** /
+//! **directive** (see planner system prompt §2.1 and [`crate::services::chat_worker::agent::load_history_for_agent`]).
+//!
 //! History is scoped only by the **subtree** rooted at the anchor tool row (`invoking_message_id`
 //! edges). All **completed** messages in that subtree are included—no extra filter by tool type or
 //! agent.

@@ -26,7 +26,7 @@ pub struct ToolImplementSolutionArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolImplementSolutionPayload {
     pub args: ToolImplementSolutionArgs,
-    pub implementation_summary: String,
+    pub detailed_report: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,7 +72,7 @@ pub fn payload_from_args(
     Ok(ChatMessagePayload::ToolImplementSolution(
         ToolImplementSolutionPayload {
             args,
-            implementation_summary: String::new(),
+            detailed_report: String::new(),
             tool_call_id,
             tool_name: Some(tool_name.to_string()),
         },

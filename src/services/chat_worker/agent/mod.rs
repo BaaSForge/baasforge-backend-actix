@@ -33,6 +33,12 @@ pub fn system_prompt_for_agent(agent: &ChatAgentType) -> &'static str {
 /// corresponding tool row (`ToolAnalyzeArchitecture` / `ToolAnalyzeSolution` / `ToolImplementSolution`,
 /// same as queue `invoking_message_id` for that job); history is only that nested subtree. For other agents,
 /// see each `load_history` (Planner: unused; etc.).
+///
+/// **Planner prompt alignment:** Sub-agents do **not** share history with each other. Each tool invocation
+/// starts a **new** nested thread for that agent; they have no access to other agents’ past runs or to
+/// their own prior invocations. The only context the planner reliably injects is the **`intent`** or
+/// **`directive`** on the tool call (plus whatever that agent loads via its own tools). Anything the next
+/// sub-agent must “know” from a previous step must be repeated or summarized there by the planner.
 pub fn load_history_for_agent(
     conn: &mut PooledConn,
     session_id: Uuid,
