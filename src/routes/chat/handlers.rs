@@ -1,6 +1,7 @@
 use crate::database;
 use crate::libs::api_response::{api_error, api_success};
 use crate::libs::ids::new_uuid;
+use crate::libs::string::truncate_by_words;
 use crate::middlewares::auth::AccessPayload;
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessageCreateBody, ChatMessageInsert, ChatMessageResponse, ChatMessageRow,
@@ -597,10 +598,19 @@ pub async fn handle_list_chat_session_draft_units(
     ))
 }
 
+fn chat_session_title_from_string(preferredString: Option<String>) -> String {
+    let fallback = || format!("New chat session {}", Utc::now().format("%H:%M"));
+    
+    preferredString
+        .and_then(|m| truncate_by_words(m, 15))
+        .unwrap_or_else(fallback)
+}
+
 pub async fn handle_create_project_chat_session(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<Uuid>,
+    body: web::Json<CreateProjectChatSessionBody>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -610,12 +620,13 @@ pub async fn handle_create_project_chat_session(
 
     let project_id = path.into_inner();
     let user_id = access_payload.user_id;
+    let title = chat_session_title_from_string(body.into_inner().title);
 
     let chat_session = match database::block_on_db(&context.pool, move |conn| {
         let chat_session = ChatSessionInsert {
             project_id,
             user_id,
-            title: format!("New chat session {}", Utc::now().format("%H:%M")),
+            title,
             stage_project_runtime_id: None,
         };
         diesel::insert_into(chat_sessions::table)
@@ -637,6 +648,12 @@ pub async fn handle_create_project_chat_session(
         "Project chat session created successfully",
         json!(chat_session),
     ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateProjectChatSessionBody {
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
