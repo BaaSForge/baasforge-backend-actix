@@ -30,22 +30,28 @@ pub fn load_history(
     session_id: Uuid,
     _thread_anchor_message_id: Option<Uuid>,
 ) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
+    // Apply planner/user filter in SQL before LIMIT. Otherwise the last FETCH_LIMIT rows can be
+    // almost entirely developer (or other) sub-agent messages, and we drop planner tool-call /
+    // tool-result pairs from context — or worse, keep a tool result without its invoker turn.
     let rows = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))
-        .order(chat_messages::id.desc())
         .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
+        .filter(
+            chat_messages::role.eq(ChatSessionRoleType::User).or(
+                chat_messages::role.eq(ChatSessionRoleType::Ai).and(
+                    chat_messages::agent
+                        .eq(Some(ChatAgentType::Planner))
+                        .or(chat_messages::agent.is_null()),
+                ),
+            ),
+        )
+        .order(chat_messages::id.desc())
         .limit(FETCH_LIMIT)
         .select(ChatMessageRow::as_select())
         .load::<ChatMessageRow>(conn)?;
 
     let filtered: Vec<_> = rows
         .into_iter()
-        .filter(|row| match row.role {
-            ChatSessionRoleType::User => true,
-            ChatSessionRoleType::Ai => {
-                row.agent.as_ref() == Some(&ChatAgentType::Planner) || row.agent.is_none()
-            }
-        })
         .take(HISTORY_LIMIT as usize)
         .map(|row| (row.role, row.type_, row.payload))
         .collect();
