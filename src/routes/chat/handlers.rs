@@ -29,6 +29,7 @@ use crate::schema::projects;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 // use actix_ws::Message;
 use chrono::Utc;
+use diesel::dsl::not;
 use diesel::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
@@ -573,11 +574,32 @@ pub async fn handle_list_chat_session_draft_units(
         if session_exists.is_none() {
             return Err(diesel::result::Error::NotFound);
         }
-        project_units::table
+        // Only the tip of each revision chain: omit drafts that are another draft's parent.
+        let parent_ids: Vec<Uuid> = project_units::table
             .filter(project_units::chat_session_id.eq(session_id))
             .filter(project_units::is_draft.eq(true))
-            .select(ProjectUnitResponse::as_select())
-            .load::<ProjectUnitResponse>(conn)
+            .filter(project_units::parent_unit_id.is_not_null())
+            .select(project_units::parent_unit_id)
+            .distinct()
+            .load::<Option<Uuid>>(conn)?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        if parent_ids.is_empty() {
+            project_units::table
+                .filter(project_units::chat_session_id.eq(session_id))
+                .filter(project_units::is_draft.eq(true))
+                .select(ProjectUnitResponse::as_select())
+                .load::<ProjectUnitResponse>(conn)
+        } else {
+            project_units::table
+                .filter(project_units::chat_session_id.eq(session_id))
+                .filter(project_units::is_draft.eq(true))
+                .filter(not(project_units::id.eq_any(parent_ids.as_slice())))
+                .select(ProjectUnitResponse::as_select())
+                .load::<ProjectUnitResponse>(conn)
+        }
     })
     .await
     {
