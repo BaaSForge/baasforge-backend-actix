@@ -173,11 +173,15 @@ pub fn session_messages_to_upstream_entries(
             (ChatSessionRoleType::Ai, msg_type) if is_tool_result_type(msg_type) => {
                 let (tool_use_id, tool_name, content) =
                     tool_result_from_payload(msg_type, payload, &mut fallback_tool_id);
-                out.push(UpstreamHistoryEntry::ToolResult {
-                    tool_call_id: tool_use_id,
-                    tool_name,
-                    content,
-                });
+                if tool_name.is_empty() {
+                    tracing::debug!("skipping tool result message: empty tool_name in payload");
+                } else {
+                    out.push(UpstreamHistoryEntry::ToolResult {
+                        tool_call_id: tool_use_id,
+                        tool_name,
+                        content,
+                    });
+                }
             }
             (ChatSessionRoleType::Ai, ChatMessageType::Text) => {
                 if let Some(tp) = parse_text_payload(payload) {

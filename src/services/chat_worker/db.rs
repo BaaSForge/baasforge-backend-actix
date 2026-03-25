@@ -1,6 +1,7 @@
 use crate::database::PooledConn;
 use crate::models::projects::{ProjectReleaseResponse, ProjectUnitResponse};
 use crate::schema::{project_releases, project_units};
+use diesel::dsl::not;
 use diesel::prelude::*;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -10,6 +11,9 @@ use uuid::Uuid;
 /// Finds the production runtime's live_release_version, then the matching release, then units from its units_metadata.
 ///
 /// Draft revisions are only included when they belong to `chat_session_id`, so other sessions' drafts are never exposed.
+///
+/// Only the tip of each revision chain is returned: rows that are another unit's `parent_unit_id` are omitted
+/// (the child must pass the same visibility rules, so a newer draft in this session hides its parent).
 pub fn load_units_for_latest_production_release(
     conn: &mut PooledConn,
     project_id: Uuid,
@@ -59,16 +63,44 @@ pub fn load_units_for_latest_production_release(
     //     return Ok(vec![]);
     // }
 
-    project_units::table
+    // IDs of units that have a visible child revision — those parents are not the chain tip.
+    let parent_ids: Vec<Uuid> = project_units::table
         .filter(project_units::project_id.eq(project_id))
         .filter(
             project_units::is_draft
                 .eq(false)
                 .or(project_units::chat_session_id.eq(Some(chat_session_id))),
         )
-        // .filter(project_units::id.eq_any(&unit_ids))
-        .select(ProjectUnitResponse::as_select())
-        .load::<ProjectUnitResponse>(conn)
+        .filter(project_units::parent_unit_id.is_not_null())
+        .select(project_units::parent_unit_id)
+        .distinct()
+        .load::<Option<Uuid>>(conn)?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    if parent_ids.is_empty() {
+        project_units::table
+            .filter(project_units::project_id.eq(project_id))
+            .filter(
+                project_units::is_draft
+                    .eq(false)
+                    .or(project_units::chat_session_id.eq(Some(chat_session_id))),
+            )
+            .select(ProjectUnitResponse::as_select())
+            .load::<ProjectUnitResponse>(conn)
+    } else {
+        project_units::table
+            .filter(project_units::project_id.eq(project_id))
+            .filter(
+                project_units::is_draft
+                    .eq(false)
+                    .or(project_units::chat_session_id.eq(Some(chat_session_id))),
+            )
+            .filter(not(project_units::id.eq_any(parent_ids.as_slice())))
+            .select(ProjectUnitResponse::as_select())
+            .load::<ProjectUnitResponse>(conn)
+    }
 }
 
 // Order matches `unit_ids` (omits unknown ids).
