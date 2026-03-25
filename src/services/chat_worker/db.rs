@@ -8,9 +8,12 @@ use uuid::Uuid;
 // TODO: use vector db instead of postgres
 /// Load units that belong to the latest production release for the project.
 /// Finds the production runtime's live_release_version, then the matching release, then units from its units_metadata.
+///
+/// Draft revisions are only included when they belong to `chat_session_id`, so other sessions' drafts are never exposed.
 pub fn load_units_for_latest_production_release(
     conn: &mut PooledConn,
     project_id: Uuid,
+    chat_session_id: Uuid,
     query: &str,
 ) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
     tracing::debug!(query = %query, "load_units_for_latest_production_release");
@@ -58,6 +61,11 @@ pub fn load_units_for_latest_production_release(
 
     project_units::table
         .filter(project_units::project_id.eq(project_id))
+        .filter(
+            project_units::is_draft
+                .eq(false)
+                .or(project_units::chat_session_id.eq(Some(chat_session_id))),
+        )
         // .filter(project_units::id.eq_any(&unit_ids))
         .select(ProjectUnitResponse::as_select())
         .load::<ProjectUnitResponse>(conn)

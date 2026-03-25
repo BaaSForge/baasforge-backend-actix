@@ -118,7 +118,7 @@ pub async fn handler(
     let tool_name = Some(TOOL_NAME.to_string());
     let query_owned = args.query.clone();
     let units = block_on_db_tokio(&pool, move |conn| {
-        load_units_for_latest_production_release(conn, project_id, &query_owned)
+        load_units_for_latest_production_release(conn, project_id, session_id, &query_owned)
     })
     .await
     .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
