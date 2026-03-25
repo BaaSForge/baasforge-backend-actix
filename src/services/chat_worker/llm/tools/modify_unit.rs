@@ -1,5 +1,5 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
-use crate::libs::ids::new_uuid;
+use crate::libs::unit_slug::compose_unit_id;
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
@@ -20,20 +20,16 @@ use uuid::Uuid;
 
 use super::{BoxError, ToolSpec};
 
-/// Description for the `unit_id` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_UNIT_ID_DESCRIPTION: &str =
-    "Database id (UUID) of the unit you are revising; copy the exact id field value (hyphenated, 36 characters). Plain ASCII only—no backticks, quotes, or prefixes. Do not invent, abbreviate, or substitute a name or description.";
+    "Exact `id` from list or tool results: context.module.unit_kind.unit_name.revision (dot-separated)—copy the whole string.";
 /// Description for the `explanation` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_EXPLANATION_DESCRIPTION: &str =
     "English explanation of what this unit does (purpose, boundaries, how others use it).";
 /// Description for the `code` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_CODE_DESCRIPTION: &str =
     "Implementation for this unit in JavaScript.";
-/// Description for the `version` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
-pub const ARG_VERSION_DESCRIPTION: &str =
-    "New semantic version string for this revision (e.g. 0.0.2). Stored on the new draft row.";
 
-/// LLM JSON shape for `modify_unit`. Unit kind is taken from the parent row in the database.
+/// LLM JSON shape for `modify_unit`. Unit kind and slugs are taken from the parent row in the database.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 struct ModifyUnitLlmArgs {
     #[schemars(description = ARG_UNIT_ID_DESCRIPTION)]
@@ -42,16 +38,13 @@ struct ModifyUnitLlmArgs {
     explanation: String,
     #[schemars(description = ARG_CODE_DESCRIPTION)]
     code: String,
-    #[schemars(description = ARG_VERSION_DESCRIPTION)]
-    version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolModifyUnitArgs {
-    pub unit_id: Uuid,
+    pub unit_id: String,
     pub explanation: String,
     pub code: String,
-    pub version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -80,16 +73,14 @@ pub fn payload_from_args(
 ) -> Result<ChatMessagePayload, BoxError> {
     let raw = serde_json::from_value::<ModifyUnitLlmArgs>(args)
         .map_err(|e| -> BoxError { format!("modify_unit args: {}", e).into() })?;
-    let unit_id: Uuid = raw
-        .unit_id
-        .trim()
-        .parse()
-        .map_err(|e| -> BoxError { format!("modify_unit unit_id: {}", e).into() })?;
+    let unit_id = raw.unit_id.trim().to_string();
+    if unit_id.is_empty() {
+        return Err("modify_unit: unit_id must not be empty".into());
+    }
     let args = ToolModifyUnitArgs {
         unit_id,
         explanation: raw.explanation,
         code: raw.code,
-        version: raw.version,
     };
     Ok(ChatMessagePayload::ToolModifyUnit(ToolModifyUnitPayload {
         args,
@@ -104,12 +95,11 @@ fn params_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "unit_id": { "type": "string", "format": "uuid", "description": ARG_UNIT_ID_DESCRIPTION },
+            "unit_id": { "type": "string", "description": ARG_UNIT_ID_DESCRIPTION },
             "explanation": { "type": "string", "description": ARG_EXPLANATION_DESCRIPTION },
-            "code": { "type": "string", "description": ARG_CODE_DESCRIPTION },
-            "version": { "type": "string", "description": ARG_VERSION_DESCRIPTION }
+            "code": { "type": "string", "description": ARG_CODE_DESCRIPTION }
         },
-        "required": ["unit_id", "explanation", "code", "version"]
+        "required": ["unit_id", "explanation", "code"]
     })
 }
 
@@ -118,7 +108,7 @@ pub const TOOL_NAME: &str = "modify_unit";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Save a new draft revision of an existing unit. The `code` argument must be JavaScript. The unit kind is copied from the parent unit in the database. Persists a new draft row, and it points to the previous unit as its parent.",
+        description: "Save a new draft revision of an existing unit. Parent row is identified by `unit_id` (full dot-separated id including revision). Inserts a new row with the same slugs and session, new `id` with last segment revision+1, and `revision` = parent.revision + 1. The `code` argument must be JavaScript. Sets is_draft true.",
         parameters: params_schema(),
     }
 }
@@ -143,37 +133,41 @@ pub async fn handler(
     let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
     let tool_name = Some(TOOL_NAME.to_string());
 
-    let parent_id = args.unit_id;
-    let new_id = new_uuid();
-    let version = args.version.trim().to_string();
-    if version.is_empty() {
-        return Err("modify_unit: version must not be empty".into());
-    }
-
+    let parent_key = args.unit_id.clone();
     let code = args.code.clone();
     let explanation = args.explanation.clone();
 
     let result = block_on_db_tokio(&pool, move |conn| {
         let parent: Option<ProjectUnitResponse> = project_units::table
-            .filter(project_units::id.eq(parent_id))
             .filter(project_units::project_id.eq(project_id))
+            .filter(project_units::chat_session_id.eq(session_id))
+            .filter(project_units::id.eq(&parent_key))
             .select(ProjectUnitResponse::as_select())
             .first(conn)
             .optional()?;
         let Some(parent) = parent else {
             return Ok(Err("modify_unit: unit not found for this project".to_string()));
         };
+        let new_id = compose_unit_id(
+            &parent.context_slug,
+            &parent.module_slug,
+            parent.unit_type.as_slug(),
+            &parent.unit_name_slug,
+            parent.revision + 1,
+        );
         let insert = ProjectUnitInsert {
-            id: new_id,
             project_id,
+            chat_session_id: parent.chat_session_id,
+            id: new_id,
+            revision: parent.revision + 1,
             code: Some(code),
             explanation: Some(explanation),
-            version,
-            parent_unit_id: Some(parent_id),
             unit_type: parent.unit_type,
             is_draft: true,
-            chat_session_id: Some(session_id),
             is_deleted: false,
+            context_slug: parent.context_slug.clone(),
+            module_slug: parent.module_slug.clone(),
+            unit_name_slug: parent.unit_name_slug.clone(),
         };
         let row = diesel::insert_into(project_units::table)
             .values(&insert)

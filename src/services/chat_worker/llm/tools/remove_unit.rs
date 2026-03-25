@@ -1,6 +1,5 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
-use crate::libs::ids::new_uuid;
-use crate::libs::semver::bump_major_version;
+use crate::libs::unit_slug::compose_unit_id;
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
@@ -22,7 +21,7 @@ use uuid::Uuid;
 use super::modify_unit::ARG_UNIT_ID_DESCRIPTION;
 use super::{BoxError, ToolSpec};
 
-/// LLM JSON shape for `remove_unit`. Unit kind and new version are derived in the database.
+/// LLM JSON shape for `remove_unit`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 struct RemoveUnitLlmArgs {
     #[schemars(description = ARG_UNIT_ID_DESCRIPTION)]
@@ -31,7 +30,7 @@ struct RemoveUnitLlmArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolRemoveUnitArgs {
-    pub unit_id: Uuid,
+    pub unit_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -59,11 +58,10 @@ pub fn payload_from_args(
 ) -> Result<ChatMessagePayload, BoxError> {
     let raw = serde_json::from_value::<RemoveUnitLlmArgs>(args)
         .map_err(|e| -> BoxError { format!("remove_unit args: {}", e).into() })?;
-    let unit_id: Uuid = raw
-        .unit_id
-        .trim()
-        .parse()
-        .map_err(|e| -> BoxError { format!("remove_unit unit_id: {}", e).into() })?;
+    let unit_id = raw.unit_id.trim().to_string();
+    if unit_id.is_empty() {
+        return Err("remove_unit: unit_id must not be empty".into());
+    }
     let args = ToolRemoveUnitArgs { unit_id };
     Ok(ChatMessagePayload::ToolRemoveUnit(ToolRemoveUnitPayload {
         args,
@@ -78,7 +76,7 @@ fn params_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "unit_id": { "type": "string", "format": "uuid", "description": ARG_UNIT_ID_DESCRIPTION }
+            "unit_id": { "type": "string", "description": ARG_UNIT_ID_DESCRIPTION }
         },
         "required": ["unit_id"]
     })
@@ -89,7 +87,7 @@ pub const TOOL_NAME: &str = "remove_unit";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Mark a unit as removed without deleting its history. Inserts a new draft row with empty code, the parent unit’s explanation preserved, is_deleted true, semantic version bumped by one major (breaking), same unit kind as the parent, parent_unit_id pointing at the unit you pass, and is_draft true.",
+        description: "Soft-remove a unit by inserting a new draft revision: empty code, explanation copied, is_deleted true, new `id` with last segment revision+1, same `chat_session_id` and slugs as the parent row.",
         parameters: params_schema(),
     }
 }
@@ -114,13 +112,13 @@ pub async fn handler(
     let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
     let tool_name = Some(TOOL_NAME.to_string());
 
-    let parent_id = args.unit_id;
-    let new_id = new_uuid();
+    let parent_key = args.unit_id.clone();
 
     let result = block_on_db_tokio(&pool, move |conn| {
         let parent: Option<ProjectUnitResponse> = project_units::table
-            .filter(project_units::id.eq(parent_id))
             .filter(project_units::project_id.eq(project_id))
+            .filter(project_units::chat_session_id.eq(session_id))
+            .filter(project_units::id.eq(&parent_key))
             .select(ProjectUnitResponse::as_select())
             .first(conn)
             .optional()?;
@@ -134,21 +132,26 @@ pub async fn handler(
                 "remove_unit: this unit revision is already marked deleted".to_string(),
             ));
         }
-        let version = match bump_major_version(&parent.version) {
-            Ok(v) => v,
-            Err(msg) => return Ok(Err(format!("remove_unit: {}", msg))),
-        };
+        let new_id = compose_unit_id(
+            &parent.context_slug,
+            &parent.module_slug,
+            parent.unit_type.as_slug(),
+            &parent.unit_name_slug,
+            parent.revision + 1,
+        );
         let insert = ProjectUnitInsert {
-            id: new_id,
             project_id,
+            chat_session_id: parent.chat_session_id,
+            id: new_id,
+            revision: parent.revision + 1,
             code: Some(String::new()),
             explanation: parent.explanation.clone(),
-            version,
-            parent_unit_id: Some(parent_id),
             unit_type: parent.unit_type,
             is_draft: true,
-            chat_session_id: Some(session_id),
             is_deleted: true,
+            context_slug: parent.context_slug.clone(),
+            module_slug: parent.module_slug.clone(),
+            unit_name_slug: parent.unit_name_slug.clone(),
         };
         let row = diesel::insert_into(project_units::table)
             .values(&insert)

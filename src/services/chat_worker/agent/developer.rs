@@ -81,7 +81,7 @@ const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the Programmer for a "No-Code"
 - Brevity: Say as little as possible in assistant text while **`detailed_report`** must still list every necessary outcome—unit ids, what changed, behavior, caveats—using the fewest words that preserve that information. Shorter is better if nothing is lost.
 - Prefer new units over edits when both work; if you must change an existing unit, preserve behavior outside the requested delta.
 - **Code language:** All implementation you put in the `code` field of create unit and modify unit must be **JavaScript**.
-- **modify_unit:** You cannot change the unit kind when revising; the new draft row keeps the parent unit’s type. To use a different kind, create a new unit with create_unit instead. Pass `unit_id` as the exact `id` field (a full hyphenated UUID), not a label or paraphrase or inside any backticks or double quotes.
+- **modify_unit:** You cannot change the unit kind when revising; the new draft row keeps the parent unit’s type. To use a different kind, create a new unit with create_unit instead. Pass `unit_id` as the exact `id` field from list or tool results (dot-separated: context.module.kind.name.revision)—copy it verbatim, not a label or paraphrase.
 - **remove_unit:** Soft-removes a unit by inserting a new draft revision with empty code, explanation copied from the parent revision, is_deleted true, and a major semver bump (breaking). Same `unit_id` rules as modify_unit. Use when the directive asks to delete or drop a unit.
 
 2. Tool use

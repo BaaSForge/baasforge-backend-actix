@@ -1,5 +1,5 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
-use crate::libs::ids::new_uuid;
+use crate::libs::unit_slug::{compose_unit_id, is_valid_slug};
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
@@ -27,12 +27,24 @@ pub const ARG_EXPLANATION_DESCRIPTION: &str =
 /// Description for the `code` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_CODE_DESCRIPTION: &str =
     "Implementation for this unit in JavaScript.";
+pub const ARG_CONTEXT_SLUG_DESCRIPTION: &str =
+    "Bounded context slug: only English lowercase letters and hyphen (-), e.g. inventory.";
+pub const ARG_MODULE_SLUG_DESCRIPTION: &str =
+    "Module slug within the context: only English lowercase letters and hyphen (-), e.g. stock-levels.";
+pub const ARG_UNIT_NAME_SLUG_DESCRIPTION: &str =
+    "Unit name slug describing what this unit does: only English lowercase letters and hyphen (-), e.g. adjust-levels.";
 
-const INITIAL_UNIT_VERSION: &str = "0.0.1";
+const INITIAL_REVISION: i32 = 1;
 
 /// LLM JSON shape for `create_unit`; `unit_type` is parsed to [`ProjectUnitType`] in [`payload_from_args`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 struct CreateUnitLlmArgs {
+    #[schemars(description = ARG_CONTEXT_SLUG_DESCRIPTION)]
+    context_slug: String,
+    #[schemars(description = ARG_MODULE_SLUG_DESCRIPTION)]
+    module_slug: String,
+    #[schemars(description = ARG_UNIT_NAME_SLUG_DESCRIPTION)]
+    unit_name_slug: String,
     #[schemars(description = ARG_EXPLANATION_DESCRIPTION)]
     explanation: String,
     #[schemars(description = ARG_CODE_DESCRIPTION)]
@@ -43,6 +55,9 @@ struct CreateUnitLlmArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCreateUnitArgs {
+    pub context_slug: String,
+    pub module_slug: String,
+    pub unit_name_slug: String,
     pub explanation: String,
     pub code: String,
     pub unit_type: ProjectUnitType,
@@ -76,7 +91,22 @@ pub fn payload_from_args(
         .map_err(|e| -> BoxError { format!("create_unit args: {}", e).into() })?;
     let unit_type: ProjectUnitType = serde_json::from_value(json!(raw.unit_type.trim()))
         .map_err(|e| -> BoxError { format!("create_unit unit_type: {}", e).into() })?;
+    let context_slug = raw.context_slug.trim().to_string();
+    let module_slug = raw.module_slug.trim().to_string();
+    let unit_name_slug = raw.unit_name_slug.trim().to_string();
+    if !is_valid_slug(&context_slug) {
+        return Err("create_unit: context_slug must be only English lowercase letters and hyphens (-)".into());
+    }
+    if !is_valid_slug(&module_slug) {
+        return Err("create_unit: module_slug must be only English lowercase letters and hyphens (-)".into());
+    }
+    if !is_valid_slug(&unit_name_slug) {
+        return Err("create_unit: unit_name_slug must be only English lowercase letters and hyphens (-)".into());
+    }
     let args = ToolCreateUnitArgs {
+        context_slug,
+        module_slug,
+        unit_name_slug,
         explanation: raw.explanation,
         code: raw.code,
         unit_type,
@@ -94,6 +124,9 @@ fn params_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
+            "context_slug": { "type": "string", "description": ARG_CONTEXT_SLUG_DESCRIPTION },
+            "module_slug": { "type": "string", "description": ARG_MODULE_SLUG_DESCRIPTION },
+            "unit_name_slug": { "type": "string", "description": ARG_UNIT_NAME_SLUG_DESCRIPTION },
             "explanation": { "type": "string", "description": ARG_EXPLANATION_DESCRIPTION },
             "code": { "type": "string", "description": ARG_CODE_DESCRIPTION },
             "unit_type": {
@@ -102,7 +135,7 @@ fn params_schema() -> Value {
                 "description": units_definitions::unit_type_description_for_tools()
             }
         },
-        "required": ["explanation", "code", "unit_type"]
+        "required": ["context_slug", "module_slug", "unit_name_slug", "explanation", "code", "unit_type"]
     })
 }
 
@@ -111,7 +144,7 @@ pub const TOOL_NAME: &str = "create_unit";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Create a new draft unit for this project. The `code` argument must be JavaScript. Inserts a new row with is_draft true.",
+        description: "Create a new draft unit for this project. Provide context_slug, module_slug, and unit_name_slug (English lowercase and hyphens only). The row `id` is those parts and unit kind, dot-separated, with revision as the last segment (1 for a new unit). The `code` argument must be JavaScript. Inserts a new row with is_draft true.",
         parameters: params_schema(),
     }
 }
@@ -136,18 +169,26 @@ pub async fn handler(
     let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
     let tool_name = Some(TOOL_NAME.to_string());
 
-    let new_id = new_uuid();
+    let id = compose_unit_id(
+        &args.context_slug,
+        &args.module_slug,
+        args.unit_type.as_slug(),
+        &args.unit_name_slug,
+        INITIAL_REVISION,
+    );
     let insert = ProjectUnitInsert {
-        id: new_id,
         project_id,
+        chat_session_id: session_id,
+        id,
+        revision: INITIAL_REVISION,
         code: Some(args.code.clone()),
         explanation: Some(args.explanation.clone()),
-        version: INITIAL_UNIT_VERSION.to_string(),
-        parent_unit_id: None,
         unit_type: args.unit_type.clone(),
         is_draft: true,
-        chat_session_id: Some(session_id),
         is_deleted: false,
+        context_slug: args.context_slug.clone(),
+        module_slug: args.module_slug.clone(),
+        unit_name_slug: args.unit_name_slug.clone(),
     };
 
     let created = block_on_db_tokio(&pool, move |conn| {

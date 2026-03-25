@@ -45,7 +45,7 @@ pub enum PlatformEnvironmentType {
     Prod,
 }
 
-#[derive(Debug, PartialEq, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, diesel_derive_enum::DbEnum, Serialize, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::ProjectUnitType"]
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
@@ -63,20 +63,40 @@ pub enum ProjectUnitType {
     Timer,
 }
 
+impl ProjectUnitType {
+    pub fn as_slug(&self) -> &'static str {
+        match self {
+            Self::Bootstrap => "bootstrap",
+            Self::Action => "action",
+            Self::Api => "api",
+            Self::Command => "command",
+            Self::Flow => "flow",
+            Self::Gateway => "gateway",
+            Self::Projection => "projection",
+            Self::Query => "query",
+            Self::Runtime => "runtime",
+            Self::Schema => "schema",
+            Self::Timer => "timer",
+        }
+    }
+}
+
 #[derive(Insertable)]
 #[diesel(table_name = crate::schema::project_units)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectUnitInsert {
-    pub id: Uuid,
     pub project_id: Uuid,
+    pub chat_session_id: Uuid,
+    pub id: String,
+    pub revision: i32,
     pub code: Option<String>,
     pub explanation: Option<String>,
-    pub version: String,
-    pub parent_unit_id: Option<Uuid>,
-    pub unit_type: ProjectUnitType,
     pub is_draft: bool,
-    pub chat_session_id: Option<Uuid>,
+    pub unit_type: ProjectUnitType,
     pub is_deleted: bool,
+    pub context_slug: String,
+    pub module_slug: String,
+    pub unit_name_slug: String,
 }
 
 #[derive(Insertable)]
@@ -105,16 +125,18 @@ pub struct ProjectResponse {
 #[diesel(table_name = crate::schema::project_units)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectUnitResponse {
-    pub id: Uuid,
     pub project_id: Uuid,
+    pub chat_session_id: Uuid,
+    pub id: String,
+    pub revision: i32,
     pub code: Option<String>,
     pub explanation: Option<String>,
-    pub version: String,
-    pub parent_unit_id: Option<Uuid>,
-    pub unit_type: ProjectUnitType,
     pub is_draft: bool,
-    pub chat_session_id: Option<Uuid>,
+    pub unit_type: ProjectUnitType,
     pub is_deleted: bool,
+    pub context_slug: String,
+    pub module_slug: String,
+    pub unit_name_slug: String,
 }
 
 #[derive(Serialize, Queryable, Selectable)]

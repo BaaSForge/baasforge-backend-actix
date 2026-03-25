@@ -548,21 +548,25 @@ pub async fn handle_list_project_release_units(
     let (project_id, release_version) = path.into_inner();
     let user_id = access_payload.user_id;
 
-    // TODO: retrieve units ids from release metadata
-    let units_ids_from_release_metadata: Vec<Uuid> = vec![];
+    // TODO: retrieve (chat_session_id, unit id string) pairs from release metadata (id includes revision)
+    let units_keys_from_release_metadata: Vec<(Uuid, String)> = vec![];
 
     let units = match database::block_on_db(&context.pool, move |conn| {
-        let ids = units_ids_from_release_metadata;
-        if ids.is_empty() {
+        let keys = units_keys_from_release_metadata;
+        let project_owned = projects::table
+            .filter(projects::id.eq(project_id))
+            .filter(projects::owner_user_id.eq(user_id))
+            .select(projects::id)
+            .first::<Uuid>(conn)
+            .optional()?
+            .is_some();
+        if !project_owned {
             return Ok::<_, diesel::result::Error>(vec![]);
         }
-        project_units::table
-            .inner_join(projects::table.on(project_units::project_id.eq(projects::id)))
-            .filter(projects::owner_user_id.eq(user_id))
-            .filter(project_units::project_id.eq(project_id))
-            .filter(project_units::id.eq_any(&ids))
-            .select(ProjectUnitResponse::as_select())
-            .load::<ProjectUnitResponse>(conn)
+        if keys.is_empty() {
+            return Ok(vec![]);
+        }
+        crate::services::chat_worker::db::load_project_units_by_keys(conn, project_id, &keys)
     })
     .await
     {

@@ -8,7 +8,7 @@ use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent}
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
-use crate::services::chat_worker::db::load_project_units_by_ids;
+use crate::services::chat_worker::db::load_project_units_by_keys;
 use super::analyze_architecture_tool;
 use super::{maybe_complete_invoking_message, BoxError, ToolAnalyzeArchitecturePayload, ToolSpec};
 use crate::services::message_queue::SharedRabbitPublisher;
@@ -30,25 +30,16 @@ pub struct ToolFinishArchitectureAnalysisPayload {
     pub tool_name: Option<String>,
 }
 
-pub const ARG_RELEVANT_UNITS_IDS_DESCRIPTION: &str =
-    "IDs of the project units most relevant to this analysis (use ids from units returned by tools). Use an empty array when there is no related units at all.";
+pub const ARG_RELEVANT_UNIT_IDS_DESCRIPTION: &str =
+    "Most relevant unit IDs for this analysis: each array element is one full unit id string (dot-separated: context.module.kind.name.revision), as returned by tools or list payloads. Use an empty array when there are no related units.";
 
 pub const ARG_DETAILED_REPORT_DESCRIPTION: &str =
     "Complete architecture analysis for the planner and user: full explanation of current units, relationships, gaps, and risks—not a short recap. Write this only after all tool-based investigation is finished; omit trial-and-error, exploration steps, and intermediate reasoning.";
 
-fn relevant_unit_ids_gemini_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    serde_json::from_value(json!({
-        "type": "array",
-        "description": ARG_RELEVANT_UNITS_IDS_DESCRIPTION,
-        "items": { "type": "string", "format": "uuid" }
-    }))
-    .expect("static JSON Schema fragment")
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFinishArchitectureAnalysisArgs {
-    #[schemars(schema_with = "relevant_unit_ids_gemini_schema")]
-    pub relevant_units_ids: Vec<Uuid>,
+    #[schemars(description = ARG_RELEVANT_UNIT_IDS_DESCRIPTION)]
+    pub relevant_unit_ids: Vec<String>,
     #[schemars(description = ARG_DETAILED_REPORT_DESCRIPTION)]
     pub detailed_report: String,
 }
@@ -60,7 +51,7 @@ pub const TOOL_NAME: &str = "finish_architecture_analysis";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Call this when you are done with the architecture analysis. Pass relevant unit IDs (from tools provided), or an empty list if the project has no relevant units yet, plus detailed_report: the full analysis (not a brief summary).",
+        description: "Call this when you are done with the architecture analysis. Pass relevant_unit_ids as an array of full dot-separated unit id strings (or [] if none), plus detailed_report: the full analysis (not a brief summary).",
         parameters: params_schema(),
     }
 }
@@ -69,17 +60,20 @@ fn params_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "relevant_units_ids": {
+            "relevant_unit_ids": {
                 "type": "array",
-                "description": ARG_RELEVANT_UNITS_IDS_DESCRIPTION,
-                "items": { "type": "string", "format": "uuid" }
+                "description": ARG_RELEVANT_UNIT_IDS_DESCRIPTION,
+                "items": {
+                    "type": "string",
+                    "description": "Full unit id (dot-separated: context.module.kind.name.revision)."
+                }
             },
             "detailed_report": {
                 "type": "string",
                 "description": ARG_DETAILED_REPORT_DESCRIPTION
             }
         },
-        "required": ["relevant_units_ids", "detailed_report"]
+        "required": ["relevant_unit_ids", "detailed_report"]
     })
 }
 
@@ -188,14 +182,20 @@ pub async fn handler(
         .await
         .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
 
-    let unit_ids = finish_payload.args.relevant_units_ids.clone();
+    let keys: Vec<(Uuid, String)> = finish_payload
+        .args
+        .relevant_unit_ids
+        .iter()
+        .map(|id| (session_id, id.trim().to_string()))
+        .filter(|(_, id)| !id.is_empty())
+        .collect();
     let detailed_report = finish_payload.args.detailed_report.clone();
 
-    let related_units: Vec<ProjectUnitResponse> = if unit_ids.is_empty() {
+    let related_units: Vec<ProjectUnitResponse> = if keys.is_empty() {
         vec![]
     } else {
         block_on_db_tokio(&pool, move |conn| {
-            load_project_units_by_ids(conn, project_id, &unit_ids)
+            load_project_units_by_keys(conn, project_id, &keys)
         })
         .await
         .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?

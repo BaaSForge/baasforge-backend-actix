@@ -188,18 +188,22 @@ diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::ProjectUnitType;
 
-    project_units (id) {
-        id -> Uuid,
+    project_units (project_id, chat_session_id, id) {
         project_id -> Uuid,
         code -> Nullable<Text>,
         explanation -> Nullable<Text>,
-        #[max_length = 50]
-        version -> Varchar,
-        parent_unit_id -> Nullable<Uuid>,
         is_draft -> Bool,
-        chat_session_id -> Nullable<Uuid>,
+        chat_session_id -> Uuid,
         unit_type -> ProjectUnitType,
         is_deleted -> Bool,
+        #[max_length = 255]
+        context_slug -> Varchar,
+        #[max_length = 255]
+        module_slug -> Varchar,
+        #[max_length = 255]
+        unit_name_slug -> Varchar,
+        id -> Text,
+        revision -> Int4,
     }
 }
 
