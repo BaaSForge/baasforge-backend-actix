@@ -12,7 +12,8 @@ use crate::services::chat_worker::llm::tools::{
     ToolAnalyzeArchitecturePayload, ToolAnalyzeSolutionPayload, ToolCreateUnitPayload,
     ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
     ToolFinishArchitectureAnalysisPayload, ToolFinishImplementationPayload,
-    ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload, ToolModifyUnitPayload,
+    ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload,
+    ToolListModulesForUnitContextsPayload, ToolListUnitContextsPayload, ToolModifyUnitPayload,
     ToolRemoveUnitPayload,
 };
 
@@ -108,6 +109,8 @@ pub enum ChatMessageType {
     Units,
     ToolFetchRelevantUnits,
     ToolFetchLatestReleases,
+    ToolListUnitContexts,
+    ToolListModulesForUnitContexts,
     ToolAnalyzeArchitecture,
     ToolFinishArchitectureAnalysis,
     ToolAnalyzeSolution,
@@ -149,12 +152,16 @@ pub enum ChatMessagePayload {
     Units(Vec<ProjectUnitResponse>),
     ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
     ToolFetchLatestReleases(ToolFetchLatestReleasesPayload),
+    // Tool payloads with `args` objects must appear before `ToolListUnitContexts`: its args struct is
+    // empty and would otherwise steal JSON meant for these variants (`untagged` deserialize order).
     ToolAnalyzeArchitecture(ToolAnalyzeArchitecturePayload),
     ToolFinishArchitectureAnalysis(ToolFinishArchitectureAnalysisPayload),
     ToolAnalyzeSolution(ToolAnalyzeSolutionPayload),
     ToolFinishSolutionAnalysis(ToolFinishSolutionAnalysisPayload),
     ToolImplementSolution(ToolImplementSolutionPayload),
     ToolFinishImplementation(ToolFinishImplementationPayload),
+    ToolListUnitContexts(ToolListUnitContextsPayload),
+    ToolListModulesForUnitContexts(ToolListModulesForUnitContextsPayload),
     ToolCreateUnit(ToolCreateUnitPayload),
     ToolModifyUnit(ToolModifyUnitPayload),
     ToolRemoveUnit(ToolRemoveUnitPayload),
@@ -184,6 +191,14 @@ impl ChatMessagePayload {
             ChatMessageType::ToolFetchLatestReleases => {
                 let p = serde_json::from_value::<ToolFetchLatestReleasesPayload>(v)?;
                 ChatMessagePayload::ToolFetchLatestReleases(p)
+            }
+            ChatMessageType::ToolListUnitContexts => {
+                let p = serde_json::from_value::<ToolListUnitContextsPayload>(v)?;
+                ChatMessagePayload::ToolListUnitContexts(p)
+            }
+            ChatMessageType::ToolListModulesForUnitContexts => {
+                let p = serde_json::from_value::<ToolListModulesForUnitContextsPayload>(v)?;
+                ChatMessagePayload::ToolListModulesForUnitContexts(p)
             }
             ChatMessageType::ToolAnalyzeArchitecture => {
                 let p = serde_json::from_value::<ToolAnalyzeArchitecturePayload>(v)?;

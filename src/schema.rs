@@ -188,7 +188,7 @@ diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::ProjectUnitType;
 
-    project_units (project_id, chat_session_id, id) {
+    project_units (project_id, chat_session_id, id, revision) {
         project_id -> Uuid,
         code -> Nullable<Text>,
         explanation -> Nullable<Text>,

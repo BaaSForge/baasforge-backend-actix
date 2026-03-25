@@ -26,7 +26,8 @@ use uuid::Uuid;
 use super::tools::{
     self, analyze_architecture_tool, analyze_solution_tool, create_unit, finish_architecture_analysis,
     finish_implementation, finish_solution_analysis, implement_solution_tool,
-    load_latest_production_release_units, load_latest_releases, modify_unit, remove_unit,
+    list_modules_for_unit_contexts, list_unit_contexts, load_latest_production_release_units,
+    load_latest_releases, modify_unit, remove_unit,
 };
 use super::{BoxError, GeminiThinkingEnv};
 use crate::services::chat_worker::agent::tool_names_for_agent;
@@ -44,6 +45,14 @@ fn gemini_declaration_fns_by_name() -> &'static [(
         (
             load_latest_releases::TOOL_NAME,
             load_latest_releases::gemini_declaration,
+        ),
+        (
+            list_unit_contexts::TOOL_NAME,
+            list_unit_contexts::gemini_declaration,
+        ),
+        (
+            list_modules_for_unit_contexts::TOOL_NAME,
+            list_modules_for_unit_contexts::gemini_declaration,
         ),
         (
             analyze_architecture_tool::TOOL_NAME,
@@ -94,6 +103,38 @@ fn to_gemini_declarations_for_agent(
         .filter(|(name, _)| names.contains(name))
         .map(|(_, f)| f())
         .collect()
+}
+
+/// `gemini-rust` builds parameter JSON Schema with schemars OpenAPI settings, which includes
+/// `additionalProperties`. The Gemini REST API rejects that key on `function_declarations[].parameters`.
+fn strip_additional_properties_in_schema(v: &mut Value) {
+    match v {
+        Value::Object(map) => {
+            map.remove("additionalProperties");
+            for child in map.values_mut() {
+                strip_additional_properties_in_schema(child);
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                strip_additional_properties_in_schema(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sanitize_gemini_function_declaration(
+    decl: FunctionDeclaration,
+) -> Result<FunctionDeclaration, BoxError> {
+    let mut v = serde_json::to_value(&decl).map_err(|e| -> BoxError { e.to_string().into() })?;
+    if let Some(params) = v.get_mut("parameters") {
+        strip_additional_properties_in_schema(params);
+    }
+    if let Some(resp) = v.get_mut("response") {
+        strip_additional_properties_in_schema(resp);
+    }
+    serde_json::from_value(v).map_err(|e| -> BoxError { e.to_string().into() })
 }
 
 fn gemini_model_id(model: &str) -> String {
@@ -154,7 +195,10 @@ pub async fn call_gemini_stream(
         .map_err(|e| format!("Gemini client: {}", e))?;
 
     let system_prompt = system_prompt_for_agent(&agent);
-    let declarations: Vec<FunctionDeclaration> = to_gemini_declarations_for_agent(&agent);
+    let declarations: Vec<FunctionDeclaration> = to_gemini_declarations_for_agent(&agent)
+        .into_iter()
+        .map(sanitize_gemini_function_declaration)
+        .collect::<Result<Vec<_>, _>>()?;
     let mut full_text = String::new();
     let mut full_thinking = String::new();
     let mut thinking_signature_capture: Option<String> = None;

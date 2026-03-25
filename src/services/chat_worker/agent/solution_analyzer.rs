@@ -3,7 +3,8 @@ use crate::models::chat_messages::{ChatMessageType, ChatSessionRoleType};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::nested_branch_history::load_nested_branch_history;
 use crate::services::chat_worker::llm::tools::{
-    finish_solution_analysis, load_latest_production_release_units,
+    finish_solution_analysis, list_modules_for_unit_contexts, list_unit_contexts,
+    load_latest_production_release_units,
 };
 use crate::services::chat_worker::units_definitions;
 use diesel::prelude::*;
@@ -39,6 +40,8 @@ fn synthetic_first_user_text(
 pub fn tool_names() -> &'static [&'static str] {
     &[
         load_latest_production_release_units::TOOL_NAME,
+        list_unit_contexts::TOOL_NAME,
+        list_modules_for_unit_contexts::TOOL_NAME,
         finish_solution_analysis::TOOL_NAME,
     ]
 }
@@ -77,7 +80,7 @@ Units: Small, single-purpose functions (Lambda-style). Each has a Version, Hidde
 Your output informs the planner and user: what to build or change, what to reuse, risks, and sequencing—without writing implementation code.
 
 3. Tool Use
-Use tools to load factual data about the project (e.g. current units in production) when your plan depends on it. Do not call the same tool repeatedly with the same or equivalent inputs. If you already have the result in the conversation, use it. Only invoke a tool when you need fresh data or a new action.
+Use tools to load factual data about the project when your plan depends on it: **load_latest_production_release_units** for unit detail by query, **list_unit_contexts** for all distinct bounded contexts in use, and **list_modules_for_unit_contexts** for module slugs within chosen contexts—so you can recommend grouping and naming that fits existing domains. Do not call the same tool repeatedly with the same or equivalent inputs. If you already have the result in the conversation, use it. Only invoke a tool when you need fresh data or a new action.
 
 3.1. Execution Loop (How Your Turns Work)
 You run in a loop. When you return one or more tool calls, the system executes those tools and then invokes you again with the same conversation history plus the tool results appended. Use this flow correctly:

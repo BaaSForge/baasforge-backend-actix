@@ -3,7 +3,8 @@ use crate::models::chat_messages::{ChatMessageType, ChatSessionRoleType};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::nested_branch_history::load_nested_branch_history;
 use crate::services::chat_worker::llm::tools::{
-    finish_architecture_analysis, load_latest_production_release_units,
+    finish_architecture_analysis, list_modules_for_unit_contexts, list_unit_contexts,
+    load_latest_production_release_units,
 };
 use crate::services::chat_worker::units_definitions;
 use diesel::prelude::*;
@@ -39,6 +40,8 @@ fn synthetic_first_user_text(
 pub fn tool_names() -> &'static [&'static str] {
     &[
         load_latest_production_release_units::TOOL_NAME,
+        list_unit_contexts::TOOL_NAME,
+        list_modules_for_unit_contexts::TOOL_NAME,
         finish_architecture_analysis::TOOL_NAME,
     ]
 }
@@ -79,6 +82,7 @@ Units: The building blocks of a project.
 Units: Small, single-purpose functions (Lambda-style). Each has a Version, Hidden Code, and a Plain English Explanation. Units can trigger one another to create complex workflows.
 
 3. Tool Use
+Use **list_unit_contexts** to see which bounded contexts (`context_slug`) already exist project-wide, and **list_modules_for_unit_contexts** with specific context slugs to see distinct modules inside those contexts. Use them as domain boundaries or naming collisions matters a lot.
 Do not call the same tool repeatedly with the same or equivalent inputs. If you already have the result of a tool call in the conversation, use that information instead of calling the tool again. Only invoke a tool when you genuinely need fresh data or a new action.
 
 3.1. Execution Loop (How Your Turns Work)

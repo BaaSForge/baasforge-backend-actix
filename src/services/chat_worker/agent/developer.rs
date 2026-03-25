@@ -5,7 +5,8 @@ use crate::models::chat_messages::{
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::nested_branch_history::load_nested_branch_history;
 use crate::services::chat_worker::llm::tools::{
-    create_unit, finish_implementation, modify_unit, remove_unit,
+    create_unit, finish_implementation, list_modules_for_unit_contexts, list_unit_contexts,
+    modify_unit, remove_unit,
 };
 use crate::services::chat_worker::units_definitions;
 use diesel::prelude::*;
@@ -45,6 +46,8 @@ fn synthetic_first_user_text(
 
 pub fn tool_names() -> &'static [&'static str] {
     &[
+        list_unit_contexts::TOOL_NAME,
+        list_modules_for_unit_contexts::TOOL_NAME,
         create_unit::TOOL_NAME,
         modify_unit::TOOL_NAME,
         remove_unit::TOOL_NAME,
@@ -79,6 +82,7 @@ const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the Programmer for a "No-Code"
 1. Behavior
 - Use only your tools. Do not deliver long prose; short status between tool calls is fine.
 - Brevity: Say as little as possible in assistant text while **`detailed_report`** must still list every necessary outcome—unit ids, what changed, behavior, caveats—using the fewest words that preserve that information. Shorter is better if nothing is lost.
+- **Before every `create_unit` call:** You MUST first call **list_unit_contexts** (and, when you need module placement, **list_modules_for_unit_contexts** for the relevant context slugs) in this run so you reuse an existing bounded context or module when it fits the directive—avoid inventing a new `context_slug` or `module_slug` that duplicates or near-duplicates an existing domain. Never skip these calls.
 - Prefer new units over edits when both work; if you must change an existing unit, preserve behavior outside the requested delta.
 - **Code language:** All implementation you put in the `code` field of create unit and modify unit must be **JavaScript**.
 - **modify_unit:** You cannot change the unit kind when revising; the new draft row keeps the parent unit’s type. To use a different kind, create a new unit with create_unit instead. Pass `unit_id` as the exact `id` field from list or tool results (dot-separated: context.module.kind.name.revision)—copy it verbatim, not a label or paraphrase.

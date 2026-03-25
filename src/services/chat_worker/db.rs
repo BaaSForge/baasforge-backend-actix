@@ -3,7 +3,7 @@ use crate::models::projects::{ProjectReleaseResponse, ProjectUnitResponse};
 use crate::schema::{project_releases, project_units};
 use diesel::dsl::{exists, not};
 use diesel::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 /// Columns for [`ProjectUnitResponse`] when selecting from a `project_units` alias (order matches the struct).
@@ -108,6 +108,121 @@ pub fn load_units_for_latest_production_release(
         )))
         .select(select_project_unit_response!(pu_outer))
         .load::<ProjectUnitResponse>(conn)
+}
+
+/// Distinct `context_slug` values among visible tip units (same visibility and revision-tip rules as
+/// [`load_units_for_latest_production_release`]).
+pub fn list_distinct_context_slugs_visible_tip_units(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    chat_session_id: Uuid,
+) -> Result<Vec<String>, diesel::result::Error> {
+    let (pu_outer, pu_inner) = diesel::alias!(
+        crate::schema::project_units as pu_outer,
+        crate::schema::project_units as pu_inner
+    );
+
+    pu_outer
+        .filter(pu_outer.field(project_units::project_id).eq(project_id))
+        .filter(release_visibility!(pu_outer, chat_session_id))
+        .filter(not(exists(
+            pu_inner.filter(
+                inner_is_newer_same_unit!(pu_outer, pu_inner)
+                    .and(pu_inner.field(project_units::project_id).eq(project_id))
+                    .and(release_visibility!(pu_inner, chat_session_id)),
+            ),
+        )))
+        .select(pu_outer.field(project_units::context_slug))
+        .distinct()
+        .order_by(pu_outer.field(project_units::context_slug))
+        .load::<String>(conn)
+}
+
+/// Distinct `(context_slug, module_slug)` pairs for the given contexts, using the same visible tip rules
+/// as [`load_units_for_latest_production_release`].
+pub fn list_distinct_context_module_pairs_visible_tip_units(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    chat_session_id: Uuid,
+    context_slugs: &[String],
+) -> Result<Vec<(String, String)>, diesel::result::Error> {
+    if context_slugs.is_empty() {
+        return Ok(vec![]);
+    }
+    let (pu_outer, pu_inner) = diesel::alias!(
+        crate::schema::project_units as pu_outer,
+        crate::schema::project_units as pu_inner
+    );
+
+    pu_outer
+        .filter(pu_outer.field(project_units::project_id).eq(project_id))
+        .filter(release_visibility!(pu_outer, chat_session_id))
+        .filter(
+            pu_outer
+                .field(project_units::context_slug)
+                .eq_any(context_slugs),
+        )
+        .filter(not(exists(
+            pu_inner.filter(
+                inner_is_newer_same_unit!(pu_outer, pu_inner)
+                    .and(pu_inner.field(project_units::project_id).eq(project_id))
+                    .and(release_visibility!(pu_inner, chat_session_id)),
+            ),
+        )))
+        .select((
+            pu_outer.field(project_units::context_slug),
+            pu_outer.field(project_units::module_slug),
+        ))
+        .distinct()
+        .order_by((
+            pu_outer.field(project_units::context_slug),
+            pu_outer.field(project_units::module_slug),
+        ))
+        .load::<(String, String)>(conn)
+}
+
+/// Builds ordered module lists per context (one entry per `contexts` element, stable order, deduped request).
+pub fn modules_by_context_slugs_visible_tip_units(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    chat_session_id: Uuid,
+    context_slugs: &[String],
+) -> Result<Vec<(String, Vec<String>)>, diesel::result::Error> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut ordered: Vec<String> = Vec::new();
+    for s in context_slugs {
+        let t = s.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if seen.insert(t.to_string()) {
+            ordered.push(t.to_string());
+        }
+    }
+    if ordered.is_empty() {
+        return Ok(vec![]);
+    }
+    let pairs = list_distinct_context_module_pairs_visible_tip_units(
+        conn,
+        project_id,
+        chat_session_id,
+        &ordered,
+    )?;
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for (ctx, module) in pairs {
+        map.entry(ctx).or_default().push(module);
+    }
+    for mods in map.values_mut() {
+        mods.sort();
+        mods.dedup();
+    }
+    Ok(ordered
+        .into_iter()
+        .map(|c| {
+            let modules = map.remove(&c).unwrap_or_default();
+            (c, modules)
+        })
+        .collect())
 }
 
 /// Draft units for a chat session: one row per logical unit (max `revision` among draft rows in that session).

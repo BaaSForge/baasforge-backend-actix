@@ -26,6 +26,8 @@ pub mod finish_architecture_analysis;
 pub mod finish_implementation;
 pub mod finish_solution_analysis;
 pub mod implement_solution_tool;
+pub mod list_modules_for_unit_contexts;
+pub mod list_unit_contexts;
 pub mod load_latest_production_release_units;
 pub mod load_latest_releases;
 pub mod modify_unit;
@@ -39,6 +41,8 @@ pub use finish_architecture_analysis::ToolFinishArchitectureAnalysisPayload;
 pub use finish_implementation::ToolFinishImplementationPayload;
 pub use finish_solution_analysis::ToolFinishSolutionAnalysisPayload;
 pub use implement_solution_tool::ToolImplementSolutionPayload;
+pub use list_modules_for_unit_contexts::ToolListModulesForUnitContextsPayload;
+pub use list_unit_contexts::ToolListUnitContextsPayload;
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
 pub use load_latest_releases::ToolFetchLatestReleasesPayload;
 pub use modify_unit::ToolModifyUnitPayload;
@@ -118,6 +122,16 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             load_latest_releases::TOOL_NAME,
             load_latest_releases::MESSAGE_TYPE,
             load_latest_releases::payload_from_args,
+        ),
+        (
+            list_unit_contexts::TOOL_NAME,
+            list_unit_contexts::MESSAGE_TYPE,
+            list_unit_contexts::payload_from_args,
+        ),
+        (
+            list_modules_for_unit_contexts::TOOL_NAME,
+            list_modules_for_unit_contexts::MESSAGE_TYPE,
+            list_modules_for_unit_contexts::payload_from_args,
         ),
         (
             analyze_architecture_tool::TOOL_NAME,
@@ -249,6 +263,8 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
     vec![
         load_latest_production_release_units::spec(),
         load_latest_releases::spec(),
+        list_unit_contexts::spec(),
+        list_modules_for_unit_contexts::spec(),
         analyze_architecture_tool::spec(),
         finish_architecture_analysis::spec(),
         analyze_solution_tool::spec(),
@@ -439,6 +455,14 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                 (
                     load_latest_releases::MESSAGE_TYPE,
                     wrap_handler_with_payload(load_latest_releases::handler),
+                ),
+                (
+                    list_unit_contexts::MESSAGE_TYPE,
+                    wrap_handler_with_payload(list_unit_contexts::handler),
+                ),
+                (
+                    list_modules_for_unit_contexts::MESSAGE_TYPE,
+                    wrap_handler_with_payload(list_modules_for_unit_contexts::handler),
                 ),
                 (
                     analyze_architecture_tool::MESSAGE_TYPE,
