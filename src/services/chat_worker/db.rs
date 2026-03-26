@@ -293,3 +293,76 @@ pub fn load_latest_releases(
         .select(ProjectReleaseResponse::as_select())
         .load::<ProjectReleaseResponse>(conn)
 }
+
+/// Releases for `project_id` whose `chat_session_id` is in `session_ids`, grouped by session (newest first per group).
+pub fn load_owned_releases_by_chat_session(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<ProjectReleaseResponse>>, diesel::result::Error> {
+    if session_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<ProjectReleaseResponse> = project_releases::table
+        .filter(project_releases::project_id.eq(project_id))
+        .filter(project_releases::chat_session_id.eq_any(session_ids))
+        .order(project_releases::created_at.desc())
+        .select(ProjectReleaseResponse::as_select())
+        .load(conn)?;
+
+    let mut map: HashMap<Uuid, Vec<ProjectReleaseResponse>> = session_ids
+        .iter()
+        .map(|&id| (id, Vec::new()))
+        .collect();
+
+    for r in rows {
+        if let Some(sid) = r.chat_session_id {
+            if let Some(vec) = map.get_mut(&sid) {
+                vec.push(r);
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// Latest revision per logical unit for each session (same “no newer revision exists” pattern as
+/// [`load_chat_session_draft_units_latest_revision`], without filtering on `is_draft`).
+pub fn load_owned_unit_tips_for_chat_sessions(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<ProjectUnitResponse>>, diesel::result::Error> {
+    if session_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let (pu_outer, pu_inner) = diesel::alias!(
+        crate::schema::project_units as pu_outer,
+        crate::schema::project_units as pu_inner
+    );
+
+    let rows: Vec<ProjectUnitResponse> = pu_outer
+        .filter(pu_outer.field(project_units::project_id).eq(project_id))
+        .filter(pu_outer.field(project_units::chat_session_id).eq_any(session_ids))
+        .filter(not(exists(
+            pu_inner.filter(
+                inner_is_newer_same_unit!(pu_outer, pu_inner)
+                    .and(pu_inner.field(project_units::project_id).eq(project_id)),
+            ),
+        )))
+        .select(select_project_unit_response!(pu_outer))
+        .load::<ProjectUnitResponse>(conn)?;
+
+    let mut by_session: HashMap<Uuid, Vec<ProjectUnitResponse>> = HashMap::new();
+    for u in rows {
+        by_session.entry(u.chat_session_id).or_default().push(u);
+    }
+    for vec in by_session.values_mut() {
+        vec.sort_by(|a, b| {
+            a.context_slug
+                .cmp(&b.context_slug)
+                .then_with(|| a.module_slug.cmp(&b.module_slug))
+                .then_with(|| a.unit_name_slug.cmp(&b.unit_name_slug))
+        });
+    }
+    Ok(by_session)
+}

@@ -178,4 +178,5 @@ pub struct ProjectReleaseResponse {
     pub notes: Option<String>,
     pub units_metadata: Option<Value>,
     pub created_at: DateTime<Utc>,
+    pub chat_session_id: Option<Uuid>,
 }

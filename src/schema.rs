@@ -153,6 +153,7 @@ diesel::table! {
         units_metadata -> Nullable<Jsonb>,
         created_at -> Timestamptz,
         notes -> Nullable<Text>,
+        chat_session_id -> Nullable<Uuid>,
     }
 }
 
@@ -277,6 +278,7 @@ diesel::joinable!(chat_sessions -> projects (project_id));
 diesel::joinable!(chat_sessions -> users (user_id));
 diesel::joinable!(payments -> packages (package_id));
 diesel::joinable!(payments -> users (user_id));
+diesel::joinable!(project_releases -> chat_sessions (chat_session_id));
 diesel::joinable!(project_releases -> projects (project_id));
 diesel::joinable!(project_runtimes -> db_clusters (db_cluster_id));
 diesel::joinable!(project_runtimes -> projects (project_id));

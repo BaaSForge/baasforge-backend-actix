@@ -26,7 +26,10 @@ use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
 use crate::schema::project_runtimes;
 use crate::schema::projects;
-use crate::services::chat_worker::db::load_chat_session_draft_units_latest_revision;
+use crate::services::chat_worker::db::{
+    load_chat_session_draft_units_latest_revision, load_owned_unit_tips_for_chat_sessions,
+    load_owned_releases_by_chat_session,
+};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 // use actix_ws::Message;
 use chrono::Utc;
@@ -89,11 +92,24 @@ pub async fn handle_list_project_chat_sessions(
             latest_by_session_id.insert(message.chat_session_id, message);
         }
 
+        let owned_releases_by_session =
+            load_owned_releases_by_chat_session(conn, project_id, &session_ids)?;
+        let owned_units_by_session =
+            load_owned_unit_tips_for_chat_sessions(conn, project_id, &session_ids)?;
+
         Ok::<_, diesel::result::Error>(
             sessions
                 .into_iter()
                 .map(|session| ChatSessionWithLastMessageResponse {
                     last_message: latest_by_session_id.remove(&session.id),
+                    owned_units: owned_units_by_session
+                        .get(&session.id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    owned_releases: owned_releases_by_session
+                        .get(&session.id)
+                        .cloned()
+                        .unwrap_or_default(),
                     session,
                 })
                 .collect(),

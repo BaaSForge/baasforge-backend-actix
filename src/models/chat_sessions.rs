@@ -1,5 +1,5 @@
-use crate::models::projects::ProjectRuntimeResponse;
 use crate::models::chat_messages::ChatMessageResponse;
+use crate::models::projects::{ProjectReleaseResponse, ProjectRuntimeResponse, ProjectUnitResponse};
 use chrono::{DateTime, Utc};
 use diesel::Insertable;
 use diesel::Queryable;
@@ -31,6 +31,8 @@ pub struct ChatSessionWithLastMessageResponse {
     #[serde(flatten)]
     pub session: ChatSessionResponse,
     pub last_message: Option<ChatMessageResponse>,
+    pub owned_units: Vec<ProjectUnitResponse>,
+    pub owned_releases: Vec<ProjectReleaseResponse>,
 }
 
 #[derive(Insertable)]
