@@ -9,6 +9,7 @@ use crate::routes::ws::events::{
     ChatSessionNewMessageChunkPayload, ChatSessionNewThinkingChunkPayload, WsServerEvent,
 };
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
+use crate::libs::ids::new_uuid;
 use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::history::{
@@ -445,7 +446,7 @@ pub async fn call_gemini_stream(
         let requested: Vec<RequestedToolCall> = all_function_calls
             .iter()
             .map(|(name, args, thought_sig)| RequestedToolCall {
-                tool_call_id: None, // Gemini does not provide tool call ids in stream
+                tool_call_id: Some(new_uuid().to_string()),
                 tool_name: name.clone(),
                 tool_arguments_to_pass: args.clone(),
                 thought_signature: thought_sig.clone(),
@@ -475,9 +476,9 @@ pub async fn call_gemini_stream(
             }
         }
 
-        for (name, args, _thought_sig) in &all_function_calls {
+        for (req, (name, args, _thought_sig)) in requested.iter().zip(all_function_calls.iter()) {
             tracing::info!(tool = %name, args = ?args, "Gemini: executing tool");
-            tools::execute_tool_async(name, args.clone(), None)
+            tools::execute_tool_async(name, args.clone(), req.tool_call_id.clone())
                 .await
                 .map_err(|e| format!("Tool execution failed: {}", e))?;
         }
