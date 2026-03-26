@@ -3,7 +3,7 @@ use crate::libs::unit_slug::compose_unit_id;
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
-use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse};
+use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow};
 use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
@@ -138,11 +138,11 @@ pub async fn handler(
     let explanation = args.explanation.clone();
 
     let result = block_on_db_tokio(&pool, move |conn| {
-        let parent: Option<ProjectUnitResponse> = project_units::table
+        let parent: Option<ProjectUnitRow> = project_units::table
             .filter(project_units::project_id.eq(project_id))
             .filter(project_units::chat_session_id.eq(session_id))
             .filter(project_units::id.eq(&parent_key))
-            .select(ProjectUnitResponse::as_select())
+            .select(ProjectUnitRow::as_select())
             .first(conn)
             .optional()?;
         let Some(parent) = parent else {
@@ -171,14 +171,17 @@ pub async fn handler(
         };
         let row = diesel::insert_into(project_units::table)
             .values(&insert)
-            .returning(ProjectUnitResponse::as_returning())
-            .get_result::<ProjectUnitResponse>(conn)?;
+            .returning(ProjectUnitRow::as_returning())
+            .get_result::<ProjectUnitRow>(conn)?;
         Ok(Ok(row))
     })
     .await;
 
     let (revised_unit, error): (Option<ProjectUnitResponse>, Option<String>) = match result {
-        Ok(Ok(u)) => (Some(u), None),
+        Ok(Ok(u)) => {
+            let rev = u.revision;
+            (Some(ProjectUnitResponse::from_row(u, rev)), None)
+        }
         Ok(Err(msg)) => (None, Some(msg)),
         Err(e) => {
             tracing::error!(%message_id, "modify_unit: {}", e);

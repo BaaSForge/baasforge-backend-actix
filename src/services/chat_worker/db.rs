@@ -1,13 +1,15 @@
 use crate::database::PooledConn;
-use crate::models::projects::{ProjectReleaseResponse, ProjectUnitResponse};
+use crate::models::projects::{
+    ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType,
+};
 use crate::schema::{project_releases, project_units};
-use diesel::dsl::{exists, not};
+use diesel::dsl::{exists, max, not};
 use diesel::prelude::*;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-/// Columns for [`ProjectUnitResponse`] when selecting from a `project_units` alias (order matches the struct).
-macro_rules! select_project_unit_response {
+/// Columns for [`ProjectUnitRow`] when selecting from a `project_units` alias (order matches the struct).
+macro_rules! select_project_unit_row {
     ($a:expr) => {
         (
             $a.field(project_units::project_id),
@@ -24,6 +26,66 @@ macro_rules! select_project_unit_response {
             $a.field(project_units::unit_name_slug),
         )
     };
+}
+
+/// For each logical unit `(chat_session_id, context_slug, module_slug, unit_type, unit_name_slug)` under
+/// `project_id`, compute `MAX(revision)` and attach it as `latest_revision` on each row.
+pub fn project_units_with_latest_revision(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    rows: Vec<ProjectUnitRow>,
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    if rows.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let aggregates: Vec<(
+        Uuid,
+        String,
+        String,
+        ProjectUnitType,
+        String,
+        Option<i32>,
+    )> = project_units::table
+        .filter(project_units::project_id.eq(project_id))
+        .group_by((
+            project_units::chat_session_id,
+            project_units::context_slug,
+            project_units::module_slug,
+            project_units::unit_type,
+            project_units::unit_name_slug,
+        ))
+        .select((
+            project_units::chat_session_id,
+            project_units::context_slug,
+            project_units::module_slug,
+            project_units::unit_type,
+            project_units::unit_name_slug,
+            max(project_units::revision),
+        ))
+        .load(conn)?;
+
+    let mut map: HashMap<(Uuid, String, String, ProjectUnitType, String), i32> = HashMap::new();
+    for (sid, ctx, module, utype, unit_name, max_rev) in aggregates {
+        if let Some(m) = max_rev {
+            map.insert((sid, ctx, module, utype, unit_name), m);
+        }
+    }
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let key = (
+                row.chat_session_id,
+                row.context_slug.clone(),
+                row.module_slug.clone(),
+                row.unit_type,
+                row.unit_name_slug.clone(),
+            );
+            let latest = map.get(&key).copied().unwrap_or(row.revision);
+            ProjectUnitResponse::from_row(row, latest)
+        })
+        .collect())
 }
 
 /// `inner` is the same logical unit as `outer` and has a strictly larger `revision`.
@@ -106,8 +168,9 @@ pub fn load_units_for_latest_production_release(
                     .and(release_visibility!(pu_inner, chat_session_id)),
             ),
         )))
-        .select(select_project_unit_response!(pu_outer))
-        .load::<ProjectUnitResponse>(conn)
+        .select(select_project_unit_row!(pu_outer))
+        .load::<ProjectUnitRow>(conn)
+        .and_then(|rows| project_units_with_latest_revision(conn, project_id, rows))
 }
 
 /// Distinct `context_slug` values among visible tip units (same visibility and revision-tip rules as
@@ -248,8 +311,9 @@ pub fn load_chat_session_draft_units_latest_revision(
                     .and(pu_inner.field(project_units::is_draft).eq(true)),
             ),
         )))
-        .select(select_project_unit_response!(pu_outer))
-        .load::<ProjectUnitResponse>(conn)
+        .select(select_project_unit_row!(pu_outer))
+        .load::<ProjectUnitRow>(conn)
+        .and_then(|rows| project_units_with_latest_revision(conn, project_id, rows))
 }
 
 /// Order matches `keys` (omits unknown pairs). Each key is `(chat_session_id, id)`; `id` is the full stored id including revision.
@@ -261,23 +325,24 @@ pub fn load_project_units_by_keys(
     if keys.is_empty() {
         return Ok(vec![]);
     }
-    let mut by_key: HashMap<(Uuid, String), ProjectUnitResponse> = HashMap::new();
+    let mut by_key: HashMap<(Uuid, String), ProjectUnitRow> = HashMap::new();
     for (chat_session_id, id) in keys {
-        let row: Option<ProjectUnitResponse> = project_units::table
+        let row: Option<ProjectUnitRow> = project_units::table
             .filter(project_units::project_id.eq(project_id))
             .filter(project_units::chat_session_id.eq(chat_session_id))
             .filter(project_units::id.eq(id))
-            .select(ProjectUnitResponse::as_select())
+            .select(ProjectUnitRow::as_select())
             .first(conn)
             .optional()?;
         if let Some(u) = row {
             by_key.insert((*chat_session_id, id.clone()), u);
         }
     }
-    Ok(keys
+    let ordered: Vec<ProjectUnitRow> = keys
         .iter()
         .filter_map(|(s, id)| by_key.remove(&(*s, id.clone())))
-        .collect())
+        .collect();
+    project_units_with_latest_revision(conn, project_id, ordered)
 }
 
 pub fn load_latest_releases(
@@ -340,7 +405,7 @@ pub fn load_owned_unit_tips_for_chat_sessions(
         crate::schema::project_units as pu_inner
     );
 
-    let rows: Vec<ProjectUnitResponse> = pu_outer
+    let rows: Vec<ProjectUnitRow> = pu_outer
         .filter(pu_outer.field(project_units::project_id).eq(project_id))
         .filter(pu_outer.field(project_units::chat_session_id).eq_any(session_ids))
         .filter(not(exists(
@@ -349,11 +414,13 @@ pub fn load_owned_unit_tips_for_chat_sessions(
                     .and(pu_inner.field(project_units::project_id).eq(project_id)),
             ),
         )))
-        .select(select_project_unit_response!(pu_outer))
-        .load::<ProjectUnitResponse>(conn)?;
+        .select(select_project_unit_row!(pu_outer))
+        .load::<ProjectUnitRow>(conn)?;
+
+    let with_latest = project_units_with_latest_revision(conn, project_id, rows)?;
 
     let mut by_session: HashMap<Uuid, Vec<ProjectUnitResponse>> = HashMap::new();
-    for u in rows {
+    for u in with_latest {
         by_session.entry(u.chat_session_id).or_default().push(u);
     }
     for vec in by_session.values_mut() {

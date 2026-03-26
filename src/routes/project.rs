@@ -6,7 +6,7 @@ use crate::models::chat_sessions::ChatSessionResponse;
 use crate::models::projects::{
     FrameworkType, LanguageType, PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse,
     ProjectResponse, ProjectRuntimeResponse, ProjectRuntimeWithConnectedChatResponse,
-    ProjectUnitResponse,
+    ProjectUnitRow,
 };
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
@@ -16,6 +16,7 @@ use crate::schema::project_releases;
 use crate::schema::project_runtimes;
 use crate::schema::project_units;
 use crate::schema::projects;
+use crate::services::chat_worker::db::project_units_with_latest_revision;
 use crate::services::payment::{
     PaidFeature, most_complete_needed_package, user_missing_paid_features,
 };
@@ -386,13 +387,14 @@ pub async fn handle_list_project_non_draft_units(
     let user_id = access_payload.user_id;
 
     let units = match database::block_on_db(&context.pool, move |conn| {
-        project_units::table
+        let rows = project_units::table
             .inner_join(projects::table.on(project_units::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(project_units::project_id.eq(project_id))
             .filter(project_units::is_draft.eq(false))
-            .select(ProjectUnitResponse::as_select())
-            .load::<ProjectUnitResponse>(conn)
+            .select(ProjectUnitRow::as_select())
+            .load::<ProjectUnitRow>(conn)?;
+        project_units_with_latest_revision(conn, project_id, rows)
     })
     .await
     {

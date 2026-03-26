@@ -3,7 +3,7 @@ use crate::libs::unit_slug::{compose_unit_id, is_valid_slug};
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
-use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitType};
+use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType};
 use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
@@ -194,13 +194,16 @@ pub async fn handler(
     let created = block_on_db_tokio(&pool, move |conn| {
         diesel::insert_into(project_units::table)
             .values(&insert)
-            .returning(ProjectUnitResponse::as_returning())
-            .get_result::<ProjectUnitResponse>(conn)
+            .returning(ProjectUnitRow::as_returning())
+            .get_result::<ProjectUnitRow>(conn)
     })
     .await;
 
     let (created_unit, error) = match created {
-        Ok(u) => (Some(u), None),
+        Ok(u) => {
+            let rev = u.revision;
+            (Some(ProjectUnitResponse::from_row(u, rev)), None)
+        }
         Err(e) => {
             tracing::error!(%message_id, "create_unit insert: {}", e);
             (None, Some(e.to_string()))

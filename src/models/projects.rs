@@ -5,6 +5,7 @@ use diesel::Queryable;
 use diesel::Selectable;
 use serde::Deserialize;
 use serde::Serialize;
+use std::ops::Deref;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -121,10 +122,12 @@ pub struct ProjectResponse {
     pub language: LanguageType,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Queryable, Selectable)]
+/// Row mapped 1:1 to `project_units` (Diesel query/returning). Shared as the inner payload of
+/// [`ProjectUnitResponse`] so API/tool JSON stays a flat object via `#[serde(flatten)]`.
+#[derive(Debug, Clone, PartialEq, Queryable, Selectable, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::project_units)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
-pub struct ProjectUnitResponse {
+pub struct ProjectUnitRow {
     pub project_id: Uuid,
     pub chat_session_id: Uuid,
     pub id: String,
@@ -137,6 +140,51 @@ pub struct ProjectUnitResponse {
     pub context_slug: String,
     pub module_slug: String,
     pub unit_name_slug: String,
+}
+
+#[derive(Deserialize)]
+struct ProjectUnitResponseDe {
+    #[serde(flatten)]
+    row: ProjectUnitRow,
+    #[serde(default)]
+    latest_revision: Option<i32>,
+}
+
+impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
+    fn from(d: ProjectUnitResponseDe) -> Self {
+        let latest_revision = d.latest_revision.unwrap_or(d.row.revision);
+        Self {
+            row: d.row,
+            latest_revision,
+        }
+    }
+}
+
+/// Unit payload for APIs, chat messages, and LLM tool results. `latest_revision` is the maximum
+/// `revision` for this logical unit (same project, session, and slug tuple), for UI like `revision N/M`.
+///
+/// JSON is a single flat object (`row` fields + `latest_revision`). Use [`Deref`] to access row
+/// fields as `unit.revision`, `unit.context_slug`, etc.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(from = "ProjectUnitResponseDe")]
+pub struct ProjectUnitResponse {
+    #[serde(flatten)]
+    pub row: ProjectUnitRow,
+    pub latest_revision: i32,
+}
+
+impl ProjectUnitResponse {
+    pub fn from_row(row: ProjectUnitRow, latest_revision: i32) -> Self {
+        Self { row, latest_revision }
+    }
+}
+
+impl Deref for ProjectUnitResponse {
+    type Target = ProjectUnitRow;
+
+    fn deref(&self) -> &Self::Target {
+        &self.row
+    }
 }
 
 #[derive(Serialize, Queryable, Selectable)]
