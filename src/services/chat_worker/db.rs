@@ -487,3 +487,45 @@ pub fn load_unit_tips_by_ids_for_chat_session(
     }
     Ok(out)
 }
+
+/// For each stored `unit_id` (full id including revision), returns the **exact** row at that id in
+/// `chat_session_id`, with [`ProjectUnitResponse::latest_revision`] set to the maximum revision for
+/// that logical unit under `project_id` (same as [`project_units_with_latest_revision`]). Unlike
+/// [`load_unit_tips_by_ids_for_chat_session`], does not substitute the revision **tip** row.
+pub fn load_units_by_ids_for_chat_session(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    chat_session_id: Uuid,
+    unit_ids: &[String],
+) -> Result<Vec<Option<ProjectUnitResponse>>, diesel::result::Error> {
+    if unit_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut indexed_rows: Vec<(usize, ProjectUnitRow)> = Vec::new();
+    for (i, id) in unit_ids.iter().enumerate() {
+        let anchor: Option<ProjectUnitRow> = project_units::table
+            .filter(project_units::project_id.eq(project_id))
+            .filter(project_units::chat_session_id.eq(chat_session_id))
+            .filter(project_units::id.eq(id))
+            .select(ProjectUnitRow::as_select())
+            .first(conn)
+            .optional()?;
+        if let Some(a) = anchor {
+            indexed_rows.push((i, a));
+        }
+    }
+
+    if indexed_rows.is_empty() {
+        return Ok(unit_ids.iter().map(|_| None).collect());
+    }
+
+    let rows: Vec<ProjectUnitRow> = indexed_rows.iter().map(|(_, r)| r.clone()).collect();
+    let with_latest = project_units_with_latest_revision(conn, project_id, rows)?;
+
+    let mut out: Vec<Option<ProjectUnitResponse>> = vec![None; unit_ids.len()];
+    for ((i, _), resp) in indexed_rows.into_iter().zip(with_latest) {
+        out[i] = Some(resp);
+    }
+    Ok(out)
+}

@@ -164,7 +164,8 @@ impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
 /// `revision` for this logical unit (same project, session, and slug tuple), for UI like `revision N/M`.
 ///
 /// Persisted chat message JSON omits `latest_revision` (redundant at save time); use
-/// `POST .../chat-sessions/{session_id}/unit-tips-by-ids` to resolve current tips when rendering history.
+/// `POST .../chat-sessions/{session_id}/unit-tips-by-ids` to resolve current tips when rendering history,
+/// or `POST .../units-by-ids` to keep the stored revision row but fill `latest_revision`.
 ///
 /// JSON is a single flat object (`row` fields + `latest_revision`). Use [`Deref`] to access row
 /// fields as `unit.revision`, `unit.context_slug`, etc.
