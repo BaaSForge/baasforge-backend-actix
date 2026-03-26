@@ -27,6 +27,8 @@ pub struct ToolFetchLatestReleasesPayload {
     /// Tool name (e.g. TOOL_NAME); stored so upstream LLM history can use it without looking up from a previous message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
@@ -66,6 +68,7 @@ pub fn payload_from_args(
             releases: vec![],
             tool_call_id,
             tool_name: Some(tool_name.to_string()),
+            error: None,
         },
     ))
 }
@@ -131,6 +134,7 @@ pub async fn handler(
         releases,
         tool_call_id,
         tool_name,
+        error: None,
     };
     let payload_value = serde_json::to_value(&full_payload)
         .map_err(|e| -> BoxError { format!("serialize releases: {}", e).into() })?;

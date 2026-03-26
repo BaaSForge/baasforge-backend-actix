@@ -28,6 +28,8 @@ pub struct ToolFinishArchitectureAnalysisPayload {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub const ARG_RELEVANT_UNIT_IDS_DESCRIPTION: &str =
@@ -93,6 +95,7 @@ pub fn payload_from_args(
             args,
             tool_call_id,
             tool_name: Some(tool_name.to_string()),
+            error: None,
         },
     ))
 }
@@ -207,6 +210,7 @@ pub async fn handler(
         detailed_report,
         tool_call_id: analyze_payload.tool_call_id,
         tool_name: Some(analyze_architecture_tool::TOOL_NAME.to_string()),
+        error: None,
     };
 
     let merged_json = serde_json::to_value(&merged)

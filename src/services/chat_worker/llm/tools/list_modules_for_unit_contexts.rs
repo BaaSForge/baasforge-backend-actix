@@ -43,6 +43,8 @@ pub struct ToolListModulesForUnitContextsPayload {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub fn gemini_declaration() -> FunctionDeclaration {
@@ -68,6 +70,7 @@ pub fn payload_from_args(
             by_context: vec![],
             tool_call_id,
             tool_name: Some(tool_name.to_string()),
+            error: None,
         },
     ))
 }
@@ -133,6 +136,7 @@ pub async fn handler(
         by_context,
         tool_call_id,
         tool_name,
+        error: None,
     };
     let payload_value = serde_json::to_value(&full_payload)
         .map_err(|e| -> BoxError { format!("serialize list_modules_for_unit_contexts: {}", e).into() })?;

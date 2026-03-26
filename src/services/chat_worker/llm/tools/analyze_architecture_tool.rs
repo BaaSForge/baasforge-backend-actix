@@ -33,6 +33,8 @@ pub struct ToolAnalyzeArchitecturePayload {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub const MESSAGE_TYPE: ChatMessageType = ChatMessageType::ToolAnalyzeArchitecture;
@@ -78,6 +80,7 @@ pub fn payload_from_args(
             detailed_report: String::new(),
             tool_call_id,
             tool_name: Some(tool_name.to_string()),
+            error: None,
         },
     ))
 }

@@ -51,8 +51,8 @@ pub use remove_unit::ToolRemoveUnitPayload;
 use crate::database::{DbPool, block_on_db_tokio};
 use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessagePayload, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
-    TextPayload,
+    strip_latest_revision_from_stored_json, ChatAgentType, ChatMessagePayload, ChatMessageStatus,
+    ChatMessageType, ChatSessionRoleType, TextPayload,
 };
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, WsServerEvent};
@@ -299,7 +299,8 @@ pub async fn execute_tool_async(
 
 type RedisConn = Arc<Mutex<redis::aio::MultiplexedConnection>>;
 
-/// Persists a tool message as Failed in the DB and notifies the client via WebSocket.
+/// Persists a tool message as Failed in the DB, merges `error` into the message JSON payload when
+/// possible (so LLM history replays include the failure reason), and notifies the client via WebSocket.
 /// Call this from tool handlers on any failure path so that (1) the tool row shows Failed when
 /// listing messages from DB, and (2) maybe_complete_invoking_message can see it and update the
 /// invoker to Failed in DB and over WS.
@@ -310,11 +311,39 @@ pub async fn set_tool_message_failed(
     user_id: Uuid,
     project_id: Uuid,
     session_id: Uuid,
+    error: String,
 ) {
+    let error_for_db = error.clone();
     if let Err(e) = block_on_db_tokio(pool, move |conn| {
-        diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
-            .set(chat_messages::status.eq(ChatMessageStatus::Failed))
-            .execute(conn)?;
+        let payload_opt: Option<serde_json::Value> = chat_messages::table
+            .filter(chat_messages::id.eq(message_id))
+            .select(chat_messages::payload)
+            .first(conn)
+            .optional()?
+            .flatten();
+
+        let merged_payload = payload_opt.map(|mut v| {
+            if let serde_json::Value::Object(map) = &mut v {
+                map.insert(
+                    "error".to_string(),
+                    serde_json::Value::String(error_for_db.clone()),
+                );
+            }
+            strip_latest_revision_from_stored_json(v)
+        });
+
+        if let Some(p) = merged_payload {
+            diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+                .set((
+                    chat_messages::status.eq(ChatMessageStatus::Failed),
+                    chat_messages::payload.eq(Some(p)),
+                ))
+                .execute(conn)?;
+        } else {
+            diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+                .set(chat_messages::status.eq(ChatMessageStatus::Failed))
+                .execute(conn)?;
+        }
         Ok::<_, diesel::result::Error>(())
     })
     .await
@@ -426,6 +455,7 @@ pub async fn on_tool_message_finished(ctx: &ToolMessageContext, result: Result<(
             ctx.user_id,
             ctx.project_id,
             ctx.session_id,
+            e.to_string(),
         )
         .await;
     }
