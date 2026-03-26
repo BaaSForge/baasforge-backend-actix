@@ -78,6 +78,7 @@ Production Releases: Stable versions running on the Production Runtime.
 Runtimes: Each project has at least 2 runtimes (1 Production, 1+ Stage) depending on the user's Tier.
 Production Runtime: Only runs Production Releases.
 Stage Runtime: Used for testing Draft Releases or "Release Candidates."
+DDD naming semantics: `context` is the DDD domain / bounded context. `module` is a subdomain inside that context. They are different layers; do not conflate them when writing `intent` / `directive` for sub-agents.
 
 2.1. IMPORTANT — Sub-agent context is isolated (read carefully)
 The specialized agents behind your tools—the architecture analyzer, solution analyzer, and programmer—do **not** have access to each other’s conversation history. They cannot see the main planner–user thread, and they cannot see what another agent said or did in a different nested thread.
