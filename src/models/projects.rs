@@ -80,6 +80,25 @@ impl ProjectUnitType {
             Self::Timer => "timer",
         }
     }
+
+    /// Parses the slug used in composite unit ids (`context.module.<slug>.…`). Inverse of [`Self::as_slug`].
+    pub fn from_slug(s: &str) -> Option<Self> {
+        [
+            Self::Bootstrap,
+            Self::Action,
+            Self::Api,
+            Self::Command,
+            Self::Flow,
+            Self::Gateway,
+            Self::Projection,
+            Self::Query,
+            Self::Runtime,
+            Self::Schema,
+            Self::Timer,
+        ]
+        .into_iter()
+        .find(|t| t.as_slug() == s)
+    }
 }
 
 #[derive(Insertable)]
@@ -166,6 +185,7 @@ impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
 /// Persisted chat message JSON omits `latest_revision` (redundant at save time); use
 /// `POST .../chat-sessions/{session_id}/unit-tips-by-ids` to resolve current tips when rendering history,
 /// or `POST .../units-by-ids` to keep the stored revision row but fill `latest_revision`.
+/// `POST .../unit-latest-revisions-by-ids` returns only the max `revision` per unit path without loading full rows.
 ///
 /// JSON is a single flat object (`row` fields + `latest_revision`). Use [`Deref`] to access row
 /// fields as `unit.revision`, `unit.context_slug`, etc.

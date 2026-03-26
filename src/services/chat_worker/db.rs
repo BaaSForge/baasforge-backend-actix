@@ -1,4 +1,5 @@
 use crate::database::PooledConn;
+use crate::libs::unit_slug::UnitPath;
 use crate::models::projects::{
     ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType,
 };
@@ -526,6 +527,30 @@ pub fn load_units_by_ids_for_chat_session(
     let mut out: Vec<Option<ProjectUnitResponse>> = vec![None; unit_ids.len()];
     for ((i, _), resp) in indexed_rows.into_iter().zip(with_latest) {
         out[i] = Some(resp);
+    }
+    Ok(out)
+}
+
+/// For each [`UnitPath`], returns `MAX(revision)` in this chat session (same project), or `None`
+/// when no row exists.
+pub fn load_latest_revisions_by_unit_paths(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    chat_session_id: Uuid,
+    paths: &[UnitPath],
+) -> Result<Vec<Option<i32>>, diesel::result::Error> {
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let max_rev: Option<i32> = project_units::table
+            .filter(project_units::project_id.eq(project_id))
+            .filter(project_units::chat_session_id.eq(chat_session_id))
+            .filter(project_units::context_slug.eq(&path.context_slug))
+            .filter(project_units::module_slug.eq(&path.module_slug))
+            .filter(project_units::unit_type.eq(path.unit_type))
+            .filter(project_units::unit_name_slug.eq(&path.unit_name_slug))
+            .select(max(project_units::revision))
+            .first(conn)?;
+        out.push(max_rev);
     }
     Ok(out)
 }
