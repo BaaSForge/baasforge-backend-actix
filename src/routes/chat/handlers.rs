@@ -73,6 +73,7 @@ pub async fn handle_list_project_chat_sessions(
             .filter(projects::owner_user_id.eq(user_id))
             .filter(chat_sessions::project_id.eq(project_id))
             .filter(chat_messages::chat_session_id.eq_any(&session_ids))
+            .filter(chat_messages::type_.eq(ChatMessageType::Text))
             .distinct_on(chat_messages::chat_session_id)
             .order((
                 chat_messages::chat_session_id.asc(),
