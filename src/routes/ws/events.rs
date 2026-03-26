@@ -1,4 +1,5 @@
 use crate::models::chat_messages::{ChatMessageResponse, ChatMessageStatus};
+use crate::models::projects::ProjectUnitResponse;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -17,6 +18,9 @@ pub enum WsServerEvent {
     ChatSessionGenerationEnded(ChatSessionGenerationEndedPayload),
     ProjectDeleted(ProjectDeletedPayload),
     RuntimeCreated(RuntimeCreatedPayload),
+    ProjectUnitCreated(ProjectUnitEventPayload),
+    ProjectUnitModified(ProjectUnitEventPayload),
+    ProjectUnitDeleted(ProjectUnitEventPayload),
     Subscribed {
         topic: String,
     },
@@ -72,6 +76,13 @@ pub struct ProjectDeletedPayload {
 pub struct RuntimeCreatedPayload {
     pub project_id: String,
     pub runtime_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProjectUnitEventPayload {
+    pub project_id: Uuid,
+    pub session_id: Uuid,
+    pub unit: ProjectUnitResponse,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

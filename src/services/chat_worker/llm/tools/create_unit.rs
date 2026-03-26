@@ -5,7 +5,9 @@ use crate::models::chat_messages::{
     ChatMessageStatus, ChatMessageType,
 };
 use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType};
-use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
+use crate::routes::ws::events::{
+    ChatSessionMessageUpdatedPayload, ProjectUnitEventPayload, WsServerEvent,
+};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
@@ -241,6 +243,7 @@ pub async fn handler(
             (None, Some(e.to_string()))
         }
     };
+    let unit_for_ws = created_unit.clone();
 
     let full_payload = ToolCreateUnitPayload {
         args,
@@ -274,5 +277,15 @@ pub async fn handler(
     publish_event_to_channel(&mut *guard, &channel, &event)
         .await
         .map_err(|e| -> BoxError { e.to_string().into() })?;
+    if let Some(unit) = unit_for_ws {
+        let unit_event = WsServerEvent::ProjectUnitCreated(ProjectUnitEventPayload {
+            project_id,
+            session_id,
+            unit,
+        });
+        publish_event_to_channel(&mut *guard, &channel, &unit_event)
+            .await
+            .map_err(|e| -> BoxError { e.to_string().into() })?;
+    }
     Ok(())
 }
