@@ -163,6 +163,9 @@ impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
 /// Unit payload for APIs, chat messages, and LLM tool results. `latest_revision` is the maximum
 /// `revision` for this logical unit (same project, session, and slug tuple), for UI like `revision N/M`.
 ///
+/// Persisted chat message JSON omits `latest_revision` (redundant at save time); use
+/// `POST .../chat-sessions/{session_id}/unit-tips-by-ids` to resolve current tips when rendering history.
+///
 /// JSON is a single flat object (`row` fields + `latest_revision`). Use [`Deref`] to access row
 /// fields as `unit.revision`, `unit.context_slug`, etc.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -13,6 +13,7 @@ use crate::models::chat_sessions::{
 };
 use crate::models::projects::PlatformEnvironmentType;
 use crate::models::projects::ProjectRuntimeResponse;
+use crate::models::projects::ProjectUnitResponse;
 use crate::routes::AppContext;
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{
@@ -28,13 +29,13 @@ use crate::schema::project_runtimes;
 use crate::schema::projects;
 use crate::services::chat_worker::db::{
     load_chat_session_draft_units_latest_revision, load_owned_unit_tips_for_chat_sessions,
-    load_owned_releases_by_chat_session,
+    load_owned_releases_by_chat_session, load_unit_tips_by_ids_for_chat_session,
 };
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 // use actix_ws::Message;
 use chrono::Utc;
 use diesel::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -661,6 +662,79 @@ pub async fn handle_list_chat_session_draft_units(
     HttpResponse::Ok().json(api_success(
         "Chat session draft units fetched successfully",
         json!(units),
+    ))
+}
+
+const MAX_UNIT_TIPS_BY_IDS: usize = 100;
+
+#[derive(Debug, Deserialize)]
+pub struct UnitTipsByIdsBody {
+    pub unit_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct UnitTipsByIdsResponse {
+    /// Same length and order as request `unit_ids`; `null` when the id is unknown in this session.
+    units: Vec<Option<ProjectUnitResponse>>,
+}
+
+/// Resolves the current revision **tip** (and `latest_revision`) per stored unit id in this session.
+pub async fn handle_unit_tips_by_ids_for_chat_session(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<UnitTipsByIdsBody>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to resolve chat session unit tips");
+
+    let (project_id, session_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+    let unit_ids = &body.unit_ids;
+
+    if unit_ids.len() > MAX_UNIT_TIPS_BY_IDS {
+        return HttpResponse::BadRequest().json(api_error(
+            "Too many unit ids in one request",
+            json!({ "max": MAX_UNIT_TIPS_BY_IDS }),
+        ));
+    }
+
+    let response = match database::block_on_db(&context.pool, {
+        let unit_ids = unit_ids.clone();
+        move |conn| {
+            let session_exists = chat_sessions::table
+                .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+                .filter(projects::owner_user_id.eq(user_id))
+                .filter(chat_sessions::id.eq(session_id))
+                .filter(chat_sessions::project_id.eq(project_id))
+                .select(chat_sessions::id)
+                .first::<Uuid>(conn)
+                .optional()?;
+            if session_exists.is_none() {
+                return Err(diesel::result::Error::NotFound);
+            }
+            let units = load_unit_tips_by_ids_for_chat_session(conn, project_id, session_id, &unit_ids)?;
+            Ok::<_, diesel::result::Error>(UnitTipsByIdsResponse { units })
+        }
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(database::BlockingDbError::Query(diesel::result::Error::NotFound)) => {
+            return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
+        }
+        Err(_) => {
+            tracing::error!("[handle_unit_tips_by_ids_for_chat_session] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Chat session unit tips resolved successfully",
+        json!(response),
     ))
 }
 

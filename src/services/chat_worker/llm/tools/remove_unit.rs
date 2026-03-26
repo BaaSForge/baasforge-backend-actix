@@ -1,7 +1,8 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
 use crate::libs::unit_slug::compose_unit_id;
 use crate::models::chat_messages::{
-    ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
+    strip_latest_revision_from_stored_json, ChatMessagePayload, ChatMessageResponse, ChatMessageRow,
+    ChatMessageStatus, ChatMessageType,
 };
 use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow};
 use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
@@ -182,6 +183,7 @@ pub async fn handler(
         tool_name,
     };
     let payload_value = serde_json::to_value(&full_payload)
+        .map(strip_latest_revision_from_stored_json)
         .map_err(|e| -> BoxError { format!("serialize remove_unit result: {}", e).into() })?;
     let updated_row = block_on_db_tokio(&pool, move |conn| {
         diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))

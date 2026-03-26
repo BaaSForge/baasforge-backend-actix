@@ -433,3 +433,57 @@ pub fn load_owned_unit_tips_for_chat_sessions(
     }
     Ok(by_session)
 }
+
+type LogicalUnitKey = (String, String, ProjectUnitType, String);
+
+/// For each stored `unit_id` (full id including revision), resolves the **revision tip** for that
+/// logical unit in `chat_session_id` (same “no newer revision” rule as
+/// [`load_owned_unit_tips_for_chat_sessions`]) and returns [`ProjectUnitResponse`] with
+/// `latest_revision` set. Order matches `unit_ids`; `None` when the id is unknown in that session.
+pub fn load_unit_tips_by_ids_for_chat_session(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    chat_session_id: Uuid,
+    unit_ids: &[String],
+) -> Result<Vec<Option<ProjectUnitResponse>>, diesel::result::Error> {
+    if unit_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut tips_by_key: HashMap<LogicalUnitKey, ProjectUnitResponse> = HashMap::new();
+    let tips_map = load_owned_unit_tips_for_chat_sessions(conn, project_id, &[chat_session_id])?;
+    if let Some(vec) = tips_map.get(&chat_session_id) {
+        for u in vec {
+            let key = (
+                u.context_slug.clone(),
+                u.module_slug.clone(),
+                u.unit_type,
+                u.unit_name_slug.clone(),
+            );
+            tips_by_key.insert(key, u.clone());
+        }
+    }
+
+    let mut out = Vec::with_capacity(unit_ids.len());
+    for id in unit_ids {
+        let anchor: Option<ProjectUnitRow> = project_units::table
+            .filter(project_units::project_id.eq(project_id))
+            .filter(project_units::chat_session_id.eq(chat_session_id))
+            .filter(project_units::id.eq(id))
+            .select(ProjectUnitRow::as_select())
+            .first(conn)
+            .optional()?;
+        let Some(a) = anchor else {
+            out.push(None);
+            continue;
+        };
+        let key = (
+            a.context_slug,
+            a.module_slug,
+            a.unit_type,
+            a.unit_name_slug,
+        );
+        out.push(tips_by_key.get(&key).cloned());
+    }
+    Ok(out)
+}

@@ -1,8 +1,8 @@
 use crate::configs::Settings;
 use crate::database::{block_on_db_tokio, establish_pool};
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus,
-    ChatMessageType, ChatSessionRoleType,
+    strip_latest_revision_from_stored_json, ChatAgentType, ChatMessageResponse,
+    ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::routes::chat::message_queue::{
     self as chat_message_queue, ChatSessionQueueMessage, chat_dead_letter_spec, chat_retry_policy,
@@ -430,7 +430,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             );
             let payload_json_for_insert = chat_payload.as_ref().and_then(|p| {
                 match serde_json::to_value(p) {
-                    Ok(v) => Some(v),
+                    Ok(v) => Some(strip_latest_revision_from_stored_json(v)),
                     Err(e) => {
                         tracing::error!(
                             %response_message_id,

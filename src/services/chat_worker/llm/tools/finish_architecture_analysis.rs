@@ -1,7 +1,7 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus,
-    ChatMessageType,
+    strip_latest_revision_from_stored_json, ChatAgentType, ChatMessagePayload, ChatMessageResponse,
+    ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
 use crate::models::projects::ProjectUnitResponse;
 use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
@@ -210,6 +210,7 @@ pub async fn handler(
     };
 
     let merged_json = serde_json::to_value(&merged)
+        .map(strip_latest_revision_from_stored_json)
         .map_err(|e| -> BoxError { format!("serialize analyze payload: {}", e).into() })?;
 
     let (analyze_updated, finish_updated) = block_on_db_tokio(&pool, move |conn| {

@@ -17,6 +17,30 @@ use crate::services::chat_worker::llm::tools::{
     ToolRemoveUnitPayload,
 };
 
+/// Strips redundant `latest_revision` keys from JSON before persisting `chat_messages` rows.
+/// At save time, embedded unit rows already represent a concrete revision; clients can resolve
+/// current `latest_revision` via the chat-session unit tips-by-ids endpoint.
+pub fn strip_latest_revision_from_stored_json(mut v: Value) -> Value {
+    fn walk(x: &mut Value) {
+        match x {
+            Value::Object(map) => {
+                map.remove("latest_revision");
+                for child in map.values_mut() {
+                    walk(child);
+                }
+            }
+            Value::Array(items) => {
+                for item in items.iter_mut() {
+                    walk(item);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(&mut v);
+    v
+}
+
 /// One requested tool call from the LLM (GPT tool_call_id optional; Gemini has no id).
 /// For Gemini, thought_signature must be stored and sent back in history for tool calls to work.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
