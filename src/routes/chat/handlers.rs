@@ -8,7 +8,8 @@ use crate::models::chat_messages::{
     ChatMessageStatus, ChatMessageType, ChatMessageWithFirstResponse, ChatSessionRoleType,
 };
 use crate::models::chat_sessions::{
-    ChatSessionInsert, ChatSessionResponse, ChatSessionWithProjectRuntimeResponse,
+    ChatSessionInsert, ChatSessionResponse, ChatSessionWithLastMessageResponse,
+    ChatSessionWithProjectRuntimeResponse,
 };
 use crate::models::projects::PlatformEnvironmentType;
 use crate::models::projects::ProjectRuntimeResponse;
@@ -32,6 +33,7 @@ use chrono::Utc;
 use diesel::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use uuid::Uuid;
 // use tokio_stream::StreamExt as _;
 
@@ -49,14 +51,52 @@ pub async fn handle_list_project_chat_sessions(
     let project_id = path.into_inner();
     let user_id = access_payload.user_id;
 
-    let sessions = match database::block_on_db(&context.pool, move |conn| {
-        chat_sessions::table
+    let sessions_with_last_message = match database::block_on_db(&context.pool, move |conn| {
+        let sessions = chat_sessions::table
             .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(chat_sessions::project_id.eq(project_id))
             .order(chat_sessions::created_at.desc())
             .select(ChatSessionResponse::as_select())
-            .load::<ChatSessionResponse>(conn)
+            .load::<ChatSessionResponse>(conn)?;
+
+        if sessions.is_empty() {
+            return Ok::<_, diesel::result::Error>(Vec::new());
+        }
+
+        let session_ids: Vec<Uuid> = sessions.iter().map(|s| s.id).collect();
+        let latest_message_rows = chat_messages::table
+            .inner_join(
+                chat_sessions::table.on(chat_messages::chat_session_id.eq(chat_sessions::id)),
+            )
+            .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(chat_sessions::project_id.eq(project_id))
+            .filter(chat_messages::chat_session_id.eq_any(&session_ids))
+            .distinct_on(chat_messages::chat_session_id)
+            .order((
+                chat_messages::chat_session_id.asc(),
+                chat_messages::created_at.desc(),
+                chat_messages::id.desc(),
+            ))
+            .select(ChatMessageRow::as_select())
+            .load::<ChatMessageRow>(conn)?;
+
+        let mut latest_by_session_id: HashMap<Uuid, ChatMessageResponse> = HashMap::new();
+        for row in latest_message_rows {
+            let message = ChatMessageResponse::from(row);
+            latest_by_session_id.insert(message.chat_session_id, message);
+        }
+
+        Ok::<_, diesel::result::Error>(
+            sessions
+                .into_iter()
+                .map(|session| ChatSessionWithLastMessageResponse {
+                    last_message: latest_by_session_id.remove(&session.id),
+                    session,
+                })
+                .collect(),
+        )
     })
     .await
     {
@@ -70,7 +110,7 @@ pub async fn handle_list_project_chat_sessions(
 
     HttpResponse::Ok().json(api_success(
         "Project chat sessions fetched successfully",
-        json!(sessions),
+        json!(sessions_with_last_message),
     ))
 }
 
