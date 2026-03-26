@@ -6,6 +6,7 @@ use crate::services::message_queue::{
 };
 use lapin::{Connection, Consumer};
 use serde::Serialize;
+use serde_json::Value;
 use std::io;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -51,6 +52,10 @@ pub fn parse_chat_routing_key(routing_key: &str) -> Option<(Uuid, Uuid)> {
     Some((project_id, session_id))
 }
 
+/// RabbitMQ body for chat worker. `payload` is raw JSON so deserialization uses [`ChatMessageType`]
+/// via [`Self::typed_payload`] / [`ChatMessagePayload::from_value`]. Do **not** deserialize
+/// [`ChatMessagePayload`] directly from JSON: it is `untagged` and several tool shapes collide
+/// (e.g. finish-solution vs finish-implementation; list contexts vs list modules).
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ChatSessionQueueMessage {
@@ -59,7 +64,7 @@ pub struct ChatSessionQueueMessage {
     pub role: ChatSessionRoleType,
     #[serde(rename = "type")]
     pub type_: ChatMessageType,
-    pub payload: Option<ChatMessagePayload>,
+    pub payload: Option<Value>,
     /// UUIDv7 for the AI response message. Worker creates the message with this id when first consumed if not exists.
     pub response_message_id: Uuid,
     /// Retry attempt count. 0 = first attempt; incremented each time the message is sent to the retry delay queue.
@@ -77,6 +82,12 @@ pub struct ChatSessionQueueMessage {
 }
 
 impl ChatSessionQueueMessage {
+    /// Decode [`Self::payload`] using [`Self::type_`]. Prefer this over deserializing
+    /// [`ChatMessagePayload`] from JSON alone.
+    pub fn typed_payload(&self) -> Result<Option<ChatMessagePayload>, serde_json::Error> {
+        ChatMessagePayload::from_value(&self.type_, self.payload.clone())
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         if matches!(self.role, ChatSessionRoleType::User) && self.user_id.is_none() {
             return Err("user_id is required when role is User");
@@ -100,19 +111,27 @@ impl ChatSessionQueueMessage {
             return None;
         }
         let user_id = self.user_id?;
-        let user_text = match &self.payload {
-            Some(ChatMessagePayload::Text(p)) => p.text.clone(),
-            Some(_) => {
+        let user_text = match self.typed_payload() {
+            Ok(Some(ChatMessagePayload::Text(p))) => p.text.clone(),
+            Ok(Some(_)) => {
                 tracing::warn!(
                     response_message_id = %self.response_message_id,
                     "chat queue: type is text but payload is not Text; using empty user_text"
                 );
                 String::new()
             }
-            None => {
+            Ok(None) => {
                 tracing::warn!(
                     response_message_id = %self.response_message_id,
                     "chat queue: type is text but payload is missing; using empty user_text"
+                );
+                String::new()
+            }
+            Err(e) => {
+                tracing::warn!(
+                    response_message_id = %self.response_message_id,
+                    error = %e,
+                    "chat queue: failed to decode Text payload; using empty user_text"
                 );
                 String::new()
             }

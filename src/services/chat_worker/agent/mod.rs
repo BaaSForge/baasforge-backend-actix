@@ -6,6 +6,10 @@ mod solution_analyzer;
 
 use crate::database::PooledConn;
 use crate::models::chat_messages::{ChatAgentType, ChatMessageType, ChatSessionRoleType};
+use crate::services::chat_worker::llm::history::{
+    remove_tool_result_messages_without_matching_assistant_tool_use,
+    trim_assistant_requested_tool_calls_to_match_following_tool_results,
+};
 use diesel::result::Error;
 use serde_json::Value;
 use uuid::Uuid;
@@ -45,7 +49,7 @@ pub fn load_history_for_agent(
     agent: ChatAgentType,
     thread_anchor_message_id: Option<Uuid>,
 ) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
-    match agent {
+    let mut messages = match agent {
         ChatAgentType::Planner => {
             planner::load_history(conn, session_id, thread_anchor_message_id)
         }
@@ -60,5 +64,8 @@ pub fn load_history_for_agent(
         ChatAgentType::Developer => {
             developer::load_history(conn, session_id, thread_anchor_message_id)
         }
-    }
+    }?;
+    remove_tool_result_messages_without_matching_assistant_tool_use(&mut messages);
+    trim_assistant_requested_tool_calls_to_match_following_tool_results(&mut messages);
+    Ok(messages)
 }

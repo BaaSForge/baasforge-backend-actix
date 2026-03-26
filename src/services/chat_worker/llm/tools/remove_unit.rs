@@ -99,12 +99,13 @@ pub async fn handler(
     session_id: Uuid,
     message_id: Uuid,
     user_id: Uuid,
-    payload: Option<Value>,
+    payload: Option<ChatMessagePayload>,
     _rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
 ) -> Result<(), BoxError> {
-    let existing = payload
-        .as_ref()
-        .and_then(|v| serde_json::from_value::<ToolRemoveUnitPayload>(v.clone()).ok());
+    let existing = match payload {
+        Some(ChatMessagePayload::ToolRemoveUnit(p)) => Some(p),
+        _ => None,
+    };
     let args = existing
         .as_ref()
         .map(|p| p.args.clone())

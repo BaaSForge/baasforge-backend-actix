@@ -5,7 +5,7 @@
 //! - **`TOOL_NAME: &'static str`** — Unique tool name for the LLM.
 //! - **`MESSAGE_TYPE: ChatMessageType`** — Message type for queue/DB messages produced by this tool.
 //! - **`spec() -> ToolSpec`** — Name, description, and JSON schema for parameters (for LLM declarations).
-//! - **`handler(...)`** — Async fn that processes a consumed queue message (same signature for all tools: DB pool, Redis, ids, payload JSON, optional Rabbit publisher).
+//! - **`handler(...)`** — Async fn that processes a consumed queue message (same signature for all tools: DB pool, Redis, ids, typed [`ChatMessagePayload`], optional Rabbit publisher).
 //! - **`payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError>`** — Builds queue payload from LLM args (used by [`tool_context_for_chat_session`]).
 //! - **`gemini_declaration() -> FunctionDeclaration`** — Gemini declaration with parameter schema (used in `llm/gemini.rs`).
 //! - **Parameter descriptions** — For each argument field, define a `pub const ARG_<NAME>_DESCRIPTION: &str` and use it in both `#[schemars(description = ARG_<NAME>_DESCRIPTION)]` on the args struct and in `params_schema()` (OpenAI/Claude) so Gemini and other providers stay aligned.
@@ -236,11 +236,13 @@ pub fn tool_context_for_chat_session(
                     let response_message_id = new_uuid();
                     let payload = payload_from_args(args, tool_call_id, registered_tool_name.as_str())
                         .map_err(|e| -> BoxError { e })?;
+                    let payload_json = serde_json::to_value(&payload)
+                        .map_err(|e| -> BoxError { format!("queue tool payload json: {}", e).into() })?;
                     let message = ChatSessionQueueMessage {
                         user_id: Some(user_id),
                         role: ChatSessionRoleType::Ai,
                         type_: message_type,
-                        payload: Some(payload),
+                        payload: Some(payload_json),
                         response_message_id,
                         retry_num: 0,
                         invoking_message_id: Some(invoking_message_id),
@@ -347,9 +349,9 @@ pub struct ToolMessageContext {
     pub message_id: Uuid,
     pub user_id: Uuid,
     pub message_type: ChatMessageType,
-    /// Tool message payload from the queue (same as stored on the message). Handlers can use
-    /// tool-call args without querying the DB.
-    pub payload: Option<Value>,
+    /// Tool message payload from the queue (same logical content as stored on the message).
+    /// Passed as the typed enum so handlers do not depend on a lossy JSON round-trip.
+    pub payload: Option<ChatMessagePayload>,
     /// Id of the **AI `Text` message** that listed this tool in `requested_tool_calls` (same value as the
     /// tool row’s DB column `invoking_message_id`). This is **not** [`Self::message_id`] (the tool row),
     /// and **not** the session root unless the invoker happens to be the root planner turn. When all
@@ -377,7 +379,7 @@ where
         Uuid,
         Uuid,
         Uuid,
-        Option<Value>,
+        Option<ChatMessagePayload>,
         Option<Arc<SharedRabbitPublisher>>,
     ) -> Fut
         + Send
@@ -666,14 +668,16 @@ pub async fn maybe_complete_invoking_message(
     if publish_queue_continuation {
         if let Some(publisher) = rabbit_publisher {
         let response_message_id = new_uuid();
+        let continuation_payload = serde_json::to_value(&ChatMessagePayload::Text(TextPayload {
+            text: String::new(),
+            ..Default::default()
+        }))
+        .expect("serialize empty TextPayload for queue continuation");
         let queue_message = ChatSessionQueueMessage {
             user_id: Some(user_id),
             role: ChatSessionRoleType::Ai,
             type_: ChatMessageType::Text,
-            payload: Some(ChatMessagePayload::Text(TextPayload {
-                text: String::new(),
-                ..Default::default()
-            })),
+            payload: Some(continuation_payload),
             response_message_id,
             retry_num: 0,
             invoking_message_id: queue_invoking_message_id,
@@ -709,7 +713,7 @@ pub async fn maybe_complete_invoking_message(
 
 /// Spawns the appropriate tool handler for the given message type. Does nothing if the type
 /// has no registered handler. Call this from the runner instead of matching on each tool type.
-/// `payload` should be the tool message payload from the queue (e.g. `ChatMessagePayload` as JSON).
+/// `payload` is the tool message payload from the queue (same variant as `message_type`).
 pub fn spawn_tool_message_handler(type_: ChatMessageType, ctx: ToolMessageContext) -> bool {
     if let Some(handler) = tool_message_handler(type_) {
         tokio::spawn(async move {

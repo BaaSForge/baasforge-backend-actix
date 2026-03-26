@@ -93,7 +93,7 @@ pub async fn handler(
     session_id: Uuid,
     message_id: Uuid,
     user_id: Uuid,
-    _payload: Option<Value>,
+    _payload: Option<ChatMessagePayload>,
     rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
 ) -> Result<(), BoxError> {
     let publisher = rabbit_publisher.as_ref().ok_or_else(|| -> BoxError {

@@ -5,9 +5,11 @@
 //! each invocation is a separate branch. The Planner must put carry-over context in **intent** /
 //! **directive** (see planner system prompt §2.1 and [`crate::services::chat_worker::agent::load_history_for_agent`]).
 //!
-//! History is scoped only by the **subtree** rooted at the anchor tool row (`invoking_message_id`
-//! edges). All **completed** messages in that subtree are included—no extra filter by tool type or
-//! agent.
+//! History is scoped by the **subtree** rooted at the anchor tool row (`invoking_message_id`
+//! edges). The **anchor row itself is not replayed**: it is the planner-side tool invocation; the
+//! matching `tool_use` lives on the planner assistant message (outside this branch). Including the
+//! anchor as a `ToolResult` would break APIs (e.g. Claude) that require a preceding assistant
+//! `tool_use` with the same id. Only **descendants** of the anchor are loaded.
 //!
 //! ## Synthetic leading user message
 //! Pass `synthetic_first_user_text`: if `Some` and non-empty after trim, it is prepended as a
@@ -106,13 +108,18 @@ pub fn load_nested_branch_history(
     });
 
     let ids = subtree_message_ids(conn, session_id, anchor)?;
-    let rows: Vec<ChatMessageRow> = chat_messages::table
-        .filter(chat_messages::chat_session_id.eq(session_id))
-        .filter(chat_messages::id.eq_any(ids))
-        .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
-        .order(chat_messages::id.asc())
-        .select(ChatMessageRow::as_select())
-        .load(conn)?;
+    let ids: Vec<Uuid> = ids.into_iter().filter(|id| *id != anchor).collect();
+    let rows: Vec<ChatMessageRow> = if ids.is_empty() {
+        vec![]
+    } else {
+        chat_messages::table
+            .filter(chat_messages::chat_session_id.eq(session_id))
+            .filter(chat_messages::id.eq_any(ids))
+            .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
+            .order(chat_messages::id.asc())
+            .select(ChatMessageRow::as_select())
+            .load(conn)?
+    };
 
     let mut mapped: Vec<_> = rows
         .into_iter()

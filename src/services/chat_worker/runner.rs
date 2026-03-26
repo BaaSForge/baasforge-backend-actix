@@ -1,8 +1,8 @@
 use crate::configs::Settings;
 use crate::database::{block_on_db_tokio, establish_pool};
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
-    ChatSessionRoleType,
+    ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus,
+    ChatMessageType, ChatSessionRoleType,
 };
 use crate::routes::chat::message_queue::{
     self as chat_message_queue, ChatSessionQueueMessage, chat_dead_letter_spec, chat_retry_policy,
@@ -403,11 +403,45 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         } else {
             // Non-TEXT: create message in DB, publish Redis "new message created", then type-specific handler.
             let user_id = payload.user_id.expect("validated");
-            let payload_json = payload
-                .payload
-                .as_ref()
-                .and_then(|p| serde_json::to_value(p).ok());
-            let payload_json_for_insert = payload_json.clone();
+            let chat_payload = match payload.typed_payload() {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!(
+                        %response_message_id,
+                        %project_id,
+                        %session_id,
+                        queue_message_type = ?payload.type_,
+                        error = %e,
+                        "runner: queue payload JSON does not match message type; acking and skipping"
+                    );
+                    let _ = delivery.acker.ack(BasicAckOptions::default()).await;
+                    continue;
+                }
+            };
+            tracing::info!(
+                target: "baal_backend_actix::tool_queue",
+                %response_message_id,
+                %project_id,
+                %session_id,
+                queue_message_type = ?payload.type_,
+                chat_payload_is_none = chat_payload.is_none(),
+                chat_payload_variant = chat_payload.as_ref().map(|p| p.variant_label()),
+                "runner: non-TEXT queue message — about to insert DB row and spawn tool handler"
+            );
+            let payload_json_for_insert = chat_payload.as_ref().and_then(|p| {
+                match serde_json::to_value(p) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::error!(
+                            %response_message_id,
+                            message_type = ?payload.type_,
+                            "Failed to serialize ChatMessagePayload for DB insert (handler still runs with typed payload): {}",
+                            e
+                        );
+                        None
+                    }
+                }
+            });
             let role = payload.role.clone();
             let type_ = payload.type_.clone();
             let insert_message_id = response_message_id;
@@ -470,7 +504,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     message_id: response_message_id,
                     user_id,
                     message_type: payload.type_.clone(),
-                    payload: payload_json,
+                    payload: chat_payload,
                     invoking_message_id: payload.invoking_message_id,
                     rabbit_publisher: Some(rabbit_publisher.clone()),
                 },

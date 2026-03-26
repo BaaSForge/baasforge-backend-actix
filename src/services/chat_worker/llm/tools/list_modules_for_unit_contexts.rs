@@ -103,16 +103,15 @@ pub async fn handler(
     session_id: Uuid,
     message_id: Uuid,
     user_id: Uuid,
-    payload: Option<Value>,
+    payload: Option<ChatMessagePayload>,
     _rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
 ) -> Result<(), BoxError> {
-    let parsed: ToolListModulesForUnitContextsPayload = payload
-        .ok_or_else(|| -> BoxError { "list_modules_for_unit_contexts: missing payload".into() })
-        .and_then(|v| {
-            serde_json::from_value(v).map_err(|e| -> BoxError {
-                format!("list_modules_for_unit_contexts: bad payload: {}", e).into()
-            })
-        })?;
+    let parsed: ToolListModulesForUnitContextsPayload = match payload {
+        Some(ChatMessagePayload::ToolListModulesForUnitContexts(p)) => p,
+        _ => {
+            return Err("list_modules_for_unit_contexts: missing or wrong payload variant".into());
+        }
+    };
     let args = parsed.args;
     let tool_call_id = parsed.tool_call_id;
     let tool_name = Some(TOOL_NAME.to_string());

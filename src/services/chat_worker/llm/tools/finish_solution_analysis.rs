@@ -90,15 +90,15 @@ pub async fn handler(
     session_id: Uuid,
     message_id: Uuid,
     user_id: Uuid,
-    payload: Option<Value>,
+    payload: Option<ChatMessagePayload>,
     rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
 ) -> Result<(), BoxError> {
-    let finish_payload: ToolFinishSolutionAnalysisPayload = payload
-        .as_ref()
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .ok_or_else(|| -> BoxError {
-            "finish_solution_analysis: missing or invalid payload".into()
-        })?;
+    let finish_payload: ToolFinishSolutionAnalysisPayload = match payload {
+        Some(ChatMessagePayload::ToolFinishSolutionAnalysis(p)) => p,
+        _ => {
+            return Err("finish_solution_analysis: missing or invalid payload".into());
+        }
+    };
 
     let (analyzer_text_id, analyze_tool_id, planner_text_id, analyze_payload) =
         block_on_db_tokio(&pool, move |conn| {

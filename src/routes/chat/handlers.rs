@@ -407,11 +407,24 @@ pub async fn handle_create_chat_session_message(
     };
 
     let response_message_id = new_uuid();
+    let queue_payload: Option<serde_json::Value> = match &message.payload {
+        Some(p) => match serde_json::to_value(p) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::error!("serialize chat message for queue: {}", e);
+                return HttpResponse::InternalServerError().json(api_error(
+                    "Failed to serialize message for processing queue",
+                    json!({}),
+                ));
+            }
+        },
+        None => None,
+    };
     let queue_message = ChatSessionQueueMessage {
         user_id: Some(user_id),
         role: ChatSessionRoleType::Ai,
         type_: message.type_.clone(),
-        payload: message.payload.clone(),
+        payload: queue_payload,
         response_message_id,
         retry_num: 0,
         invoking_message_id: None,

@@ -14,7 +14,7 @@ use diesel::prelude::*;
 use gemini_rust::tools::model::FunctionDeclaration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -156,12 +156,43 @@ pub async fn handler(
     session_id: Uuid,
     message_id: Uuid,
     user_id: Uuid,
-    payload: Option<Value>,
+    payload: Option<ChatMessagePayload>,
     _rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
 ) -> Result<(), BoxError> {
-    let existing = payload
-        .as_ref()
-        .and_then(|v| serde_json::from_value::<ToolCreateUnitPayload>(v.clone()).ok());
+    tracing::info!(
+        target: "baal_backend_actix::tool_create_unit",
+        %message_id,
+        %project_id,
+        %session_id,
+        payload_is_none = payload.is_none(),
+        payload_variant = payload.as_ref().map(|p| p.variant_label()),
+        "create_unit handler invoked"
+    );
+    let existing = match payload {
+        Some(ChatMessagePayload::ToolCreateUnit(p)) => Some(p),
+        Some(ref other) => {
+            tracing::error!(
+                target: "baal_backend_actix::tool_create_unit",
+                %message_id,
+                %project_id,
+                %session_id,
+                received_variant = other.variant_label(),
+                expected_variant = "ToolCreateUnit",
+                "create_unit: wrong ChatMessagePayload variant (e.g. untagged JSON matched another arm when deserializing the queue message)"
+            );
+            None
+        }
+        None => {
+            tracing::error!(
+                target: "baal_backend_actix::tool_create_unit",
+                %message_id,
+                %project_id,
+                %session_id,
+                "create_unit: payload is None — queue message had no ChatMessagePayload or handler was not given a clone"
+            );
+            None
+        }
+    };
     let args = existing
         .as_ref()
         .map(|p| p.args.clone())

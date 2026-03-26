@@ -91,7 +91,7 @@ impl TextPayload {
     }
 }
 
-#[derive(Debug, DbEnum, Serialize, Clone, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DbEnum, Serialize, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::ChatSessionRoleType"]
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
@@ -100,7 +100,7 @@ pub enum ChatSessionRoleType {
     Ai,
 }
 
-#[derive(Debug, DbEnum, Serialize, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DbEnum, Serialize, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::ChatMessageType"]
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
@@ -145,6 +145,10 @@ pub enum ChatAgentType {
     Developer,
 }
 
+/// Chat message body. Serialized to JSON without a type tag (`untagged`), so **never** deserialize
+/// from JSON unless you already know the [`ChatMessageType`] — use [`ChatMessagePayload::from_value`]
+/// (queue messages and DB rows carry the type separately). Otherwise distinct tools can share the
+/// same JSON shape and the wrong enum variant is chosen.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ChatMessagePayload {
@@ -152,22 +156,44 @@ pub enum ChatMessagePayload {
     Units(Vec<ProjectUnitResponse>),
     ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
     ToolFetchLatestReleases(ToolFetchLatestReleasesPayload),
-    // Tool payloads with `args` objects must appear before `ToolListUnitContexts`: its args struct is
-    // empty and would otherwise steal JSON meant for these variants (`untagged` deserialize order).
+    // `ToolListUnitContexts` / `ToolListModulesForUnitContexts` use permissive `args` + defaults.
+    // They MUST come after unit CRUD payloads in this list, otherwise `untagged` deserialize matches
+    // them first and steals `create_unit` / `modify_unit` / `remove_unit` JSON (see variant order).
     ToolAnalyzeArchitecture(ToolAnalyzeArchitecturePayload),
     ToolFinishArchitectureAnalysis(ToolFinishArchitectureAnalysisPayload),
     ToolAnalyzeSolution(ToolAnalyzeSolutionPayload),
     ToolFinishSolutionAnalysis(ToolFinishSolutionAnalysisPayload),
     ToolImplementSolution(ToolImplementSolutionPayload),
     ToolFinishImplementation(ToolFinishImplementationPayload),
-    ToolListUnitContexts(ToolListUnitContextsPayload),
-    ToolListModulesForUnitContexts(ToolListModulesForUnitContextsPayload),
     ToolCreateUnit(ToolCreateUnitPayload),
     ToolModifyUnit(ToolModifyUnitPayload),
     ToolRemoveUnit(ToolRemoveUnitPayload),
+    ToolListUnitContexts(ToolListUnitContextsPayload),
+    ToolListModulesForUnitContexts(ToolListModulesForUnitContextsPayload),
 }
 
 impl ChatMessagePayload {
+    /// Short variant name for logs (no inner data).
+    pub fn variant_label(&self) -> &'static str {
+        match self {
+            ChatMessagePayload::Text(_) => "Text",
+            ChatMessagePayload::Units(_) => "Units",
+            ChatMessagePayload::ToolFetchRelevantUnits(_) => "ToolFetchRelevantUnits",
+            ChatMessagePayload::ToolFetchLatestReleases(_) => "ToolFetchLatestReleases",
+            ChatMessagePayload::ToolAnalyzeArchitecture(_) => "ToolAnalyzeArchitecture",
+            ChatMessagePayload::ToolFinishArchitectureAnalysis(_) => "ToolFinishArchitectureAnalysis",
+            ChatMessagePayload::ToolAnalyzeSolution(_) => "ToolAnalyzeSolution",
+            ChatMessagePayload::ToolFinishSolutionAnalysis(_) => "ToolFinishSolutionAnalysis",
+            ChatMessagePayload::ToolImplementSolution(_) => "ToolImplementSolution",
+            ChatMessagePayload::ToolFinishImplementation(_) => "ToolFinishImplementation",
+            ChatMessagePayload::ToolListUnitContexts(_) => "ToolListUnitContexts",
+            ChatMessagePayload::ToolListModulesForUnitContexts(_) => "ToolListModulesForUnitContexts",
+            ChatMessagePayload::ToolCreateUnit(_) => "ToolCreateUnit",
+            ChatMessagePayload::ToolModifyUnit(_) => "ToolModifyUnit",
+            ChatMessagePayload::ToolRemoveUnit(_) => "ToolRemoveUnit",
+        }
+    }
+
     pub fn from_value(
         type_: &ChatMessageType,
         value: Option<Value>,

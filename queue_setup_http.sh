@@ -1,30 +1,22 @@
 #!/usr/bin/env bash
 # One-time queue setup via RabbitMQ Management HTTP API.
 # Run once per environment. Creates the exchanges/queues the API and chat worker expect.
-# Requires: curl. Loads all settings from .env (no defaults in this script).
+# Requires: curl. Loads env via load-project-env.sh: .env, then .env.local overrides if present.
 # Queue semantics and CHAT_CONSUMER_TIMEOUT_SECS sizing: see docs/chat-queue.md
 
-# IMPORTANT: This file only imports .env file, not .env.local overrides.
-
 set -e
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/.env" ]; then
-  set -a
-  source "$SCRIPT_DIR/.env"
-  set +a
-else
-  echo "Missing .env in $SCRIPT_DIR" >&2
-  exit 1
-fi
+# shellcheck source=load-project-env.sh
+# Requires .env (see load-project-env.sh); missing file fails on source.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/load-project-env.sh"
 
 if [ -z "$RABBITMQ_MANAGEMENT_URL" ] || [ -z "$RETRY_DELAY_EXCHANGE" ] || [ -z "$CHAT_CONSUMER_TIMEOUT_SECS" ]; then
-  echo ".env must set RABBITMQ_MANAGEMENT_URL, RETRY_DELAY_EXCHANGE, CHAT_CONSUMER_TIMEOUT_SECS" >&2
+  echo "Set RABBITMQ_MANAGEMENT_URL, RETRY_DELAY_EXCHANGE, CHAT_CONSUMER_TIMEOUT_SECS in .env (and optionally .env.local)." >&2
   exit 1
 fi
 
 # Parse user:pass from RABBIT_URL (amqp://USER:PASS@host/...)
 if [ -z "$RABBIT_URL" ]; then
-  echo ".env must set RABBIT_URL" >&2
+  echo "Set RABBIT_URL in .env or .env.local." >&2
   exit 1
 fi
 USER=$(sed -n 's|.*://\([^:]*\):.*@.*|\1|p' <<< "$RABBIT_URL")

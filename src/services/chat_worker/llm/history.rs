@@ -8,6 +8,7 @@ use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload, ThinkingBlock,
 };
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// One tool call from an assistant message (id, name, arguments).
 /// thought_signature is required by Gemini when replaying history.
@@ -152,6 +153,226 @@ fn tool_result_from_payload(
     });
     let tool_name = tool_name_opt.unwrap_or_default();
     (tool_use_id, tool_name, content)
+}
+
+/// Same fallback counter progression as [`session_messages_to_upstream_entries`] (tool results and
+/// assistant `requested_tool_calls` with missing ids), used to align tool-call ids when cleaning.
+fn prefix_fallback_before_each_message(
+    messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
+) -> Vec<usize> {
+    let len = messages.len();
+    let mut prefix = vec![0usize; len];
+    let mut fallback = 0usize;
+    for i in 0..len {
+        prefix[i] = fallback;
+        let &(role, type_, ref payload) = &messages[i];
+        match (role, type_) {
+            (ChatSessionRoleType::Ai, msg_type) if is_tool_result_type(&msg_type) => {
+                let _ = tool_result_from_payload(&msg_type, payload, &mut fallback);
+            }
+            (ChatSessionRoleType::Ai, ChatMessageType::Text) => {
+                if let Some(tp) = parse_text_payload(payload) {
+                    if let Some(ref calls) = tp.requested_tool_calls {
+                        for tc in calls {
+                            let _ = tc.tool_call_id.clone().unwrap_or_else(|| {
+                                let id = format!("tool_{}", fallback);
+                                fallback += 1;
+                                id
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    prefix
+}
+
+fn resolved_tool_call_ids_for_text_payload(tp: &TextPayload, fb_before: usize) -> (Vec<String>, usize) {
+    let mut fb = fb_before;
+    let calls = tp
+        .requested_tool_calls
+        .as_ref()
+        .map(|c| c.as_slice())
+        .unwrap_or(&[]);
+    let mut ids = Vec::with_capacity(calls.len());
+    for tc in calls {
+        let id = tc.tool_call_id.clone().unwrap_or_else(|| {
+            let id = format!("tool_{}", fb);
+            fb += 1;
+            id
+        });
+        ids.push(id);
+    }
+    (ids, fb)
+}
+
+fn is_ai_tool_result_at(
+    messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
+    k: usize,
+) -> bool {
+    messages[k].0 == ChatSessionRoleType::Ai && is_tool_result_type(&messages[k].1)
+}
+
+/// Index of the message immediately before a consecutive run of AI tool-result rows that includes
+/// `tool_result_index`. That message should be the assistant `Text` with `requested_tool_calls` for
+/// the first tool in the batch (when history is consistent).
+fn assistant_index_before_tool_block(
+    messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
+    tool_result_index: usize,
+) -> Option<usize> {
+    if tool_result_index == 0 {
+        return None;
+    }
+    let mut k = tool_result_index - 1;
+    loop {
+        if !is_ai_tool_result_at(messages, k) {
+            break;
+        }
+        if k == 0 {
+            return None;
+        }
+        k -= 1;
+    }
+    Some(k)
+}
+
+/// Removes tool-result session messages that have no matching assistant `tool_use` in the loaded history.
+///
+/// This happens when loaders only include **completed** rows: e.g. the planner assistant turn that
+/// issued `implement_solution` is `stopped`/`failed` and omitted, but the async tool row completed
+/// and remains — Claude then sees a `tool_result` without a preceding `tool_use`.
+pub fn remove_tool_result_messages_without_matching_assistant_tool_use(
+    messages: &mut Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>,
+) {
+    let len = messages.len();
+    if len == 0 {
+        return;
+    }
+
+    let mut to_remove: Vec<usize> = Vec::new();
+    for i in 0..len {
+        if !is_ai_tool_result_at(messages, i) {
+            continue;
+        }
+        let prefix = prefix_fallback_before_each_message(messages);
+        let mut fb = prefix[i];
+        let (tool_id, tool_name, _) =
+            tool_result_from_payload(&messages[i].1, &messages[i].2, &mut fb);
+        if tool_name.is_empty() {
+            to_remove.push(i);
+            continue;
+        }
+        let Some(a_idx) = assistant_index_before_tool_block(messages, i) else {
+            to_remove.push(i);
+            continue;
+        };
+        if messages[a_idx].0 != ChatSessionRoleType::Ai || messages[a_idx].1 != ChatMessageType::Text {
+            to_remove.push(i);
+            continue;
+        }
+        let payload_opt = messages[a_idx].2.clone();
+        let Some(tp) = parse_text_payload(&payload_opt) else {
+            to_remove.push(i);
+            continue;
+        };
+        let (resolved_ids, _) = resolved_tool_call_ids_for_text_payload(&tp, prefix[a_idx]);
+        if !resolved_ids.contains(&tool_id) {
+            to_remove.push(i);
+        }
+    }
+
+    to_remove.sort_unstable();
+    to_remove.dedup();
+    for idx in to_remove.into_iter().rev() {
+        messages.remove(idx);
+    }
+}
+
+/// Removes assistant `requested_tool_calls` that never received a matching tool-result message
+/// (e.g. user stopped generation). Also drops calls that are only partially fulfilled when a
+/// non–tool-result message appears after the consecutive tool-result block.
+///
+/// Matches [`session_messages_to_upstream_entries`] id assignment via [`prefix_fallback_before_each_message`].
+pub fn trim_assistant_requested_tool_calls_to_match_following_tool_results(
+    messages: &mut Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>,
+) {
+    let len = messages.len();
+    if len == 0 {
+        return;
+    }
+
+    for i in 0..len {
+        let prefix = prefix_fallback_before_each_message(messages);
+        let (role, type_, payload_opt) = {
+            let m = &mut messages[i];
+            (m.0, m.1, m.2.clone())
+        };
+        if role != ChatSessionRoleType::Ai || type_ != ChatMessageType::Text {
+            continue;
+        }
+        let Some(mut tp) = parse_text_payload(&payload_opt) else {
+            continue;
+        };
+        let Some(ref calls) = tp.requested_tool_calls else {
+            continue;
+        };
+        if calls.is_empty() {
+            continue;
+        }
+
+        let fb_before = prefix[i];
+        let (resolved_ids, _) = resolved_tool_call_ids_for_text_payload(&tp, fb_before);
+
+        let next_is_tool_result = i + 1 < len && {
+            let n = &mut messages[i + 1];
+            (n.0 == ChatSessionRoleType::Ai) && is_tool_result_type(&n.1)
+        };
+
+        if !next_is_tool_result {
+            tp.requested_tool_calls = None;
+            if let Ok(v) = serde_json::to_value(&tp) {
+                messages[i].2 = Some(v);
+            }
+            continue;
+        }
+
+        let mut j = i + 1;
+        let mut fb2 = prefix[i + 1];
+        let mut fulfilled = HashSet::new();
+        while j < len {
+            let (r, t, payload_ref) = {
+                let m = &mut messages[j];
+                (m.0, m.1, m.2.clone())
+            };
+            if r != ChatSessionRoleType::Ai || !is_tool_result_type(&t) {
+                break;
+            }
+            let (tool_use_id, tool_name, _) =
+                tool_result_from_payload(&t, &payload_ref, &mut fb2);
+            if !tool_name.is_empty() {
+                fulfilled.insert(tool_use_id);
+            }
+            j += 1;
+        }
+
+        let filtered: Vec<_> = calls
+            .iter()
+            .zip(resolved_ids.iter())
+            .filter(|(_, rid)| fulfilled.contains(*rid))
+            .map(|(tc, _)| tc.clone())
+            .collect();
+
+        tp.requested_tool_calls = if filtered.is_empty() {
+            None
+        } else {
+            Some(filtered)
+        };
+        if let Ok(v) = serde_json::to_value(&tp) {
+            messages[i].2 = Some(v);
+        }
+    }
 }
 
 fn payload_to_string(payload: &Option<Value>) -> String {
