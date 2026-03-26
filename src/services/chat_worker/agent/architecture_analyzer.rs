@@ -78,6 +78,7 @@ Brevity: Use minimal assistant text between tool calls and in progress notes—o
 
 1. The Environment & Context
 Units: The building blocks of a project.
+**Draft units:** Units that are not released yet; they are created and revised in the current user chat conversation before release.
 
 2. The Technical Hierarchy
 Units: Small, single-purpose functions (Lambda-style). Each has a Version, Hidden Code, and a Plain English Explanation. Units can trigger one another to create complex workflows.
