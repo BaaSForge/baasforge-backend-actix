@@ -247,6 +247,7 @@ pub fn tool_context_for_chat_session(
                         retry_num: 0,
                         invoking_message_id: Some(invoking_message_id),
                         agent,
+                        sub_agent_stuck_continuation_count: 0,
                     };
                     chat_message_queue::publish_with_publisher(
                         &publisher, project_id, session_id, &message,
@@ -712,6 +713,7 @@ pub async fn maybe_complete_invoking_message(
             retry_num: 0,
             invoking_message_id: queue_invoking_message_id,
             agent: queue_agent.clone(),
+            sub_agent_stuck_continuation_count: 0,
         };
         if let Err(e) = chat_message_queue::publish_with_publisher(
             publisher,

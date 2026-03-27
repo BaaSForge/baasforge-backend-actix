@@ -106,6 +106,7 @@ pub async fn handler(
         retry_num: 0,
         invoking_message_id: Some(message_id),
         agent: ChatAgentType::SolutionAnalyzer,
+        sub_agent_stuck_continuation_count: 0,
     };
 
     chat_message_queue::publish_with_publisher(

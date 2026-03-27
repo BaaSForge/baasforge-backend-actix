@@ -1,12 +1,10 @@
 //! Single place that knows when the generation loop (streaming + tool calling) is over
 //! and notifies the client via WebSocket.
 //!
-//! Generation ends when no continuation message will be scheduled. The only code that
-//! ever schedules a continuation is `maybe_complete_invoking_message` (after tool messages
-//! complete). So "no continuation" is known in exactly one place: the runner, after
-//! `process_one` returns, when the outcome has no pending tool calls. If there were
-//! tool calls, tool messages run and eventually a continuation is published; the loop
-//! then continues until a later `process_one` returns with no tool calls.
+//! Generation ends when no continuation message will be scheduled. Continuations are published from
+//! `maybe_complete_invoking_message` (after tool messages complete) and from the chat worker runner
+//! when a nested sub-agent completes with text but no tool calls (stuck-run nudge). "No continuation"
+//! is decided in the runner after `process_one`: if neither path applies, the loop is over.
 
 use crate::routes::ws::events::{ChatSessionGenerationEndedPayload, WsServerEvent};
 use crate::routes::ws::redis::{publish_event_to_channel, user_channel};
@@ -15,9 +13,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-/// Called from the runner only, after `process_one` for a TEXT message. If the outcome
-/// has no pending tool calls, no continuation will ever be scheduled (generation loop is
-/// over), so we broadcast `ChatSessionGenerationEnded` to the user's channel.
+/// Called from the runner only, after `process_one` for a TEXT message. When `will_schedule_continuation`
+/// is false (no tool calls and no stuck-sub-agent re-queue), broadcast `ChatSessionGenerationEnded`.
 pub async fn notify_if_generation_loop_finished(
     redis_conn: &Arc<Mutex<MultiplexedConnection>>,
     user_id: Uuid,

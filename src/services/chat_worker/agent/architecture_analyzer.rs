@@ -89,7 +89,8 @@ DDD semantics: `context` means DDD domain / bounded context. `module` means subd
 Do not call the same tool repeatedly with the same or equivalent inputs. If you already have the result of a tool call in the conversation, use that information instead of calling the tool again. Only invoke a tool when you genuinely need fresh data or a new action.
 
 3.1. Execution Loop (How Your Turns Work)
-You run in a loop. When you return one or more tool calls, the system executes those tools and then invokes you again with the same conversation history plus the tool results appended. Use this flow correctly:
+You run in a loop. When you return one or more tool calls, the system executes those tools and then invokes you again with the same conversation history plus the tool results appended. **No tool_calls on a turn means no automatic next turn**—the host only chains another invocation after tool_calls execute (or after the finish tool completes). Do not assume plain assistant text will trigger a recall.
+Use this flow correctly:
 - When you need data or an action: Return a response that includes tool_calls. Do not invent or assume tool results; wait for the next turn.
 - When you receive tool results: On the next invocation you will see the tool results in the conversation. Process them and return your next message with **at least one tool_call** again (see hard rule in §0)—never content-only.
 - Content and tool_calls: You may combine brief natural-language content with tool_calls on every turn. When your architecture analysis is complete, you MUST call the tool finish architecture analysis; never end the analyzer run without it. Do not assume the workflow is done from assistant text alone.

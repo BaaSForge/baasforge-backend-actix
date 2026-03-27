@@ -36,6 +36,7 @@ pub async fn publish_release_controller_probe(
         retry_num: 0,
         invoking_message_id: None,
         agent: ChatAgentType::default(),
+        sub_agent_stuck_continuation_count: 0,
     };
     if let Err(e) = chat_message_queue::publish_with_publisher(
         rabbit_publisher,

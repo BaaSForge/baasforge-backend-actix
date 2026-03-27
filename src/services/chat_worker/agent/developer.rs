@@ -96,6 +96,7 @@ const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the Programmer for a "No-Code"
 Do not repeat identical tool calls.
 
 3. Execution loop
+**No tool_calls on a turn means no automatic next turn**—the host only chains another invocation after tool_calls execute (or after finish implementation completes). Do not assume plain assistant text will trigger a recall.
 When you need data, issue tool_calls and wait for results. After each tool result, your next message must again include at least one tool_call (see hard rule in §1)—never content-only. During the loop you may iterate and leave short status lines alongside tool_calls—that is normal. When implementation is complete, you MUST call finish implementation—never end this run without that tool.
 
 4. Ending

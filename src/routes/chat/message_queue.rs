@@ -25,6 +25,10 @@ pub const CHAT_DEAD_LETTER_BINDING: &str = "chat_session.#";
 /// Max retries for chat: we try retry_num 0, 1 (2 attempts); after retry_num 1 fails, send to DLQ.
 pub const CHAT_MAX_RETRIES: u32 = 1;
 
+/// Sub-agent turns only continue when the model returns `tool_calls` (or a finish tool runs). If it
+/// returns text-only, the chat worker re-queues with a nudge at most this many times per stuck chain.
+pub const MAX_SUB_AGENT_STUCK_CONTINUATIONS: u8 = 5;
+
 pub fn chat_retry_policy() -> RetryPolicy {
     RetryPolicy {
         max_retries: CHAT_MAX_RETRIES,
@@ -78,6 +82,9 @@ pub struct ChatSessionQueueMessage {
     /// Agent that will handle this LLM call (used for system prompt and for the AI message row).
     #[serde(default)]
     pub agent: ChatAgentType,
+    /// Incremented when the worker re-queues a nested sub-agent that completed with no tool calls.
+    #[serde(default)]
+    pub sub_agent_stuck_continuation_count: u8,
 }
 
 impl ChatSessionQueueMessage {

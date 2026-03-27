@@ -1,12 +1,13 @@
 use crate::configs::Settings;
 use crate::database::{block_on_db_tokio, establish_pool};
+use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
-    strip_latest_revision_from_stored_json, ChatAgentType, ChatMessageResponse,
-    ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
+    strip_latest_revision_from_stored_json, ChatAgentType, ChatMessagePayload, ChatMessageResponse,
+    ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType, TextPayload,
 };
 use crate::routes::chat::message_queue::{
     self as chat_message_queue, ChatSessionQueueMessage, chat_dead_letter_spec, chat_retry_policy,
-    parse_chat_routing_key,
+    parse_chat_routing_key, MAX_SUB_AGENT_STUCK_CONTINUATIONS,
 };
 use crate::routes::ws::events::{
     ChatSessionMessageCreatedPayload, ChatSessionMessageStatusChangePayload, WsServerEvent,
@@ -33,6 +34,9 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::database::DbPool;
+
+/// One-turn user line when a nested sub-agent completed with text but no `tool_calls` (see chat-queue flow).
+const SUB_AGENT_STUCK_NUDGE: &str = "Your last reply in this nested run had no tool_calls. The worker only schedules your next turn after tool_calls execute (or after you call the finish tool). Reply again with at least one tool_call—use your data tools as needed, or call the finish tool when done. Do not send assistant text without tool_calls.";
 use redis::aio::MultiplexedConnection;
 
 /// Ensures the placeholder AI message exists with status Failed in the DB (inserts if it was never
@@ -250,12 +254,85 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             match &result {
                 Ok(outcome) => {
-                    // Continuation is scheduled only when LLM returned tool calls (tools will eventually call maybe_complete_invoking_message and publish).
-                    let will_schedule_continuation = matches!(
+                    // Continuation is scheduled when LLM returned tool calls (tools eventually call
+                    // maybe_complete_invoking_message), or when we re-queue a stuck nested sub-agent below.
+                    let mut will_schedule_continuation = matches!(
                         outcome,
                         GenerateOutcome::Completed(p)
                             if p.requested_tool_calls.as_ref().is_some_and(|c| !c.is_empty())
                     );
+                    if !will_schedule_continuation
+                        && payload.invoking_message_id.is_some()
+                        && payload.sub_agent_stuck_continuation_count
+                            < MAX_SUB_AGENT_STUCK_CONTINUATIONS
+                        && matches!(
+                            agent,
+                            ChatAgentType::ArchitectureAnalyzer
+                                | ChatAgentType::SolutionAnalyzer
+                                | ChatAgentType::Developer
+                        )
+                        && matches!(
+                            outcome,
+                            GenerateOutcome::Completed(p)
+                                if !p
+                                    .requested_tool_calls
+                                    .as_ref()
+                                    .is_some_and(|c| !c.is_empty())
+                        )
+                    {
+                        let next_count =
+                            payload.sub_agent_stuck_continuation_count.saturating_add(1);
+                        match serde_json::to_value(&ChatMessagePayload::Text(TextPayload {
+                            text: SUB_AGENT_STUCK_NUDGE.to_string(),
+                            requested_tool_calls: None,
+                            thinking_blocks: None,
+                        })) {
+                            Ok(nudge_json) => {
+                                let queue_message = ChatSessionQueueMessage {
+                                    user_id,
+                                    role: ChatSessionRoleType::Ai,
+                                    type_: ChatMessageType::Text,
+                                    payload: Some(nudge_json),
+                                    response_message_id: new_uuid(),
+                                    retry_num: 0,
+                                    invoking_message_id: payload.invoking_message_id,
+                                    agent: agent.clone(),
+                                    sub_agent_stuck_continuation_count: next_count,
+                                };
+                                match chat_message_queue::publish_with_publisher(
+                                    &rabbit_publisher,
+                                    project_id,
+                                    session_id,
+                                    &queue_message,
+                                )
+                                .await
+                                {
+                                    Ok(()) => {
+                                        will_schedule_continuation = true;
+                                        tracing::warn!(
+                                            %project_id,
+                                            %session_id,
+                                            ?agent,
+                                            next_count,
+                                            "Re-queued nested sub-agent after completion with no tool_calls"
+                                        );
+                                    }
+                                    Err(e) => tracing::error!(
+                                        %project_id,
+                                        %session_id,
+                                        error = %e,
+                                        "Failed to publish sub-agent stuck continuation"
+                                    ),
+                                }
+                            }
+                            Err(e) => tracing::error!(
+                                %project_id,
+                                %session_id,
+                                error = %e,
+                                "Failed to serialize sub-agent stuck nudge payload"
+                            ),
+                        }
+                    }
                     let should_publish_release_probe = matches!(agent, ChatAgentType::Planner)
                         && payload.invoking_message_id.is_none()
                         && matches!(outcome, GenerateOutcome::Completed(_))

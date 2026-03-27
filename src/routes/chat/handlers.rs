@@ -433,6 +433,7 @@ pub async fn handle_create_chat_session_message(
         retry_num: 0,
         invoking_message_id: None,
         agent: ChatAgentType::Planner,
+        sub_agent_stuck_continuation_count: 0,
     };
     let publish_result = if let Some(ref publisher) = context.rabbit_publisher {
         chat_message_queue::publish_with_publisher(
