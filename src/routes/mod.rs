@@ -250,9 +250,16 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
-                        "/projects/{id}/runtimes-with-connected-chat-sessions",
+                        "/projects/{id}/runtimes",
                         web::get()
-                            .to(project::handle_list_project_runtimes_with_connected_chat_sessions)
+                            .to(project::handle_list_project_runtimes)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/runtimes/{runtime_id}/detach-live-release",
+                        web::post()
+                            .to(project::handle_detach_stage_runtime_live_release)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
@@ -264,7 +271,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
-                        "/projects/{id}/releases/{release_version}/units",
+                        "/projects/{id}/releases/{revision}/units",
                         web::get()
                             .to(project::handle_list_project_release_units)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
@@ -320,6 +327,20 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
+                        "/projects/{id}/chat-sessions/{session_id}/release-controller-messages/{message_id}/stage-release",
+                        web::post()
+                            .to(chat::handle_create_stage_release)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/chat-sessions/{session_id}/release-controller-messages/{message_id}/production-release",
+                        web::post()
+                            .to(chat::handle_create_production_release)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
                         "/projects/{id}/chat-sessions/{session_id}/unit-tips-by-ids",
                         web::post()
                             .to(chat::handle_unit_tips_by_ids_for_chat_session)
@@ -351,20 +372,6 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         "/projects/{id}/chat-sessions/{session_id}/messages",
                         web::post()
                             .to(chat::handle_create_chat_session_message)
-                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
-                            .wrap(from_fn(auth_closed_guard_middleware)),
-                    )
-                    .route(
-                        "/projects/{id}/chat-sessions/{session_id}/attach-stage-runtime",
-                        web::post()
-                            .to(chat::handle_attach_chat_session_stage_runtime)
-                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
-                            .wrap(from_fn(auth_closed_guard_middleware)),
-                    )
-                    .route(
-                        "/projects/{id}/chat-sessions/{session_id}/detach-stage-runtime",
-                        web::post()
-                            .to(chat::handle_detach_chat_session_stage_runtime)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )

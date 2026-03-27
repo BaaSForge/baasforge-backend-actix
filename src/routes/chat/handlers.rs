@@ -5,36 +5,41 @@ use crate::libs::string::truncate_by_words;
 use crate::libs::unit_slug::{parse_unit_path, UnitPath};
 use crate::middlewares::auth::AccessPayload;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessageCreateBody, ChatMessageInsert, ChatMessageResponse, ChatMessageRow,
-    ChatMessageStatus, ChatMessageType, ChatMessageWithFirstResponse, ChatSessionRoleType,
+    ChatAgentType, ChatMessageCreateBody, ChatMessageInsert, ChatMessagePayload, ChatMessageResponse,
+    ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatMessageWithFirstResponse,
+    ChatSessionRoleType,
 };
 use crate::models::chat_sessions::{
     ChatSessionInsert, ChatSessionResponse, ChatSessionWithLastMessageResponse,
-    ChatSessionWithProjectRuntimeResponse,
 };
-use crate::models::projects::PlatformEnvironmentType;
-use crate::models::projects::ProjectRuntimeResponse;
-use crate::models::projects::ProjectUnitResponse;
+use crate::models::projects::{PlatformEnvironmentType, ProjectReleaseResponse, ProjectRuntimeResponse, ProjectUnitResponse};
 use crate::routes::AppContext;
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{
     ChatSessionGenerationEndedPayload, ChatSessionGenerationStartedPayload,
-    ChatSessionMessageStatusChangePayload, WsServerEvent,
+    ChatSessionMessageStatusChangePayload, ChatSessionMessageUpdatedPayload, WsServerEvent,
 };
 use crate::routes::ws::redis::{publish_event_to_channel, user_channel};
 use crate::routes::ws::set_stopped_message_id;
 // use crate::services::message_queue as mq_service;
 use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
+use crate::schema::project_releases;
 use crate::schema::project_runtimes;
 use crate::schema::projects;
 use crate::services::chat_worker::db::{
     load_chat_session_draft_units_as_of_release_controller_message,
+    load_chat_session_draft_units_before_message_cutoff,
     load_chat_session_draft_units_latest_revision, load_latest_revisions_by_unit_paths,
     load_owned_unit_tips_for_chat_sessions,
     load_owned_releases_by_chat_session, load_pre_chat_base_units_by_unit_paths,
     load_unit_tips_by_ids_for_chat_session, load_units_by_ids_for_chat_session,
     DraftUnitsAsOfReleaseControllerError,
+};
+use crate::services::releases::{
+    combined_units_from_release_metadata, compute_new_units, load_latest_production_release_for_project,
+    merge_combined_units, next_project_release_revision, release_units_metadata_to_json,
+    ReleaseUnitsMetadata,
 };
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 // use actix_ws::Message;
@@ -160,21 +165,7 @@ pub async fn handle_get_project_chat_session(
             .select(ChatSessionResponse::as_select())
             .get_result::<ChatSessionResponse>(conn)?;
 
-        let project_runtime = session.stage_project_runtime_id.and_then(|runtime_id| {
-            project_runtimes::table
-                .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
-                .filter(projects::owner_user_id.eq(user_id))
-                .filter(project_runtimes::project_id.eq(project_id))
-                .filter(project_runtimes::id.eq(runtime_id))
-                .select(ProjectRuntimeResponse::as_select())
-                .get_result::<ProjectRuntimeResponse>(conn)
-                .ok()
-        });
-
-        Ok::<_, diesel::result::Error>(ChatSessionWithProjectRuntimeResponse {
-            session,
-            project_runtime,
-        })
+        Ok::<_, diesel::result::Error>(session)
     })
     .await
     {
@@ -1082,7 +1073,6 @@ pub async fn handle_create_project_chat_session(
             project_id,
             user_id,
             title,
-            stage_project_runtime_id: None,
         };
         diesel::insert_into(chat_sessions::table)
             .values(&chat_session)
@@ -1112,195 +1102,339 @@ pub struct CreateProjectChatSessionBody {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct AttachStageRuntimeBody {
-    pub project_runtime_id: Uuid,
+pub struct CreateStageReleaseBody {
+    pub stage_project_runtime_id: Uuid,
 }
 
-pub async fn handle_attach_chat_session_stage_runtime(
+enum StageReleaseOutcome {
+    Success(ProjectReleaseResponse, ChatMessageRow),
+    SessionNotFound,
+    MessageNotFound,
+    NotReleaseController,
+    RuntimeNotFound,
+    RuntimeNotStage,
+    Metadata(String),
+}
+
+enum ProdReleaseOutcome {
+    Success(ProjectReleaseResponse, ChatMessageRow),
+    SessionNotFound,
+    MessageNotFound,
+    NotReleaseController,
+    NoStageRelease,
+    Metadata(String),
+}
+
+/// POST — create a stage release from the current session draft unit tips vs latest production,
+/// attach it to this chat session, set that revision on the given stage runtime, and refresh the
+/// release controller box payload + WS update.
+pub async fn handle_create_stage_release(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(Uuid, Uuid)>,
-    body: web::Json<AttachStageRuntimeBody>,
+    path: web::Path<(Uuid, Uuid, Uuid)>,
+    body: web::Json<CreateStageReleaseBody>,
 ) -> HttpResponse {
-    let extensions = req.extensions_mut();
-
+    let extensions = req.extensions();
     let access_payload = extensions
         .get::<AccessPayload>()
-        .expect("AccessPayload must exist to set chat session stage runtime");
+        .expect("AccessPayload must exist");
 
-    let (project_id, session_id) = path.into_inner();
-    let project_runtime_id = body.project_runtime_id;
+    let (project_id, session_id, message_id) = path.into_inner();
     let user_id = access_payload.user_id;
+    let stage_runtime_id = body.stage_project_runtime_id;
 
-    enum AttachOut {
-        RuntimeNotFound,
-        SessionNotFound,
-        AlreadyAttached,
-        Ok(ChatSessionResponse),
-    }
-    let updated = match database::block_on_db(&context.pool, move |conn| {
-        let _runtime = project_runtimes::table
-            .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
-            .filter(projects::owner_user_id.eq(user_id))
-            .filter(project_runtimes::project_id.eq(project_id))
-            .filter(project_runtimes::id.eq(project_runtime_id))
-            .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Stage))
-            .select(project_runtimes::id)
-            .get_result::<Uuid>(conn)
-            .optional()?;
-        if _runtime.is_none() {
-            return Ok(AttachOut::RuntimeNotFound);
-        }
-        let session_row: Option<(Uuid, Option<Uuid>)> = chat_sessions::table
-            .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
-            .filter(projects::owner_user_id.eq(user_id))
-            .filter(chat_sessions::id.eq(session_id))
-            .filter(chat_sessions::project_id.eq(project_id))
-            .select((chat_sessions::id, chat_sessions::stage_project_runtime_id))
-            .first(conn)
-            .optional()?;
-        let (_, current_runtime_id) = match session_row {
-            Some(row) => row,
-            None => return Ok(AttachOut::SessionNotFound),
-        };
-        if current_runtime_id.is_some() {
-            return Ok(AttachOut::AlreadyAttached);
-        }
-        let u = diesel::update(
-            chat_sessions::table
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        conn.transaction(|conn| {
+            let session_ok = chat_sessions::table
+                .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+                .filter(projects::owner_user_id.eq(user_id))
                 .filter(chat_sessions::id.eq(session_id))
-                .filter(chat_sessions::project_id.eq(project_id)),
-        )
-        .set(chat_sessions::stage_project_runtime_id.eq(project_runtime_id))
-        .returning(ChatSessionResponse::as_select())
-        .get_result::<ChatSessionResponse>(conn)?;
-        Ok(AttachOut::Ok(u))
+                .filter(chat_sessions::project_id.eq(project_id))
+                .select(chat_sessions::id)
+                .first::<Uuid>(conn)
+                .optional()?;
+            if session_ok.is_none() {
+                return Ok(StageReleaseOutcome::SessionNotFound);
+            }
+
+            let msg_row: Option<ChatMessageRow> = chat_messages::table
+                .filter(chat_messages::id.eq(message_id))
+                .filter(chat_messages::chat_session_id.eq(session_id))
+                .select(ChatMessageRow::as_select())
+                .first(conn)
+                .optional()?;
+            let Some(msg_row) = msg_row else {
+                return Ok(StageReleaseOutcome::MessageNotFound);
+            };
+            if msg_row.type_ != ChatMessageType::ReleaseControllerBox {
+                return Ok(StageReleaseOutcome::NotReleaseController);
+            }
+
+            let parsed = ChatMessagePayload::from_value(&msg_row.type_, msg_row.payload.clone())
+                .ok()
+                .flatten();
+            let Some(ChatMessagePayload::ReleaseControllerBox(mut box_payload)) = parsed else {
+                return Ok(StageReleaseOutcome::NotReleaseController);
+            };
+
+            let stage_rt: Option<ProjectRuntimeResponse> = project_runtimes::table
+                .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+                .filter(projects::owner_user_id.eq(user_id))
+                .filter(project_runtimes::project_id.eq(project_id))
+                .filter(project_runtimes::id.eq(stage_runtime_id))
+                .select(ProjectRuntimeResponse::as_select())
+                .first(conn)
+                .optional()?;
+            let Some(stage_rt) = stage_rt else {
+                return Ok(StageReleaseOutcome::RuntimeNotFound);
+            };
+            if stage_rt.environment != PlatformEnvironmentType::Stage {
+                return Ok(StageReleaseOutcome::RuntimeNotStage);
+            }
+
+            let prev_release = load_latest_production_release_for_project(conn, project_id)?;
+            let previous_combined = match prev_release
+                .as_ref()
+                .and_then(|r| r.units_metadata.as_ref())
+            {
+                Some(m) => match combined_units_from_release_metadata(Some(m)) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        return Ok(StageReleaseOutcome::Metadata(e.to_string()));
+                    }
+                },
+                None => Vec::new(),
+            };
+
+            let previous_units = previous_combined.clone();
+            let session_tips = load_chat_session_draft_units_before_message_cutoff(
+                conn,
+                project_id,
+                session_id,
+                msg_row.created_at,
+                message_id,
+            )?;
+            let new_units = compute_new_units(&previous_combined, &session_tips);
+            let combined_units = merge_combined_units(&previous_combined, &session_tips);
+
+            let meta = ReleaseUnitsMetadata {
+                previous_units,
+                new_units,
+                combined_units,
+            };
+            let meta_json = match release_units_metadata_to_json(&meta) {
+                Ok(v) => v,
+                Err(e) => return Ok(StageReleaseOutcome::Metadata(e.to_string())),
+            };
+
+            let revision = next_project_release_revision(conn, project_id, true)?;
+            let inserted: ProjectReleaseResponse = diesel::insert_into(project_releases::table)
+                .values((
+                    project_releases::project_id.eq(project_id),
+                    project_releases::revision.eq(revision),
+                    project_releases::units_metadata.eq(Some(meta_json)),
+                    project_releases::notes.eq(None::<String>),
+                    project_releases::chat_session_id.eq(Some(session_id)),
+                    project_releases::is_stage.eq(true),
+                ))
+                .returning(ProjectReleaseResponse::as_select())
+                .get_result(conn)?;
+
+            diesel::update(
+                project_runtimes::table
+                    .filter(project_runtimes::id.eq(stage_runtime_id))
+                    .filter(project_runtimes::project_id.eq(project_id)),
+            )
+            .set(project_runtimes::live_release_revision.eq(Some(inserted.revision)))
+            .execute(conn)?;
+
+            box_payload.stage_release = Some(inserted.clone());
+            let payload_json = match serde_json::to_value(&box_payload) {
+                Ok(v) => v,
+                Err(e) => return Ok(StageReleaseOutcome::Metadata(e.to_string())),
+            };
+
+            let updated_row = diesel::update(
+                chat_messages::table.filter(chat_messages::id.eq(message_id)),
+            )
+            .set(chat_messages::payload.eq(Some(payload_json)))
+            .returning(ChatMessageRow::as_returning())
+            .get_result(conn)?;
+
+            Ok(StageReleaseOutcome::Success(inserted, updated_row))
+        })
     })
     .await
     {
-        Ok(AttachOut::Ok(u)) => u,
-        Ok(AttachOut::RuntimeNotFound) => {
-            return HttpResponse::BadRequest().json(api_error(
-                "Project runtime not found or is not a stage environment",
-                json!({}),
-            ));
-        }
-        Ok(AttachOut::SessionNotFound) => {
-            return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
-        }
-        Ok(AttachOut::AlreadyAttached) => {
-            return HttpResponse::Conflict().json(api_error(
-                "Chat session already has a stage runtime attached. Detach the current runtime first.",
-                json!({}),
-            ));
-        }
-        Err(database::BlockingDbError::Query(e)) => {
-            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
-        }
-        Err(_) => {
-            tracing::error!("[handle_attach_chat_session_stage_runtime] DB/block error");
+        Ok(o) => o,
+        Err(e) => {
+            tracing::error!("[handle_create_stage_release] DB error: {}", e);
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
-    // TODO: RabbitMQ – Publish message when stage runtime is set.
-
-    HttpResponse::Ok().json(api_success(
-        "Chat session stage runtime updated successfully",
-        json!(updated),
-    ))
+    match outcome {
+        StageReleaseOutcome::Success(release, row) => {
+            if let Some(ref redis_conn) = context.redis_conn {
+                let message: ChatMessageResponse = row.into();
+                let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                    project_id,
+                    session_id,
+                    message,
+                });
+                let mut guard = redis_conn.lock().await;
+                if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
+                {
+                    tracing::warn!("[handle_create_stage_release] WS publish failed: {}", e);
+                }
+            }
+            HttpResponse::Ok().json(api_success(
+                "Stage release created successfully",
+                json!({ "release": release }),
+            ))
+        }
+        StageReleaseOutcome::SessionNotFound => HttpResponse::NotFound()
+            .json(api_error("Chat session not found", json!({}))),
+        StageReleaseOutcome::MessageNotFound => HttpResponse::NotFound()
+            .json(api_error("Release controller message not found", json!({}))),
+        StageReleaseOutcome::NotReleaseController => HttpResponse::BadRequest().json(
+            api_error("Message is not a release_controller_box row", json!({})),
+        ),
+        StageReleaseOutcome::RuntimeNotFound => HttpResponse::NotFound().json(api_error(
+            "Stage project runtime not found for this project",
+            json!({}),
+        )),
+        StageReleaseOutcome::RuntimeNotStage => HttpResponse::BadRequest().json(api_error(
+            "Referenced runtime is not a stage environment",
+            json!({}),
+        )),
+        StageReleaseOutcome::Metadata(msg) => HttpResponse::InternalServerError()
+            .json(api_error(&format!("Failed to build release metadata: {}", msg), json!({}))),
+    }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct DetachStageRuntimeBody {
-    pub project_runtime_id: Uuid,
-}
-
-pub async fn handle_detach_chat_session_stage_runtime(
+/// POST — create a production release from the stage release referenced on the controller; updates the box + WS.
+pub async fn handle_create_production_release(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(Uuid, Uuid)>,
-    body: web::Json<DetachStageRuntimeBody>,
+    path: web::Path<(Uuid, Uuid, Uuid)>,
 ) -> HttpResponse {
-    let extensions = req.extensions_mut();
-
+    let extensions = req.extensions();
     let access_payload = extensions
         .get::<AccessPayload>()
-        .expect("AccessPayload must exist to detach chat session stage runtime");
+        .expect("AccessPayload must exist");
 
-    let (project_id, session_id) = path.into_inner();
-    let project_runtime_id = body.project_runtime_id;
+    let (project_id, session_id, message_id) = path.into_inner();
     let user_id = access_payload.user_id;
 
-    enum DetachOut {
-        SessionNotFound,
-        NoRuntime,
-        WrongRuntime,
-        Ok(ChatSessionResponse),
-    }
-    let updated = match database::block_on_db(&context.pool, move |conn| {
-        let session_row: Option<(Uuid, Option<Uuid>)> = chat_sessions::table
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        let session_ok = chat_sessions::table
             .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(chat_sessions::id.eq(session_id))
             .filter(chat_sessions::project_id.eq(project_id))
-            .select((chat_sessions::id, chat_sessions::stage_project_runtime_id))
+            .select(chat_sessions::id)
+            .first::<Uuid>(conn)
+            .optional()?;
+        if session_ok.is_none() {
+            return Ok(ProdReleaseOutcome::SessionNotFound);
+        }
+
+        let msg_row: Option<ChatMessageRow> = chat_messages::table
+            .filter(chat_messages::id.eq(message_id))
+            .filter(chat_messages::chat_session_id.eq(session_id))
+            .select(ChatMessageRow::as_select())
             .first(conn)
             .optional()?;
-        let (_, current_runtime_id) = match session_row {
-            Some(row) => row,
-            None => return Ok(DetachOut::SessionNotFound),
+        let Some(msg_row) = msg_row else {
+            return Ok(ProdReleaseOutcome::MessageNotFound);
         };
-        let current_runtime_id = match current_runtime_id {
-            Some(id) => id,
-            None => return Ok(DetachOut::NoRuntime),
-        };
-        if current_runtime_id != project_runtime_id {
-            return Ok(DetachOut::WrongRuntime);
+        if msg_row.type_ != ChatMessageType::ReleaseControllerBox {
+            return Ok(ProdReleaseOutcome::NotReleaseController);
         }
-        let u = diesel::update(
-            chat_sessions::table
-                .filter(chat_sessions::id.eq(session_id))
-                .filter(chat_sessions::project_id.eq(project_id)),
+
+        let parsed = ChatMessagePayload::from_value(&msg_row.type_, msg_row.payload.clone())
+            .ok()
+            .flatten();
+        let Some(ChatMessagePayload::ReleaseControllerBox(mut box_payload)) = parsed else {
+            return Ok(ProdReleaseOutcome::NotReleaseController);
+        };
+
+        let Some(stage) = box_payload.stage_release.clone() else {
+            return Ok(ProdReleaseOutcome::NoStageRelease);
+        };
+
+        let revision = next_project_release_revision(conn, project_id, false)?;
+        let inserted: ProjectReleaseResponse = diesel::insert_into(project_releases::table)
+            .values((
+                project_releases::project_id.eq(project_id),
+                project_releases::revision.eq(revision),
+                project_releases::units_metadata.eq(stage.units_metadata.clone()),
+                project_releases::notes.eq(None::<String>),
+                project_releases::chat_session_id.eq(stage.chat_session_id),
+                project_releases::is_stage.eq(false),
+            ))
+            .returning(ProjectReleaseResponse::as_select())
+            .get_result(conn)?;
+
+        box_payload.prod_release = Some(inserted.clone());
+        let payload_json = match serde_json::to_value(&box_payload) {
+            Ok(v) => v,
+            Err(e) => return Ok(ProdReleaseOutcome::Metadata(e.to_string())),
+        };
+
+        let updated_row = diesel::update(
+            chat_messages::table.filter(chat_messages::id.eq(message_id)),
         )
-        .set(chat_sessions::stage_project_runtime_id.eq(Option::<Uuid>::None))
-        .returning(ChatSessionResponse::as_select())
-        .get_result::<ChatSessionResponse>(conn)?;
-        Ok(DetachOut::Ok(u))
+        .set(chat_messages::payload.eq(Some(payload_json)))
+        .returning(ChatMessageRow::as_returning())
+        .get_result(conn)?;
+
+        Ok(ProdReleaseOutcome::Success(inserted, updated_row))
     })
     .await
     {
-        Ok(DetachOut::Ok(u)) => u,
-        Ok(DetachOut::SessionNotFound) => {
-            return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
-        }
-        Ok(DetachOut::NoRuntime) => {
-            return HttpResponse::BadRequest().json(api_error(
-                "Chat session has no stage runtime attached",
-                json!({}),
-            ));
-        }
-        Ok(DetachOut::WrongRuntime) => {
-            return HttpResponse::BadRequest().json(api_error(
-                "Chat session is not attached to the given runtime",
-                json!({}),
-            ));
-        }
-        Err(database::BlockingDbError::Query(e)) => {
-            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
-        }
-        Err(_) => {
-            tracing::error!("[handle_detach_chat_session_stage_runtime] DB/block error");
+        Ok(o) => o,
+        Err(e) => {
+            tracing::error!("[handle_create_production_release] DB error: {}", e);
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
-    // TODO: prune target runtime deployment (server & db)
-
-    HttpResponse::Ok().json(api_success(
-        "Chat session stage runtime detached successfully",
-        json!(updated),
-    ))
+    match outcome {
+        ProdReleaseOutcome::Success(release, row) => {
+            if let Some(ref redis_conn) = context.redis_conn {
+                let message: ChatMessageResponse = row.into();
+                let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                    project_id,
+                    session_id,
+                    message,
+                });
+                let mut guard = redis_conn.lock().await;
+                if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
+                {
+                    tracing::warn!("[handle_create_production_release] WS publish failed: {}", e);
+                }
+            }
+            HttpResponse::Ok().json(api_success(
+                "Production release created successfully",
+                json!({ "release": release }),
+            ))
+        }
+        ProdReleaseOutcome::SessionNotFound => HttpResponse::NotFound()
+            .json(api_error("Chat session not found", json!({}))),
+        ProdReleaseOutcome::MessageNotFound => HttpResponse::NotFound()
+            .json(api_error("Release controller message not found", json!({}))),
+        ProdReleaseOutcome::NotReleaseController => HttpResponse::BadRequest().json(
+            api_error("Message is not a release_controller_box row", json!({})),
+        ),
+        ProdReleaseOutcome::NoStageRelease => HttpResponse::BadRequest().json(api_error(
+            "No stage release on this controller; create a stage release first",
+            json!({}),
+        )),
+        ProdReleaseOutcome::Metadata(msg) => HttpResponse::InternalServerError()
+            .json(api_error(&format!("Failed to serialize message payload: {}", msg), json!({}))),
+    }
 }

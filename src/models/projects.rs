@@ -1,4 +1,3 @@
-use crate::models::chat_sessions::ChatSessionResponse;
 use chrono::{DateTime, Utc};
 use diesel::Insertable;
 use diesel::Queryable;
@@ -37,7 +36,7 @@ pub enum DeploymentStatusType {
     Failed,
 }
 
-#[derive(Debug, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
+#[derive(Debug, PartialEq, Eq, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::PlatformEnvironmentType"]
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
@@ -128,6 +127,16 @@ pub struct ProjectInsert {
     pub name: String,
     pub slug: String,
     pub language: LanguageType,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = crate::schema::project_runtimes)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct ProjectRuntimeInsert {
+    pub project_id: Uuid,
+    pub environment: PlatformEnvironmentType,
+    pub name: Option<String>,
+    pub slug: Option<String>,
 }
 
 #[derive(Clone, Serialize, Queryable, Selectable)]
@@ -231,14 +240,7 @@ pub struct ProjectRuntimeResponse {
     pub server_cluster_deployment_status: Option<DeploymentStatusType>,
     pub server_cluster_deployment_is_healthy: Option<bool>,
     pub server_cluster_deployment_last_health: Option<DateTime<Utc>>,
-    pub live_release_version: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct ProjectRuntimeWithConnectedChatResponse {
-    #[serde(flatten)]
-    pub runtime: ProjectRuntimeResponse,
-    pub connected_chat_session: Option<ChatSessionResponse>,
+    pub live_release_revision: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Queryable, Selectable)]
@@ -247,9 +249,10 @@ pub struct ProjectRuntimeWithConnectedChatResponse {
 pub struct ProjectReleaseResponse {
     pub id: Uuid,
     pub project_id: Uuid,
-    pub version: String,
-    pub notes: Option<String>,
     pub units_metadata: Option<Value>,
     pub created_at: DateTime<Utc>,
+    pub notes: Option<String>,
     pub chat_session_id: Option<Uuid>,
+    pub is_stage: bool,
+    pub revision: i32,
 }

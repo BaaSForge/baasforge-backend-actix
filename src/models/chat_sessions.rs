@@ -1,5 +1,5 @@
 use crate::models::chat_messages::ChatMessageResponse;
-use crate::models::projects::{ProjectReleaseResponse, ProjectRuntimeResponse, ProjectUnitResponse};
+use crate::models::projects::{ProjectReleaseResponse, ProjectUnitResponse};
 use chrono::{DateTime, Utc};
 use diesel::Insertable;
 use diesel::Queryable;
@@ -16,14 +16,6 @@ pub struct ChatSessionResponse {
     pub user_id: Uuid,
     pub title: String,
     pub created_at: DateTime<Utc>,
-    pub stage_project_runtime_id: Option<Uuid>,
-}
-
-#[derive(Serialize)]
-pub struct ChatSessionWithProjectRuntimeResponse {
-    #[serde(flatten)]
-    pub session: ChatSessionResponse,
-    pub project_runtime: Option<ProjectRuntimeResponse>,
 }
 
 #[derive(Serialize)]
@@ -42,5 +34,4 @@ pub struct ChatSessionInsert {
     pub project_id: Uuid,
     pub user_id: Uuid,
     pub title: String,
-    pub stage_project_runtime_id: Option<Uuid>,
 }

@@ -153,7 +153,6 @@ macro_rules! release_visibility {
 
 // TODO: use vector db instead of postgres
 /// Load units that belong to the latest production release for the project.
-/// Finds the production runtime's live_release_version, then the matching release, then units from its units_metadata.
 ///
 /// Draft revisions are only included when they belong to `chat_session_id`, so other sessions' drafts are never exposed.
 ///

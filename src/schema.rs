@@ -90,7 +90,6 @@ diesel::table! {
         #[max_length = 150]
         title -> Varchar,
         created_at -> Timestamptz,
-        stage_project_runtime_id -> Nullable<Uuid>,
     }
 }
 
@@ -148,12 +147,12 @@ diesel::table! {
     project_releases (id) {
         id -> Uuid,
         project_id -> Uuid,
-        #[max_length = 50]
-        version -> Varchar,
         units_metadata -> Nullable<Jsonb>,
         created_at -> Timestamptz,
         notes -> Nullable<Text>,
         chat_session_id -> Nullable<Uuid>,
+        is_stage -> Bool,
+        revision -> Int4,
     }
 }
 
@@ -176,12 +175,11 @@ diesel::table! {
         server_cluster_deployment_status -> Nullable<DeploymentStatusType>,
         server_cluster_deployment_is_healthy -> Nullable<Bool>,
         server_cluster_deployment_last_health -> Nullable<Timestamptz>,
-        #[max_length = 50]
-        live_release_version -> Nullable<Varchar>,
         #[max_length = 255]
         name -> Nullable<Varchar>,
         #[max_length = 100]
         slug -> Nullable<Varchar>,
+        live_release_revision -> Nullable<Int4>,
     }
 }
 
@@ -273,7 +271,6 @@ diesel::table! {
 }
 
 diesel::joinable!(chat_messages -> chat_sessions (chat_session_id));
-diesel::joinable!(chat_sessions -> project_runtimes (stage_project_runtime_id));
 diesel::joinable!(chat_sessions -> projects (project_id));
 diesel::joinable!(chat_sessions -> users (user_id));
 diesel::joinable!(payments -> packages (package_id));

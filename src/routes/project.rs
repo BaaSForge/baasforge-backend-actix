@@ -2,11 +2,9 @@ use crate::database;
 use crate::libs::api_response::api_error;
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
-use crate::models::chat_sessions::ChatSessionResponse;
 use crate::models::projects::{
     FrameworkType, LanguageType, PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse,
-    ProjectResponse, ProjectRuntimeResponse, ProjectRuntimeWithConnectedChatResponse,
-    ProjectUnitRow,
+    ProjectResponse, ProjectRuntimeInsert, ProjectRuntimeResponse, ProjectUnitRow,
 };
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
@@ -26,7 +24,6 @@ use diesel::prelude::*;
 use diesel::result::Error;
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashMap;
 use uuid::Uuid;
 
 #[derive(Clone, Deserialize)]
@@ -110,10 +107,31 @@ pub async fn handle_create_project(
     };
 
     let project: ProjectResponse = match database::block_on_db(&context.pool, move |conn| {
-        diesel::insert_into(projects::table)
-            .values(&new_project)
-            .returning(ProjectResponse::as_select())
-            .get_result(conn)
+        conn.transaction::<_, Error, _>(|conn| {
+            let project = diesel::insert_into(projects::table)
+                .values(&new_project)
+                .returning(ProjectResponse::as_select())
+                .get_result(conn)?;
+
+            diesel::insert_into(project_runtimes::table)
+                .values(&[
+                    ProjectRuntimeInsert {
+                        project_id: project.id,
+                        environment: PlatformEnvironmentType::Stage,
+                        name: Some("Stage 1".to_string()),
+                        slug: Some("stage-1".to_string()),
+                    },
+                    ProjectRuntimeInsert {
+                        project_id: project.id,
+                        environment: PlatformEnvironmentType::Prod,
+                        name: Some("Production".to_string()),
+                        slug: Some("prod".to_string()),
+                    },
+                ])
+                .execute(conn)?;
+
+            Ok(project)
+        })
     })
     .await
     {
@@ -417,7 +435,7 @@ pub struct ListProjectRuntimesQuery {
     pub stage: Option<bool>,
 }
 
-pub async fn handle_list_project_runtimes_with_connected_chat_sessions(
+pub async fn handle_list_project_runtimes(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<Uuid>,
@@ -439,7 +457,7 @@ pub async fn handle_list_project_runtimes_with_connected_chat_sessions(
         }
     });
 
-    let runtimes_with_chat = match database::block_on_db(&context.pool, move |conn| {
+    let runtimes = match database::block_on_db(&context.pool, move |conn| {
         let mut q = project_runtimes::table
             .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
@@ -448,43 +466,14 @@ pub async fn handle_list_project_runtimes_with_connected_chat_sessions(
         if let Some(env) = env_filter {
             q = q.filter(project_runtimes::environment.eq(env));
         }
-        let runtimes: Vec<ProjectRuntimeResponse> = q
-            .select(ProjectRuntimeResponse::as_select())
+        q.select(ProjectRuntimeResponse::as_select())
             .load::<ProjectRuntimeResponse>(conn)
-            .unwrap_or_default();
-        let runtime_ids: Vec<Uuid> = runtimes.iter().map(|r| r.id).collect();
-        let connected_sessions: HashMap<Uuid, ChatSessionResponse> = if runtime_ids.is_empty() {
-            HashMap::new()
-        } else {
-            chat_sessions::table
-                .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
-                .filter(projects::owner_user_id.eq(user_id))
-                .filter(chat_sessions::project_id.eq(project_id))
-                .filter(chat_sessions::stage_project_runtime_id.eq_any(&runtime_ids))
-                .select(ChatSessionResponse::as_select())
-                .load::<ChatSessionResponse>(conn)
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|s| s.stage_project_runtime_id.map(|rid| (rid, s)))
-                .collect()
-        };
-        Ok::<_, diesel::result::Error>(
-            runtimes
-                .into_iter()
-                .map(|runtime| ProjectRuntimeWithConnectedChatResponse {
-                    connected_chat_session: connected_sessions.get(&runtime.id).cloned(),
-                    runtime,
-                })
-                .collect::<Vec<_>>(),
-        )
     })
     .await
     {
         Ok(v) => v,
         Err(_) => {
-            log::error!(
-                "[handle_list_project_runtimes_with_connected_chat_sessions] DB/block error"
-            );
+            log::error!("[handle_list_project_runtimes] DB/block error");
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }
@@ -492,8 +481,93 @@ pub async fn handle_list_project_runtimes_with_connected_chat_sessions(
 
     HttpResponse::Ok().json(api_success(
         "Project runtimes fetched successfully",
-        json!(runtimes_with_chat),
+        json!(runtimes),
     ))
+}
+
+/// Clears `live_release_revision` on a stage runtime. Returns 400 if the runtime is not stage,
+/// not linked to a release revision, or 404 if the runtime is missing for this project.
+pub async fn handle_detach_stage_runtime_live_release(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid)>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist");
+
+    let (project_id, runtime_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+
+    enum DetachOut {
+        NotFound,
+        NotStage,
+        NotConnected,
+        Ok(ProjectRuntimeResponse),
+    }
+
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        let rt: Option<ProjectRuntimeResponse> = project_runtimes::table
+            .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(project_runtimes::project_id.eq(project_id))
+            .filter(project_runtimes::id.eq(runtime_id))
+            .select(ProjectRuntimeResponse::as_select())
+            .first(conn)
+            .optional()?;
+
+        let Some(rt) = rt else {
+            return Ok(DetachOut::NotFound);
+        };
+
+        if rt.environment != PlatformEnvironmentType::Stage {
+            return Ok(DetachOut::NotStage);
+        }
+
+        if rt.live_release_revision.is_none() {
+            return Ok(DetachOut::NotConnected);
+        }
+
+        let updated = diesel::update(
+            project_runtimes::table
+                .filter(project_runtimes::id.eq(runtime_id))
+                .filter(project_runtimes::project_id.eq(project_id)),
+        )
+        .set(project_runtimes::live_release_revision.eq(None::<i32>))
+        .returning(ProjectRuntimeResponse::as_select())
+        .get_result::<ProjectRuntimeResponse>(conn)?;
+
+        Ok(DetachOut::Ok(updated))
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(_) => {
+            log::error!("[handle_detach_stage_runtime_live_release] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    match outcome {
+        DetachOut::NotFound => {
+            HttpResponse::NotFound().json(api_error("Project runtime not found", json!({})))
+        }
+        DetachOut::NotStage => HttpResponse::BadRequest().json(api_error(
+            "Only stage runtimes can be detached from a live release revision",
+            json!({}),
+        )),
+        DetachOut::NotConnected => HttpResponse::BadRequest().json(api_error(
+            "Stage runtime is not connected to a live release revision",
+            json!({}),
+        )),
+        DetachOut::Ok(rt) => HttpResponse::Ok().json(api_success(
+            "Stage runtime detached from live release revision",
+            json!(rt),
+        )),
+    }
 }
 
 pub async fn handle_list_project_releases(
@@ -538,7 +612,7 @@ pub async fn handle_list_project_releases(
 pub async fn handle_list_project_release_units(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(Uuid, String)>,
+    path: web::Path<(Uuid, i32)>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -547,7 +621,7 @@ pub async fn handle_list_project_release_units(
         .expect("AccessPayload must exist to list project release units");
 
     #[allow(unused)]
-    let (project_id, release_version) = path.into_inner();
+    let (project_id, _release_revision) = path.into_inner();
     let user_id = access_payload.user_id;
 
     // TODO: retrieve (chat_session_id, unit id string) pairs from release metadata (id includes revision)
