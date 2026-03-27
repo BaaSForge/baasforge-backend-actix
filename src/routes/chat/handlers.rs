@@ -31,8 +31,8 @@ use crate::schema::projects;
 use crate::services::chat_worker::db::{
     load_chat_session_draft_units_latest_revision, load_latest_revisions_by_unit_paths,
     load_owned_unit_tips_for_chat_sessions,
-    load_owned_releases_by_chat_session, load_unit_tips_by_ids_for_chat_session,
-    load_units_by_ids_for_chat_session,
+    load_owned_releases_by_chat_session, load_pre_chat_base_units_by_unit_paths,
+    load_unit_tips_by_ids_for_chat_session, load_units_by_ids_for_chat_session,
 };
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 // use actix_ws::Message;
@@ -894,6 +894,92 @@ pub async fn handle_unit_latest_revisions_by_ids_for_chat_session(
 
     HttpResponse::Ok().json(api_success(
         "Latest unit revisions resolved successfully",
+        json!(response),
+    ))
+}
+
+#[derive(Serialize)]
+struct UnitPreChatBaseByPathsResponse {
+    /// Same length and order as request `unit_paths`; `null` when the smallest revision in this
+    /// session is `1`, there is no row for that path, or revision `min - 1` is missing.
+    units: Vec<Option<ProjectUnitResponse>>,
+}
+
+/// For each unit path, returns the row at revision `MIN(revision) - 1` in this session (state
+/// before the first in-session revision for that logical unit).
+pub async fn handle_unit_pre_chat_base_by_paths_for_chat_session(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<UnitPathsBody>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to resolve pre-chat base units");
+
+    let (project_id, session_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+    let paths = &body.unit_paths;
+
+    if paths.len() > MAX_UNIT_TIPS_BY_IDS {
+        return HttpResponse::BadRequest().json(api_error(
+            "Too many unit paths in one request",
+            json!({ "max": MAX_UNIT_TIPS_BY_IDS }),
+        ));
+    }
+
+    let mut unit_paths: Vec<UnitPath> = Vec::with_capacity(paths.len());
+    for path_str in paths {
+        match parse_unit_path(path_str) {
+            Ok(p) => unit_paths.push(p),
+            Err(msg) => {
+                return HttpResponse::BadRequest().json(api_error(
+                    "Invalid unit path",
+                    json!({ "unit_path": path_str, "detail": msg }),
+                ));
+            }
+        }
+    }
+
+    let response = match database::block_on_db(&context.pool, move |conn| {
+        let session_exists = chat_sessions::table
+            .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(chat_sessions::id.eq(session_id))
+            .filter(chat_sessions::project_id.eq(project_id))
+            .select(chat_sessions::id)
+            .first::<Uuid>(conn)
+            .optional()?;
+        if session_exists.is_none() {
+            return Err(diesel::result::Error::NotFound);
+        }
+        let units =
+            load_pre_chat_base_units_by_unit_paths(conn, project_id, session_id, &unit_paths)?;
+        Ok(UnitPreChatBaseByPathsResponse { units })
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(database::BlockingDbError::Query(diesel::result::Error::NotFound)) => {
+            return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
+        }
+        Err(database::BlockingDbError::Query(_)) => {
+            tracing::error!("[handle_unit_pre_chat_base_by_paths_for_chat_session] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+        Err(_) => {
+            tracing::error!(
+                "[handle_unit_pre_chat_base_by_paths_for_chat_session] pool/blocking error"
+            );
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Pre-chat base unit rows resolved successfully",
         json!(response),
     ))
 }

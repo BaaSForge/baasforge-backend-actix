@@ -186,6 +186,7 @@ impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
 /// `POST .../chat-sessions/{session_id}/unit-tips-by-ids` to resolve current tips when rendering history,
 /// or `POST .../units-by-ids` to keep the stored revision row but fill `latest_revision`.
 /// `POST .../unit-latest-revisions-by-ids` returns only the max `revision` per unit path without loading full rows.
+/// `POST .../unit-pre-chat-base-by-paths` returns the row at `MIN(revision) - 1` per path (state before the first in-session revision).
 ///
 /// JSON is a single flat object (`row` fields + `latest_revision`). Use [`Deref`] to access row
 /// fields as `unit.revision`, `unit.context_slug`, etc.

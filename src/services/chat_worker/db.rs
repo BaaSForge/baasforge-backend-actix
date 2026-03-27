@@ -4,7 +4,7 @@ use crate::models::projects::{
     ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType,
 };
 use crate::schema::{project_releases, project_units};
-use diesel::dsl::{exists, max, not};
+use diesel::dsl::{exists, max, min, not};
 use diesel::prelude::*;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -551,6 +551,69 @@ pub fn load_latest_revisions_by_unit_paths(
             .select(max(project_units::revision))
             .first(conn)?;
         out.push(max_rev);
+    }
+    Ok(out)
+}
+
+/// For each [`UnitPath`], returns the unit row at revision `MIN(revision) - 1` in this chat session
+/// (the revision that was current before the first new revision in the session). If there is no row
+/// for the path, or the minimum revision is `1`, returns `None`. Rows are wrapped with
+/// [`project_units_with_latest_revision`] like other session unit loaders.
+pub fn load_pre_chat_base_units_by_unit_paths(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    chat_session_id: Uuid,
+    paths: &[UnitPath],
+) -> Result<Vec<Option<ProjectUnitResponse>>, diesel::result::Error> {
+    if paths.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut indexed: Vec<(usize, ProjectUnitRow)> = Vec::new();
+    for (i, path) in paths.iter().enumerate() {
+        let min_rev: Option<i32> = project_units::table
+            .filter(project_units::project_id.eq(project_id))
+            .filter(project_units::chat_session_id.eq(chat_session_id))
+            .filter(project_units::context_slug.eq(&path.context_slug))
+            .filter(project_units::module_slug.eq(&path.module_slug))
+            .filter(project_units::unit_type.eq(path.unit_type))
+            .filter(project_units::unit_name_slug.eq(&path.unit_name_slug))
+            .select(min(project_units::revision))
+            .first(conn)?;
+
+        let Some(m) = min_rev else {
+            continue;
+        };
+        if m <= 1 {
+            continue;
+        }
+        let prev = m - 1;
+        let base: Option<ProjectUnitRow> = project_units::table
+            .filter(project_units::project_id.eq(project_id))
+            .filter(project_units::chat_session_id.eq(chat_session_id))
+            .filter(project_units::context_slug.eq(&path.context_slug))
+            .filter(project_units::module_slug.eq(&path.module_slug))
+            .filter(project_units::unit_type.eq(path.unit_type))
+            .filter(project_units::unit_name_slug.eq(&path.unit_name_slug))
+            .filter(project_units::revision.eq(prev))
+            .select(ProjectUnitRow::as_select())
+            .first(conn)
+            .optional()?;
+        if let Some(row) = base {
+            indexed.push((i, row));
+        }
+    }
+
+    if indexed.is_empty() {
+        return Ok(vec![None; paths.len()]);
+    }
+
+    let rows_only: Vec<ProjectUnitRow> = indexed.iter().map(|(_, r)| r.clone()).collect();
+    let with_latest = project_units_with_latest_revision(conn, project_id, rows_only)?;
+
+    let mut out: Vec<Option<ProjectUnitResponse>> = vec![None; paths.len()];
+    for ((i, _), resp) in indexed.into_iter().zip(with_latest) {
+        out[i] = Some(resp);
     }
     Ok(out)
 }
