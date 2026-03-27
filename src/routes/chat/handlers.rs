@@ -29,10 +29,12 @@ use crate::schema::chat_sessions;
 use crate::schema::project_runtimes;
 use crate::schema::projects;
 use crate::services::chat_worker::db::{
+    load_chat_session_draft_units_as_of_release_controller_message,
     load_chat_session_draft_units_latest_revision, load_latest_revisions_by_unit_paths,
     load_owned_unit_tips_for_chat_sessions,
     load_owned_releases_by_chat_session, load_pre_chat_base_units_by_unit_paths,
     load_unit_tips_by_ids_for_chat_session, load_units_by_ids_for_chat_session,
+    DraftUnitsAsOfReleaseControllerError,
 };
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 // use actix_ws::Message;
@@ -658,6 +660,72 @@ pub async fn handle_list_chat_session_draft_units(
         }
         Err(_) => {
             tracing::error!("[handle_list_chat_session_draft_units] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Chat session draft units fetched successfully",
+        json!(units),
+    ))
+}
+
+pub async fn handle_list_chat_session_draft_units_as_of_release_controller_message(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid, Uuid)>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to list chat session draft units as of release controller");
+
+    let (project_id, session_id, release_controller_message_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+
+    let units = match database::block_on_db(&context.pool, move |conn| {
+        let session_exists = chat_sessions::table
+            .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(chat_sessions::id.eq(session_id))
+            .filter(chat_sessions::project_id.eq(project_id))
+            .select(chat_sessions::id)
+            .first::<Uuid>(conn)
+            .optional()?;
+        if session_exists.is_none() {
+            return Err(diesel::result::Error::NotFound);
+        }
+        load_chat_session_draft_units_as_of_release_controller_message(
+            conn,
+            project_id,
+            session_id,
+            release_controller_message_id,
+        )
+    })
+    .await
+    {
+        Ok(Ok(units)) => units,
+        Ok(Err(DraftUnitsAsOfReleaseControllerError::MessageNotFound)) => {
+            return HttpResponse::NotFound().json(api_error(
+                "Release controller message not found for this chat session",
+                json!({}),
+            ));
+        }
+        Ok(Err(DraftUnitsAsOfReleaseControllerError::NotReleaseControllerMessage)) => {
+            return HttpResponse::BadRequest().json(api_error(
+                "Message is not a release_controller_box row",
+                json!({}),
+            ));
+        }
+        Err(database::BlockingDbError::Query(diesel::result::Error::NotFound)) => {
+            return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
+        }
+        Err(_) => {
+            tracing::error!(
+                "[handle_list_chat_session_draft_units_as_of_release_controller_message] DB/block error"
+            );
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }

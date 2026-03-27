@@ -313,6 +313,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
+                        "/projects/{id}/chat-sessions/{session_id}/draft-units/as-of-release-controller-message/{message_id}",
+                        web::get()
+                            .to(chat::handle_list_chat_session_draft_units_as_of_release_controller_message)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
                         "/projects/{id}/chat-sessions/{session_id}/unit-tips-by-ids",
                         web::post()
                             .to(chat::handle_unit_tips_by_ids_for_chat_session)

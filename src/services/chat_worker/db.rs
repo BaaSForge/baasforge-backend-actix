@@ -1,14 +1,27 @@
 use crate::database::PooledConn;
 use crate::libs::unit_slug::UnitPath;
+use crate::models::chat_messages::{ChatMessagePayload, ChatMessageStatus, ChatMessageType};
 use crate::models::projects::{
     ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType,
 };
-use crate::schema::{project_releases, project_units};
+use crate::schema::{chat_messages, project_releases, project_units};
+use chrono::{DateTime, Utc};
 use diesel::dsl::{exists, max, min, not};
 use diesel::prelude::*;
 use diesel::OptionalExtension;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+/// Returned inside [`Result::Ok`] from [`load_chat_session_draft_units_as_of_release_controller_message`]
+/// when the message id does not denote a release-controller row for this session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraftUnitsAsOfReleaseControllerError {
+    MessageNotFound,
+    NotReleaseControllerMessage,
+}
+
+type LogicalUnitKey = (String, String, ProjectUnitType, String);
 
 /// Columns for [`ProjectUnitRow`] when selecting from a `project_units` alias (order matches the struct).
 macro_rules! select_project_unit_row {
@@ -318,6 +331,145 @@ pub fn load_chat_session_draft_units_latest_revision(
         .and_then(|rows| project_units_with_latest_revision(conn, project_id, rows))
 }
 
+/// Same logical key as elsewhere in this module (e.g. [`load_unit_tips_by_ids_for_chat_session`]).
+fn logical_unit_key_from_row(row: &ProjectUnitRow) -> LogicalUnitKey {
+    (
+        row.context_slug.clone(),
+        row.module_slug.clone(),
+        row.unit_type,
+        row.unit_name_slug.clone(),
+    )
+}
+
+/// Draft unit tips for `session_id` as they were **before** the given release-controller message:
+/// replays only completed `ToolCreateUnit` / `ToolModifyUnit` / `ToolRemoveUnit` messages ordered
+/// before `(cutoff_created_at, cutoff_message_id)`, keeps the last stored unit id per logical path,
+/// then loads those draft rows. [`ProjectUnitResponse::latest_revision`] is set to the row revision
+/// (the tip at that point in time), matching full-session draft responses where the returned row is
+/// always the current tip.
+pub fn load_chat_session_draft_units_before_message_cutoff(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    cutoff_created_at: DateTime<Utc>,
+    cutoff_message_id: Uuid,
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    let tool_rows: Vec<(ChatMessageType, Option<Value>)> = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(
+            chat_messages::type_
+                .eq(ChatMessageType::ToolCreateUnit)
+                .or(chat_messages::type_.eq(ChatMessageType::ToolModifyUnit))
+                .or(chat_messages::type_.eq(ChatMessageType::ToolRemoveUnit)),
+        )
+        .filter(
+            chat_messages::created_at
+                .lt(cutoff_created_at)
+                .or(chat_messages::created_at.eq(cutoff_created_at).and(
+                    chat_messages::id.lt(cutoff_message_id),
+                )),
+        )
+        .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
+        .order_by((chat_messages::created_at.asc(), chat_messages::id.asc()))
+        .select((chat_messages::type_, chat_messages::payload))
+        .load(conn)?;
+
+    let mut tips: HashMap<LogicalUnitKey, String> = HashMap::new();
+
+    for (type_, payload) in tool_rows {
+        let Ok(Some(parsed)) = ChatMessagePayload::from_value(&type_, payload) else {
+            continue;
+        };
+        match parsed {
+            ChatMessagePayload::ToolCreateUnit(p) => {
+                if p.error.is_none() {
+                    if let Some(u) = p.created_unit {
+                        tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
+                    }
+                }
+            }
+            ChatMessagePayload::ToolModifyUnit(p) => {
+                if p.error.is_none() {
+                    if let Some(u) = p.revised_unit {
+                        tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
+                    }
+                }
+            }
+            ChatMessagePayload::ToolRemoveUnit(p) => {
+                if p.error.is_none() {
+                    if let Some(u) = p.removed_unit {
+                        tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if tips.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let ids: Vec<String> = tips.into_values().collect();
+
+    let rows: Vec<ProjectUnitRow> = project_units::table
+        .filter(project_units::project_id.eq(project_id))
+        .filter(project_units::chat_session_id.eq(session_id))
+        .filter(project_units::is_draft.eq(true))
+        .filter(project_units::id.eq_any(ids))
+        .select(ProjectUnitRow::as_select())
+        .load(conn)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let rev = row.revision;
+            ProjectUnitResponse::from_row(row, rev)
+        })
+        .collect())
+}
+
+/// Resolves a `release_controller_box` message in `session_id`, then returns draft unit tips for
+/// that session **as of** the point in time immediately before that message (see
+/// [`load_chat_session_draft_units_before_message_cutoff`]).
+///
+/// Outer [`Result::Err`] is a Diesel error. Inner [`Result::Err`] means the message is missing or
+/// not a release-controller row.
+pub fn load_chat_session_draft_units_as_of_release_controller_message(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    release_controller_message_id: Uuid,
+) -> Result<
+    Result<Vec<ProjectUnitResponse>, DraftUnitsAsOfReleaseControllerError>,
+    diesel::result::Error,
+> {
+    let rcb: Option<(ChatMessageType, DateTime<Utc>)> = chat_messages::table
+        .filter(chat_messages::id.eq(release_controller_message_id))
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .select((chat_messages::type_, chat_messages::created_at))
+        .first::<(ChatMessageType, DateTime<Utc>)>(conn)
+        .optional()?;
+
+    let Some((typ, created_at)) = rcb else {
+        return Ok(Err(DraftUnitsAsOfReleaseControllerError::MessageNotFound));
+    };
+    if typ != ChatMessageType::ReleaseControllerBox {
+        return Ok(Err(
+            DraftUnitsAsOfReleaseControllerError::NotReleaseControllerMessage,
+        ));
+    }
+
+    let units = load_chat_session_draft_units_before_message_cutoff(
+        conn,
+        project_id,
+        session_id,
+        created_at,
+        release_controller_message_id,
+    )?;
+    Ok(Ok(units))
+}
+
 /// Order matches `keys` (omits unknown pairs). Each key is `(chat_session_id, id)`; `id` is the full stored id including revision.
 pub fn load_project_units_by_keys(
     conn: &mut PooledConn,
@@ -436,8 +588,6 @@ pub fn load_owned_unit_tips_for_chat_sessions(
     Ok(by_session)
 }
 
-type LogicalUnitKey = (String, String, ProjectUnitType, String);
-
 /// For each stored `unit_id` (full id including revision), resolves the **revision tip** for that
 /// logical unit in `chat_session_id` (same “no newer revision” rule as
 /// [`load_owned_unit_tips_for_chat_sessions`]) and returns [`ProjectUnitResponse`] with
@@ -456,13 +606,7 @@ pub fn load_unit_tips_by_ids_for_chat_session(
     let tips_map = load_owned_unit_tips_for_chat_sessions(conn, project_id, &[chat_session_id])?;
     if let Some(vec) = tips_map.get(&chat_session_id) {
         for u in vec {
-            let key = (
-                u.context_slug.clone(),
-                u.module_slug.clone(),
-                u.unit_type,
-                u.unit_name_slug.clone(),
-            );
-            tips_by_key.insert(key, u.clone());
+            tips_by_key.insert(logical_unit_key_from_row(&u.row), u.clone());
         }
     }
 
@@ -479,13 +623,11 @@ pub fn load_unit_tips_by_ids_for_chat_session(
             out.push(None);
             continue;
         };
-        let key = (
-            a.context_slug,
-            a.module_slug,
-            a.unit_type,
-            a.unit_name_slug,
+        out.push(
+            tips_by_key
+                .get(&logical_unit_key_from_row(&a))
+                .cloned(),
         );
-        out.push(tips_by_key.get(&key).cloned());
     }
     Ok(out)
 }
