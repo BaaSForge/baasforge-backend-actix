@@ -19,6 +19,7 @@ use crate::services::chat_worker::generation_lifecycle;
 use crate::services::chat_worker::llm::tools::{ToolMessageContext, spawn_tool_message_handler};
 use crate::services::chat_worker::llm::{GenerateOutcome, build_llm_client};
 use crate::services::chat_worker::processor::process_one;
+use crate::services::chat_worker::release_controller_box;
 use crate::services::message_queue::{
     create_shared_publisher, publish_to_dead_letter, publish_to_retry_delay,
 };
@@ -170,12 +171,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         };
 
-        if let Err(e) = payload.validate() {
-            tracing::error!("Invalid queue message: {}", e);
-            let _ = delivery.acker.ack(BasicAckOptions::default()).await;
-            continue;
-        }
-
         let response_message_id = payload.response_message_id;
 
         if payload.type_ == ChatMessageType::Text {
@@ -186,7 +181,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         %project_id,
                         %session_id,
                         %response_message_id,
-                        "Text queue message missing user_id after validate; acking and skipping"
+                        "Text queue message: as_text_message_for_processing returned None; acking and skipping"
                     );
                     let _ = delivery.acker.ack(BasicAckOptions::default()).await;
                     continue;
@@ -261,6 +256,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         GenerateOutcome::Completed(p)
                             if p.requested_tool_calls.as_ref().is_some_and(|c| !c.is_empty())
                     );
+                    let should_publish_release_probe = matches!(agent, ChatAgentType::Planner)
+                        && payload.invoking_message_id.is_none()
+                        && matches!(outcome, GenerateOutcome::Completed(_))
+                        && !will_schedule_continuation;
                     generation_lifecycle::notify_if_generation_loop_finished(
                         &redis_conn,
                         user_id,
@@ -269,6 +268,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         will_schedule_continuation,
                     )
                     .await;
+                    if should_publish_release_probe {
+                        release_controller_box::publish_release_controller_probe(
+                            &rabbit_publisher,
+                            user_id,
+                            project_id,
+                            session_id,
+                        )
+                        .await;
+                    }
                 }
                 Err(e) => {
                     if retry_policy.should_dead_letter(retry_num) {
@@ -400,9 +408,32 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {
                 tracing::warn!("Failed to ack delivery");
             }
+        } else if payload.type_ == ChatMessageType::ReleaseControllerBox {
+            let user_id = payload.user_id;
+            if let Err(e) = release_controller_box::consume_release_controller_queue_message(
+                &pool,
+                &redis_conn,
+                user_id,
+                project_id,
+                session_id,
+                response_message_id,
+            )
+            .await
+            {
+                tracing::error!(
+                    %project_id,
+                    %session_id,
+                    %response_message_id,
+                    "release_controller_box consumer: {}",
+                    e
+                );
+            }
+            if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {
+                tracing::warn!("Failed to ack delivery");
+            }
         } else {
             // Non-TEXT: create message in DB, publish Redis "new message created", then type-specific handler.
-            let user_id = payload.user_id.expect("validated");
+            let user_id = payload.user_id;
             let chat_payload = match payload.typed_payload() {
                 Ok(p) => p,
                 Err(e) => {

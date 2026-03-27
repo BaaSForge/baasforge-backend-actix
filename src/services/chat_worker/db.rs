@@ -6,6 +6,7 @@ use crate::models::projects::{
 use crate::schema::{project_releases, project_units};
 use diesel::dsl::{exists, max, min, not};
 use diesel::prelude::*;
+use diesel::OptionalExtension;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 

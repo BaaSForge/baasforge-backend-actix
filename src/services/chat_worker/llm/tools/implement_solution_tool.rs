@@ -99,7 +99,7 @@ pub async fn handler(
 
     let response_message_id = crate::libs::ids::new_uuid();
     let queue_message = ChatSessionQueueMessage {
-        user_id: Some(user_id),
+        user_id,
         role: ChatSessionRoleType::Ai,
         type_: ChatMessageType::Text,
         payload: None,

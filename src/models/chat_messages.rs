@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::models::projects::ProjectUnitResponse;
+use crate::models::projects::{ProjectReleaseResponse, ProjectUnitResponse};
 use crate::services::chat_worker::llm::tools::{
     ToolAnalyzeArchitecturePayload, ToolAnalyzeSolutionPayload, ToolCreateUnitPayload,
     ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
@@ -115,6 +115,15 @@ impl TextPayload {
     }
 }
 
+/// Release row shape for [`ReleaseControllerBoxPayload`] (API name: `ReleaseType`).
+pub type ReleaseType = ProjectReleaseResponse;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReleaseControllerBoxPayload {
+    pub stage_release: Option<ReleaseType>,
+    pub prod_release: Option<ReleaseType>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DbEnum, Serialize, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::ChatSessionRoleType"]
 #[DbValueStyle = "snake_case"]
@@ -122,6 +131,8 @@ impl TextPayload {
 pub enum ChatSessionRoleType {
     User,
     Ai,
+    /// Non-model rows (e.g. UI chrome such as [`ChatMessageType::ReleaseControllerBox`]).
+    System,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DbEnum, Serialize, Deserialize)]
@@ -131,6 +142,8 @@ pub enum ChatSessionRoleType {
 pub enum ChatMessageType {
     Text,
     Units,
+    /// UI hint for release/deploy controls after a planner turn that touched units (internal; not LLM input).
+    ReleaseControllerBox,
     ToolFetchRelevantUnits,
     ToolFetchLatestReleases,
     ToolListUnitContexts,
@@ -178,6 +191,7 @@ pub enum ChatAgentType {
 pub enum ChatMessagePayload {
     Text(TextPayload),
     Units(Vec<ProjectUnitResponse>),
+    ReleaseControllerBox(ReleaseControllerBoxPayload),
     ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
     ToolFetchLatestReleases(ToolFetchLatestReleasesPayload),
     // `ToolListUnitContexts` / `ToolListModulesForUnitContexts` use permissive `args` + defaults.
@@ -202,6 +216,7 @@ impl ChatMessagePayload {
         match self {
             ChatMessagePayload::Text(_) => "Text",
             ChatMessagePayload::Units(_) => "Units",
+            ChatMessagePayload::ReleaseControllerBox(_) => "ReleaseControllerBox",
             ChatMessagePayload::ToolFetchRelevantUnits(_) => "ToolFetchRelevantUnits",
             ChatMessagePayload::ToolFetchLatestReleases(_) => "ToolFetchLatestReleases",
             ChatMessagePayload::ToolAnalyzeArchitecture(_) => "ToolAnalyzeArchitecture",
@@ -229,6 +244,10 @@ impl ChatMessagePayload {
             ChatMessageType::Text => {
                 let text_payload = serde_json::from_value::<TextPayload>(v)?;
                 ChatMessagePayload::Text(text_payload)
+            }
+            ChatMessageType::ReleaseControllerBox => {
+                let p = serde_json::from_value::<ReleaseControllerBoxPayload>(v)?;
+                ChatMessagePayload::ReleaseControllerBox(p)
             }
             ChatMessageType::Units => {
                 let arr = serde_json::from_value::<Vec<ProjectUnitResponse>>(v)?;

@@ -7,7 +7,6 @@ use crate::services::message_queue::{
 use lapin::{Connection, Consumer};
 use serde::Serialize;
 use serde_json::Value;
-use std::io;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -59,8 +58,8 @@ pub fn parse_chat_routing_key(routing_key: &str) -> Option<(Uuid, Uuid)> {
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ChatSessionQueueMessage {
-    #[serde(default)]
-    pub user_id: Option<Uuid>,
+    /// Project owner; required for every queue message (WS channel, `process_one`, tool handlers).
+    pub user_id: Uuid,
     pub role: ChatSessionRoleType,
     #[serde(rename = "type")]
     pub type_: ChatMessageType,
@@ -88,29 +87,15 @@ impl ChatSessionQueueMessage {
         ChatMessagePayload::from_value(&self.type_, self.payload.clone())
     }
 
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if matches!(self.role, ChatSessionRoleType::User) && self.user_id.is_none() {
-            return Err("user_id is required when role is User");
-        }
-        // Ai + Text is used for continuation after tool calls; user_id is required to run process_one.
-        if matches!(self.role, ChatSessionRoleType::Ai)
-            && matches!(self.type_, ChatMessageType::Text)
-            && self.user_id.is_none()
-        {
-            return Err("user_id is required when role is Ai and type is Text");
-        }
-        Ok(())
-    }
-
     /// Resolves `user_id` and the string passed to [`crate::services::chat_worker::processor::process_one`]
-    /// as the current user turn. For `type` [`ChatMessageType::Text`], [`Self::validate`] must have ensured
-    /// `user_id` is set. If `payload` is missing or not [`ChatMessagePayload::Text`], `user_text` is empty
+    /// as the current user turn. For `type` [`ChatMessageType::Text`], if `payload` is missing or not
+    /// [`ChatMessagePayload::Text`], `user_text` is empty
     /// and the worker still runs the LLM (sub-agents may rely on history only).
     pub fn as_text_message_for_processing(&self) -> Option<(Uuid, String)> {
         if !matches!(self.type_, ChatMessageType::Text) {
             return None;
         }
-        let user_id = self.user_id?;
+        let user_id = self.user_id;
         let user_text = match self.typed_payload() {
             Ok(Some(ChatMessagePayload::Text(p))) => p.text.clone(),
             Ok(Some(_)) => {
@@ -146,12 +131,6 @@ pub async fn publish_with_publisher(
     session_id: Uuid,
     message: &ChatSessionQueueMessage,
 ) -> Result<(), PublishError> {
-    message.validate().map_err(|e| {
-        PublishError::Serialize(serde_json::Error::io(io::Error::new(
-            io::ErrorKind::InvalidData,
-            e,
-        )))
-    })?;
     let payload = serde_json::to_vec(message).map_err(PublishError::Serialize)?;
     message_queue::publish_with_channel(
         publisher.as_ref(),

@@ -3,10 +3,12 @@ use crate::models::chat_messages::{
     ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::schema::chat_messages;
+use crate::services::chat_worker::llm::history::UPSTREAM_EXCLUDED_MESSAGE_TYPES;
 use crate::services::chat_worker::llm::tools::{
     analyze_architecture_tool, analyze_solution_tool, implement_solution_tool, load_latest_releases,
 };
 use crate::services::chat_worker::units_definitions;
+use diesel::dsl::not;
 use diesel::prelude::*;
 use diesel::result::Error;
 use serde_json::Value;
@@ -36,6 +38,7 @@ pub fn load_history(
     let rows = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))
         .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
+        .filter(not(chat_messages::type_.eq_any(UPSTREAM_EXCLUDED_MESSAGE_TYPES)))
         .filter(
             chat_messages::role.eq(ChatSessionRoleType::User).or(
                 chat_messages::role.eq(ChatSessionRoleType::Ai).and(

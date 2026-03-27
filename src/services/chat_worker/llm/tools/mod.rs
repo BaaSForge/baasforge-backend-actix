@@ -239,7 +239,7 @@ pub fn tool_context_for_chat_session(
                     let payload_json = serde_json::to_value(&payload)
                         .map_err(|e| -> BoxError { format!("queue tool payload json: {}", e).into() })?;
                     let message = ChatSessionQueueMessage {
-                        user_id: Some(user_id),
+                        user_id,
                         role: ChatSessionRoleType::Ai,
                         type_: message_type,
                         payload: Some(payload_json),
@@ -704,7 +704,7 @@ pub async fn maybe_complete_invoking_message(
         }))
         .expect("serialize empty TextPayload for queue continuation");
         let queue_message = ChatSessionQueueMessage {
-            user_id: Some(user_id),
+            user_id,
             role: ChatSessionRoleType::Ai,
             type_: ChatMessageType::Text,
             payload: Some(continuation_payload),

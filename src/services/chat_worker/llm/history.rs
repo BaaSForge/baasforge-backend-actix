@@ -3,12 +3,35 @@
 //! LLM APIs expect a strict order: User → Assistant (with tool_calls) → Tool result for each
 //! tool_call_id → … The tool-call request (assistant message) and each tool result are always
 //! separate messages; we never combine them into one.
+//!
+//! Types listed in [`UPSTREAM_EXCLUDED_MESSAGE_TYPES`] are stripped in
+//! [`filter_session_messages_for_upstream_llm`] (called from [`crate::services::chat_worker::agent::load_history_for_agent`])
+//! and skipped again in [`session_messages_to_upstream_entries`] as a safeguard.
 
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload, ThinkingBlock,
 };
 use serde_json::Value;
 use std::collections::HashSet;
+
+/// [`ChatMessageType`] values that must never be sent to LLM APIs (UI/session metadata only).
+/// Extend this list when adding similar non-model rows.
+pub const UPSTREAM_EXCLUDED_MESSAGE_TYPES: &[ChatMessageType] = &[ChatMessageType::ReleaseControllerBox];
+
+#[inline]
+pub fn is_excluded_from_upstream_llm_history(type_: &ChatMessageType) -> bool {
+    UPSTREAM_EXCLUDED_MESSAGE_TYPES.contains(type_)
+}
+
+/// Removes excluded types before [`session_messages_to_upstream_entries`], tool-result cleanup, and trimming.
+pub fn filter_session_messages_for_upstream_llm(
+    messages: Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>,
+) -> Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)> {
+    messages
+        .into_iter()
+        .filter(|(_, t, _)| !is_excluded_from_upstream_llm_history(t))
+        .collect()
+}
 
 /// One tool call from an assistant message (id, name, arguments).
 /// thought_signature is required by Gemini when replaying history.
@@ -396,6 +419,9 @@ pub fn session_messages_to_upstream_entries(
     let mut fallback_tool_id = 0usize;
 
     for (role, type_, payload) in session_messages {
+        if is_excluded_from_upstream_llm_history(type_) {
+            continue;
+        }
         match (role, type_) {
             (ChatSessionRoleType::User, _) => {
                 let text = payload_to_string(payload).trim().to_string();
@@ -459,18 +485,24 @@ pub fn session_messages_to_upstream_entries(
                     }
                 }
             }
+            (ChatSessionRoleType::System, _) => {}
             _ => {
                 let text = payload_to_string(payload).trim().to_string();
-                if !text.is_empty() {
-                    let entry = match role {
-                        ChatSessionRoleType::User => UpstreamHistoryEntry::User { text },
-                        ChatSessionRoleType::Ai => UpstreamHistoryEntry::Assistant {
+                if text.is_empty() {
+                    continue;
+                }
+                match role {
+                    ChatSessionRoleType::User => {
+                        out.push(UpstreamHistoryEntry::User { text });
+                    }
+                    ChatSessionRoleType::Ai => {
+                        out.push(UpstreamHistoryEntry::Assistant {
                             text,
                             tool_calls: None,
                             thinking_blocks: None,
-                        },
-                    };
-                    out.push(entry);
+                        });
+                    }
+                    ChatSessionRoleType::System => {}
                 }
             }
         }

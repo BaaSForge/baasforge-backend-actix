@@ -107,7 +107,7 @@ pub async fn handler(
     // `invoking_message_id` = this tool row: sub-agent Text is nested under the tool; nested tools
     // under that agent use `tool_context` → parent = that Text message id (see `process_one`).
     let queue_message = ChatSessionQueueMessage {
-        user_id: Some(user_id),
+        user_id,
         role: ChatSessionRoleType::Ai,
         type_: ChatMessageType::Text,
         payload: None,

@@ -7,6 +7,7 @@ mod solution_analyzer;
 use crate::database::PooledConn;
 use crate::models::chat_messages::{ChatAgentType, ChatMessageType, ChatSessionRoleType};
 use crate::services::chat_worker::llm::history::{
+    filter_session_messages_for_upstream_llm,
     remove_tool_result_messages_without_matching_assistant_tool_use,
     trim_assistant_requested_tool_calls_to_match_following_tool_results,
 };
@@ -65,6 +66,7 @@ pub fn load_history_for_agent(
             developer::load_history(conn, session_id, thread_anchor_message_id)
         }
     }?;
+    messages = filter_session_messages_for_upstream_llm(messages);
     remove_tool_result_messages_without_matching_assistant_tool_use(&mut messages);
     trim_assistant_requested_tool_calls_to_match_following_tool_results(&mut messages);
     Ok(messages)
