@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Description for the `query` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
-pub const ARG_QUERY_DESCRIPTION: &str = "Search query to filter or find relevant units in the latest production release (e.g. user's question, keywords, or a short phrase). Must not be empty.";
+pub const ARG_QUERY_DESCRIPTION: &str = "Search query to filter or find relevant units in the current live production release (e.g. user's question, keywords, or a short phrase). Must not be empty.";
 
 /// Args for load_latest_production_release_units. Schema from this struct is used for Gemini; GPT and Claude use params_schema() in spec().
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
@@ -93,7 +93,7 @@ pub const TOOL_NAME: &str = "load_latest_production_release_units";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Load units from the latest production release for the current project, filtered by a search query. You MUST always pass the 'query' parameter: set it to the user's exact question or a short phrase summarizing their intent (e.g. 'auth controller', 'payment flow'). Never call this with an empty or missing query. Call this to understand the current production architecture before creating or modifying units.",
+        description: "Load units from the current live production snapshot for this project, filtered by a search query. You MUST always pass the 'query' parameter: set it to the user's exact question or a short phrase summarizing their intent (e.g. 'auth controller', 'payment flow'). Never call this with an empty or missing query. Use this to inspect what is already live before proposing creates or edits.",
         parameters: params_schema(),
     }
 }

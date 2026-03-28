@@ -94,7 +94,7 @@ pub const TOOL_NAME: &str = "load_latest_releases";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Load the latest releases for the current project. Call this to see release history, versions, and metadata (e.g. before discussing deployments or release versions).",
+        description: "Read-only: load recent project release records (revision history and metadata). Use when the user asks about past revisions or release history. Does not create or apply releases.",
         parameters: params_schema(),
     }
 }
