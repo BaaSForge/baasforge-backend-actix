@@ -1,11 +1,16 @@
 use chrono::{DateTime, Utc};
+use diesel::deserialize::{self, FromSql};
+use diesel::pg::Pg;
+use diesel::serialize::{self, IsNull, Output, ToSql};
+use diesel::sql_types::Jsonb;
 use diesel::Insertable;
 use diesel::Queryable;
 use diesel::Selectable;
 use serde::Deserialize;
 use serde::Serialize;
-use std::ops::Deref;
 use serde_json::Value;
+use std::io::Write;
+use std::ops::Deref;
 use uuid::Uuid;
 
 #[derive(Debug, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
@@ -243,13 +248,51 @@ pub struct ProjectRuntimeResponse {
     pub live_release_revision: Option<i32>,
 }
 
+/// One unit pointer in [`ReleaseUnitsMetadata`]: `unit_id` is the full stored id (path + revision).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReleaseUnitRef {
+    pub chat_session_id: Uuid,
+    pub unit_id: String,
+}
+
+/// JSON stored in `project_releases.units_metadata` for stage/production releases from this API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseUnitsMetadata {
+    #[serde(rename = "previousUnitIDs")]
+    pub previous_unit_refs: Vec<ReleaseUnitRef>,
+    #[serde(rename = "newUnitIDs")]
+    pub new_unit_refs: Vec<ReleaseUnitRef>,
+    #[serde(rename = "combinedUnitIDs")]
+    pub combined_unit_refs: Vec<ReleaseUnitRef>,
+}
+
+impl FromSql<Jsonb, Pg> for ReleaseUnitsMetadata {
+    fn from_sql(value: diesel::pg::PgValue<'_>) -> deserialize::Result<Self> {
+        let v = <serde_json::Value as FromSql<Jsonb, Pg>>::from_sql(value)?;
+        serde_json::from_value(v).map_err(|e| Box::new(e) as _)
+    }
+}
+
+impl ToSql<Jsonb, Pg> for ReleaseUnitsMetadata {
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
+        // Match `serde_json::Value`’s Jsonb encoding: version prefix + JSON bytes.
+        out.write_all(&[1])?;
+        serde_json::to_writer(out, self)
+            .map(|_| IsNull::No)
+            .map_err(Into::into)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Queryable, Selectable)]
 #[diesel(table_name = crate::schema::project_releases)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectReleaseResponse {
     pub id: Uuid,
     pub project_id: Uuid,
-    pub units_metadata: Option<Value>,
+    /// [`ReleaseUnitsMetadata`] (`previousUnitIDs` / `newUnitIDs` / `combinedUnitIDs`).
+    pub units_metadata: Option<ReleaseUnitsMetadata>,
     pub created_at: DateTime<Utc>,
     pub notes: Option<String>,
     pub chat_session_id: Option<Uuid>,

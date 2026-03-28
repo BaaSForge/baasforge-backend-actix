@@ -38,7 +38,7 @@ use crate::services::chat_worker::db::{
 };
 use crate::services::releases::{
     combined_units_from_release_metadata, compute_new_units, load_latest_production_release_for_project,
-    merge_combined_units, next_project_release_revision, release_units_metadata_to_json,
+    merge_combined_units, next_project_release_revision, project_unit_refs_from_responses,
     ReleaseUnitsMetadata,
 };
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
@@ -1111,6 +1111,10 @@ enum StageReleaseOutcome {
     SessionNotFound,
     MessageNotFound,
     NotReleaseController,
+    /// `type_` is `release_controller_box` but `payload` is NULL (e.g. row not yet filled by worker).
+    ReleaseControllerPayloadMissing,
+    /// Payload present but does not deserialize as [`ReleaseControllerBoxPayload`].
+    ReleaseControllerPayloadInvalid,
     RuntimeNotFound,
     RuntimeNotStage,
     Metadata(String),
@@ -1121,6 +1125,8 @@ enum ProdReleaseOutcome {
     SessionNotFound,
     MessageNotFound,
     NotReleaseController,
+    ReleaseControllerPayloadMissing,
+    ReleaseControllerPayloadInvalid,
     NoStageRelease,
     Metadata(String),
 }
@@ -1170,11 +1176,28 @@ pub async fn handle_create_stage_release(
                 return Ok(StageReleaseOutcome::NotReleaseController);
             }
 
-            let parsed = ChatMessagePayload::from_value(&msg_row.type_, msg_row.payload.clone())
-                .ok()
-                .flatten();
-            let Some(ChatMessagePayload::ReleaseControllerBox(mut box_payload)) = parsed else {
-                return Ok(StageReleaseOutcome::NotReleaseController);
+            let mut box_payload = match ChatMessagePayload::from_value(
+                &msg_row.type_,
+                msg_row.payload.clone(),
+            ) {
+                Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) => p,
+                Ok(None) => return Ok(StageReleaseOutcome::ReleaseControllerPayloadMissing),
+                Ok(Some(other)) => {
+                    tracing::warn!(
+                        message_id = %message_id,
+                        variant = other.variant_label(),
+                        "release_controller_box row has unexpected payload variant"
+                    );
+                    return Ok(StageReleaseOutcome::ReleaseControllerPayloadInvalid);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        message_id = %message_id,
+                        error = %e,
+                        "release_controller_box payload deserialize failed"
+                    );
+                    return Ok(StageReleaseOutcome::ReleaseControllerPayloadInvalid);
+                }
             };
 
             let stage_rt: Option<ProjectRuntimeResponse> = project_runtimes::table
@@ -1197,7 +1220,7 @@ pub async fn handle_create_stage_release(
                 .as_ref()
                 .and_then(|r| r.units_metadata.as_ref())
             {
-                Some(m) => match combined_units_from_release_metadata(Some(m)) {
+                Some(m) => match combined_units_from_release_metadata(conn, project_id, Some(m)) {
                     Ok(u) => u,
                     Err(e) => {
                         return Ok(StageReleaseOutcome::Metadata(e.to_string()));
@@ -1206,7 +1229,6 @@ pub async fn handle_create_stage_release(
                 None => Vec::new(),
             };
 
-            let previous_units = previous_combined.clone();
             let session_tips = load_chat_session_draft_units_before_message_cutoff(
                 conn,
                 project_id,
@@ -1218,13 +1240,9 @@ pub async fn handle_create_stage_release(
             let combined_units = merge_combined_units(&previous_combined, &session_tips);
 
             let meta = ReleaseUnitsMetadata {
-                previous_units,
-                new_units,
-                combined_units,
-            };
-            let meta_json = match release_units_metadata_to_json(&meta) {
-                Ok(v) => v,
-                Err(e) => return Ok(StageReleaseOutcome::Metadata(e.to_string())),
+                previous_unit_refs: project_unit_refs_from_responses(&previous_combined),
+                new_unit_refs: project_unit_refs_from_responses(&new_units),
+                combined_unit_refs: project_unit_refs_from_responses(&combined_units),
             };
 
             let revision = next_project_release_revision(conn, project_id, true)?;
@@ -1232,7 +1250,7 @@ pub async fn handle_create_stage_release(
                 .values((
                     project_releases::project_id.eq(project_id),
                     project_releases::revision.eq(revision),
-                    project_releases::units_metadata.eq(Some(meta_json)),
+                    project_releases::units_metadata.eq(Some(meta)),
                     project_releases::notes.eq(None::<String>),
                     project_releases::chat_session_id.eq(Some(session_id)),
                     project_releases::is_stage.eq(true),
@@ -1301,6 +1319,18 @@ pub async fn handle_create_stage_release(
         StageReleaseOutcome::NotReleaseController => HttpResponse::BadRequest().json(
             api_error("Message is not a release_controller_box row", json!({})),
         ),
+        StageReleaseOutcome::ReleaseControllerPayloadMissing => HttpResponse::BadRequest().json(
+            api_error(
+                "Release controller message has no payload yet; wait for the session to finish updating or refresh",
+                json!({}),
+            ),
+        ),
+        StageReleaseOutcome::ReleaseControllerPayloadInvalid => HttpResponse::BadRequest().json(
+            api_error(
+                "Release controller message payload is missing or invalid; try refreshing the chat",
+                json!({}),
+            ),
+        ),
         StageReleaseOutcome::RuntimeNotFound => HttpResponse::NotFound().json(api_error(
             "Stage project runtime not found for this project",
             json!({}),
@@ -1354,11 +1384,28 @@ pub async fn handle_create_production_release(
             return Ok(ProdReleaseOutcome::NotReleaseController);
         }
 
-        let parsed = ChatMessagePayload::from_value(&msg_row.type_, msg_row.payload.clone())
-            .ok()
-            .flatten();
-        let Some(ChatMessagePayload::ReleaseControllerBox(mut box_payload)) = parsed else {
-            return Ok(ProdReleaseOutcome::NotReleaseController);
+        let mut box_payload = match ChatMessagePayload::from_value(
+            &msg_row.type_,
+            msg_row.payload.clone(),
+        ) {
+            Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) => p,
+            Ok(None) => return Ok(ProdReleaseOutcome::ReleaseControllerPayloadMissing),
+            Ok(Some(other)) => {
+                tracing::warn!(
+                    message_id = %message_id,
+                    variant = other.variant_label(),
+                    "release_controller_box row has unexpected payload variant"
+                );
+                return Ok(ProdReleaseOutcome::ReleaseControllerPayloadInvalid);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    message_id = %message_id,
+                    error = %e,
+                    "release_controller_box payload deserialize failed"
+                );
+                return Ok(ProdReleaseOutcome::ReleaseControllerPayloadInvalid);
+            }
         };
 
         let Some(stage) = box_payload.stage_release.clone() else {
@@ -1429,6 +1476,18 @@ pub async fn handle_create_production_release(
             .json(api_error("Release controller message not found", json!({}))),
         ProdReleaseOutcome::NotReleaseController => HttpResponse::BadRequest().json(
             api_error("Message is not a release_controller_box row", json!({})),
+        ),
+        ProdReleaseOutcome::ReleaseControllerPayloadMissing => HttpResponse::BadRequest().json(
+            api_error(
+                "Release controller message has no payload yet; wait for the session to finish updating or refresh",
+                json!({}),
+            ),
+        ),
+        ProdReleaseOutcome::ReleaseControllerPayloadInvalid => HttpResponse::BadRequest().json(
+            api_error(
+                "Release controller message payload is missing or invalid; try refreshing the chat",
+                json!({}),
+            ),
         ),
         ProdReleaseOutcome::NoStageRelease => HttpResponse::BadRequest().json(api_error(
             "No stage release on this controller; create a stage release first",

@@ -1,26 +1,16 @@
 //! Stage and production release creation: metadata shape and merge helpers.
-use crate::models::chat_messages::strip_latest_revision_from_stored_json;
+use crate::database::PooledConn;
 use crate::models::projects::{
     PlatformEnvironmentType, ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitType,
 };
 use crate::schema::{project_releases, project_runtimes};
+use crate::services::chat_worker::db::load_project_units_by_keys;
 use diesel::dsl::max;
 use diesel::prelude::*;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::database::PooledConn;
-
-/// JSON shape stored in `project_releases.units_metadata` for stage/production releases built from this API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReleaseUnitsMetadata {
-    pub previous_units: Vec<ProjectUnitResponse>,
-    pub new_units: Vec<ProjectUnitResponse>,
-    pub combined_units: Vec<ProjectUnitResponse>,
-}
+pub use crate::models::projects::{ReleaseUnitRef, ReleaseUnitsMetadata};
 
 pub type LogicalUnitKey = (String, String, ProjectUnitType, String);
 
@@ -89,30 +79,38 @@ pub fn compute_new_units(
         .collect()
 }
 
-/// Extract `combinedUnits` from release metadata (camelCase), with fallbacks for older shapes.
-pub fn combined_units_from_release_metadata(
-    meta: Option<&Value>,
-) -> Result<Vec<ProjectUnitResponse>, serde_json::Error> {
-    let Some(v) = meta else {
-        return Ok(vec![]);
-    };
-    if let Ok(m) = serde_json::from_value::<ReleaseUnitsMetadata>(v.clone()) {
-        return Ok(m.combined_units);
-    }
-    if let Some(cu) = v.get("combinedUnits") {
-        return serde_json::from_value(cu.clone());
-    }
-    if let Some(cu) = v.get("combined_units") {
-        return serde_json::from_value(cu.clone());
-    }
-    Ok(vec![])
+fn combined_rows_from_unit_refs(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    refs: &[ReleaseUnitRef],
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    let keys: Vec<(Uuid, String)> = refs
+        .iter()
+        .map(|r| (r.chat_session_id, r.unit_id.clone()))
+        .collect();
+    load_project_units_by_keys(conn, project_id, &keys)
 }
 
-pub fn release_units_metadata_to_json(
-    meta: &ReleaseUnitsMetadata,
-) -> Result<Value, serde_json::Error> {
-    let v = serde_json::to_value(meta)?;
-    Ok(strip_latest_revision_from_stored_json(v))
+/// Loads the combined snapshot from [`ReleaseUnitsMetadata`] stored in `units_metadata`.
+pub fn combined_units_from_release_metadata(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    meta: Option<&ReleaseUnitsMetadata>,
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    let Some(m) = meta else {
+        return Ok(vec![]);
+    };
+    combined_rows_from_unit_refs(conn, project_id, &m.combined_unit_refs)
+}
+
+pub fn project_unit_refs_from_responses(units: &[ProjectUnitResponse]) -> Vec<ReleaseUnitRef> {
+    units
+        .iter()
+        .map(|u| ReleaseUnitRef {
+            chat_session_id: u.chat_session_id,
+            unit_id: u.id.clone(),
+        })
+        .collect()
 }
 
 /// Resolve the baseline production release: prod runtimes' `live_release_revision` points at a
