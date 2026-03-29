@@ -61,9 +61,6 @@ pub fn payload_from_args(
 ) -> Result<ChatMessagePayload, BoxError> {
     let args: ToolListModulesForUnitContextsArgs = serde_json::from_value(args)
         .map_err(|e| -> BoxError { format!("list_modules_for_unit_contexts: invalid args: {}", e).into() })?;
-    if args.context_slugs.iter().all(|s| s.trim().is_empty()) {
-        return Err("list_modules_for_unit_contexts: context_slugs must contain at least one non-empty context slug".into());
-    }
     Ok(ChatMessagePayload::ToolListModulesForUnitContexts(
         ToolListModulesForUnitContextsPayload {
             args,
@@ -119,24 +116,40 @@ pub async fn handler(
     let tool_call_id = parsed.tool_call_id;
     let tool_name = Some(TOOL_NAME.to_string());
     let context_slugs: Vec<String> = args.context_slugs.clone();
-    let rows = block_on_db_tokio(&pool, move |conn| {
-        modules_by_context_slugs_visible_tip_units(conn, project_id, session_id, &context_slugs)
-    })
-    .await
-    .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
-    let by_context: Vec<ContextModulesEntry> = rows
-        .into_iter()
-        .map(|(context_slug, module_slugs)| ContextModulesEntry {
-            context_slug,
-            module_slugs,
+
+    let validation_error = if context_slugs.iter().all(|s| s.trim().is_empty()) {
+        Some(
+            "list_modules_for_unit_contexts: context_slugs must contain at least one non-empty context slug"
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    let (by_context, error) = if let Some(msg) = validation_error {
+        (vec![], Some(msg))
+    } else {
+        let rows = block_on_db_tokio(&pool, move |conn| {
+            modules_by_context_slugs_visible_tip_units(conn, project_id, session_id, &context_slugs)
         })
-        .collect();
+        .await
+        .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
+        let by_context: Vec<ContextModulesEntry> = rows
+            .into_iter()
+            .map(|(context_slug, module_slugs)| ContextModulesEntry {
+                context_slug,
+                module_slugs,
+            })
+            .collect();
+        (by_context, None)
+    };
+
     let full_payload = ToolListModulesForUnitContextsPayload {
         args,
         by_context,
         tool_call_id,
         tool_name,
-        error: None,
+        error,
     };
     let payload_value = serde_json::to_value(&full_payload)
         .map_err(|e| -> BoxError { format!("serialize list_modules_for_unit_contexts: {}", e).into() })?;

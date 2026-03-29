@@ -6,7 +6,7 @@
 //! - **`MESSAGE_TYPE: ChatMessageType`** — Message type for queue/DB messages produced by this tool.
 //! - **`spec() -> ToolSpec`** — Name, description, and JSON schema for parameters (for LLM declarations).
 //! - **`handler(...)`** — Async fn that processes a consumed queue message (same signature for all tools: DB pool, Redis, ids, typed [`ChatMessagePayload`], optional Rabbit publisher).
-//! - **`payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError>`** — Builds queue payload from LLM args (used by [`tool_context_for_chat_session`]).
+//! - **`payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError>`** — Builds queue payload from LLM args (used by [`tool_context_for_chat_session`]). Use only for JSON shape / coercion; **business validation** (invalid ids, empty required fields, etc.) belongs in **`handler`**, which should complete the message with `status` **Completed** and `error` set on the payload—never `return Err` from `payload_from_args` for that, or the whole turn fails before the tool row is queued.
 //! - **`gemini_declaration() -> FunctionDeclaration`** — Gemini declaration with parameter schema (used in `llm/gemini.rs`).
 //! - **Parameter descriptions** — For each argument field, define a `pub const ARG_<NAME>_DESCRIPTION: &str` and use it in both `#[schemars(description = ARG_<NAME>_DESCRIPTION)]` on the args struct and in `params_schema()` (OpenAI/Claude) so Gemini and other providers stay aligned.
 //!

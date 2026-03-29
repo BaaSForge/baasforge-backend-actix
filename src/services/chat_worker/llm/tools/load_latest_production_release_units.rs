@@ -122,17 +122,31 @@ pub async fn handler(
     let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
     let tool_name = Some(TOOL_NAME.to_string());
     let query_owned = args.query.clone();
-    let units = block_on_db_tokio(&pool, move |conn| {
-        load_units_for_latest_production_release(conn, project_id, session_id, &query_owned)
-    })
-    .await
-    .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
+    let query_empty = query_owned.trim().is_empty();
+
+    let (units, error) = if query_empty {
+        (
+            vec![],
+            Some(
+                "load_latest_production_release_units: query must not be empty; pass the user's question or keywords."
+                    .to_string(),
+            ),
+        )
+    } else {
+        let units = block_on_db_tokio(&pool, move |conn| {
+            load_units_for_latest_production_release(conn, project_id, session_id, &query_owned)
+        })
+        .await
+        .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
+        (units, None)
+    };
+
     let full_payload = ToolFetchRelevantUnitsPayload {
         args,
         units,
         tool_call_id,
         tool_name,
-        error: None,
+        error,
     };
     let payload_value = serde_json::to_value(&full_payload)
         .map(strip_latest_revision_from_stored_json)

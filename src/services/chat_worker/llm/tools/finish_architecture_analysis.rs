@@ -92,18 +92,6 @@ pub fn payload_from_args(
     tool_name: &str,
 ) -> Result<ChatMessagePayload, BoxError> {
     let args = serde_json::from_value::<ToolFinishArchitectureAnalysisArgs>(args).unwrap_or_default();
-    for (i, id) in args.relevant_unit_ids.iter().enumerate() {
-        let t = id.trim();
-        if t.is_empty() {
-            continue;
-        }
-        validate_full_unit_id_for_tool(t).map_err(|e| -> BoxError {
-            format!(
-                "finish_architecture_analysis: relevant_unit_ids[{i}] invalid: {e}"
-            )
-            .into()
-        })?;
-    }
     Ok(ChatMessagePayload::ToolFinishArchitectureAnalysis(
         ToolFinishArchitectureAnalysisPayload {
             args,
@@ -198,6 +186,114 @@ pub async fn handler(
         })
         .await
         .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
+
+    let relevant_unit_ids_validation_error: Option<String> = {
+        let mut err = None;
+        for (i, id) in finish_payload.args.relevant_unit_ids.iter().enumerate() {
+            let t = id.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if let Err(msg) = validate_full_unit_id_for_tool(t) {
+                err = Some(format!(
+                    "finish_architecture_analysis: relevant_unit_ids[{i}] invalid: {msg}"
+                ));
+                break;
+            }
+        }
+        err
+    };
+
+    if let Some(err) = relevant_unit_ids_validation_error {
+        let finish_out = ToolFinishArchitectureAnalysisPayload {
+            args: finish_payload.args.clone(),
+            tool_call_id: finish_payload.tool_call_id.clone(),
+            tool_name: finish_payload.tool_name.clone(),
+            error: Some(err.clone()),
+        };
+        let merged = ToolAnalyzeArchitecturePayload {
+            args: analyze_payload.args.clone(),
+            related_units: vec![],
+            detailed_report: finish_payload.args.detailed_report.clone(),
+            tool_call_id: analyze_payload.tool_call_id.clone(),
+            tool_name: analyze_payload.tool_name.clone(),
+            error: Some(err),
+        };
+        let merged_json = serde_json::to_value(&merged)
+            .map(strip_latest_revision_from_stored_json)
+            .map_err(|e| -> BoxError { format!("serialize analyze payload: {}", e).into() })?;
+        let finish_json = serde_json::to_value(&finish_out)
+            .map_err(|e| -> BoxError { format!("serialize finish_architecture payload: {}", e).into() })?;
+
+        let (analyze_updated, finish_updated) = block_on_db_tokio(&pool, move |conn| {
+            let analyze_updated = diesel::update(
+                chat_messages::table.filter(chat_messages::id.eq(analyze_tool_id)),
+            )
+            .set((
+                chat_messages::payload.eq(Some(merged_json)),
+                chat_messages::status.eq(ChatMessageStatus::Completed),
+            ))
+            .returning(ChatMessageRow::as_returning())
+            .get_result(conn)?;
+
+            let finish_updated = diesel::update(
+                chat_messages::table.filter(chat_messages::id.eq(message_id)),
+            )
+            .set((
+                chat_messages::payload.eq(Some(finish_json)),
+                chat_messages::status.eq(ChatMessageStatus::Completed),
+            ))
+            .returning(ChatMessageRow::as_returning())
+            .get_result(conn)?;
+
+            Ok::<_, diesel::result::Error>((analyze_updated, finish_updated))
+        })
+        .await
+        .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
+
+        let channel = user_channel(user_id);
+        for row in [analyze_updated, finish_updated] {
+            let message = ChatMessageResponse::from(row);
+            let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                project_id,
+                session_id,
+                message,
+            });
+            let mut guard = redis_conn.lock().await;
+            if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+                tracing::warn!(
+                    "finish_architecture_analysis: failed to publish message update: {}",
+                    e
+                );
+            }
+        }
+
+        maybe_complete_invoking_message(
+            &pool,
+            &redis_conn,
+            rabbit_publisher.as_ref(),
+            analyzer_text_id,
+            user_id,
+            project_id,
+            session_id,
+            false,
+        )
+        .await;
+
+        maybe_complete_invoking_message(
+            &pool,
+            &redis_conn,
+            rabbit_publisher.as_ref(),
+            planner_text_id,
+            user_id,
+            project_id,
+            session_id,
+            true,
+        )
+        .await;
+
+        return Ok(());
+    }
 
     let keys: Vec<(Uuid, String)> = finish_payload
         .args

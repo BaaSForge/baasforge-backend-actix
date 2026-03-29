@@ -62,12 +62,6 @@ pub fn payload_from_args(
     let raw = serde_json::from_value::<RemoveUnitLlmArgs>(args)
         .map_err(|e| -> BoxError { format!("remove_unit args: {}", e).into() })?;
     let unit_id = raw.unit_id.trim().to_string();
-    if unit_id.is_empty() {
-        return Err("remove_unit: unit_id must not be empty".into());
-    }
-    validate_full_unit_id_for_tool(&unit_id).map_err(|e| -> BoxError {
-        format!("remove_unit: unit_id invalid: {e}").into()
-    })?;
     let args = ToolRemoveUnitArgs { unit_id };
     Ok(ChatMessagePayload::ToolRemoveUnit(ToolRemoveUnitPayload {
         args,
@@ -121,7 +115,18 @@ pub async fn handler(
 
     let parent_key = args.unit_id.clone();
 
-    let result = block_on_db_tokio(&pool, move |conn| {
+    let precheck: Option<String> = if parent_key.is_empty() {
+        Some("remove_unit: unit_id must not be empty".to_string())
+    } else {
+        validate_full_unit_id_for_tool(&parent_key)
+            .err()
+            .map(|e| format!("remove_unit: unit_id invalid: {e}"))
+    };
+
+    let result = if let Some(msg) = precheck {
+        Ok(Err(msg))
+    } else {
+        block_on_db_tokio(&pool, move |conn| {
         let parent: Option<ProjectUnitRow> = project_units::table
             .filter(project_units::project_id.eq(project_id))
             .filter(project_units::chat_session_id.eq(session_id))
@@ -166,7 +171,8 @@ pub async fn handler(
             .get_result::<ProjectUnitRow>(conn)?;
         Ok(Ok(row))
     })
-    .await;
+        .await
+    };
 
     let (removed_unit, error): (Option<ProjectUnitResponse>, Option<String>) = match result {
         Ok(Ok(u)) => {

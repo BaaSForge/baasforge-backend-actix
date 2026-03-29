@@ -97,15 +97,6 @@ pub fn payload_from_args(
     let context_slug = raw.context_slug.trim().to_string();
     let module_slug = raw.module_slug.trim().to_string();
     let unit_name_slug = raw.unit_name_slug.trim().to_string();
-    if !is_valid_slug(&context_slug) {
-        return Err("create_unit: context_slug must be only English lowercase letters and hyphens (-)".into());
-    }
-    if !is_valid_slug(&module_slug) {
-        return Err("create_unit: module_slug must be only English lowercase letters and hyphens (-)".into());
-    }
-    if !is_valid_slug(&unit_name_slug) {
-        return Err("create_unit: unit_name_slug must be only English lowercase letters and hyphens (-)".into());
-    }
     let args = ToolCreateUnitArgs {
         context_slug,
         module_slug,
@@ -203,6 +194,16 @@ pub async fn handler(
     let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
     let tool_name = Some(TOOL_NAME.to_string());
 
+    let slug_error: Option<String> = if !is_valid_slug(&args.context_slug) {
+        Some("create_unit: context_slug must be only English lowercase letters and hyphens (-)".to_string())
+    } else if !is_valid_slug(&args.module_slug) {
+        Some("create_unit: module_slug must be only English lowercase letters and hyphens (-)".to_string())
+    } else if !is_valid_slug(&args.unit_name_slug) {
+        Some("create_unit: unit_name_slug must be only English lowercase letters and hyphens (-)".to_string())
+    } else {
+        None
+    };
+
     let id = compose_unit_id(
         &args.context_slug,
         &args.module_slug,
@@ -225,22 +226,25 @@ pub async fn handler(
         unit_name_slug: args.unit_name_slug.clone(),
     };
 
-    let created = block_on_db_tokio(&pool, move |conn| {
-        diesel::insert_into(project_units::table)
-            .values(&insert)
-            .returning(ProjectUnitRow::as_returning())
-            .get_result::<ProjectUnitRow>(conn)
-    })
-    .await;
-
-    let (created_unit, error) = match created {
-        Ok(u) => {
-            let rev = u.revision;
-            (Some(ProjectUnitResponse::from_row(u, rev)), None)
-        }
-        Err(e) => {
-            tracing::error!(%message_id, "create_unit insert: {}", e);
-            (None, Some(e.to_string()))
+    let (created_unit, error) = if let Some(msg) = slug_error {
+        (None, Some(msg))
+    } else {
+        match block_on_db_tokio(&pool, move |conn| {
+            diesel::insert_into(project_units::table)
+                .values(&insert)
+                .returning(ProjectUnitRow::as_returning())
+                .get_result::<ProjectUnitRow>(conn)
+        })
+        .await
+        {
+            Ok(u) => {
+                let rev = u.revision;
+                (Some(ProjectUnitResponse::from_row(u, rev)), None)
+            }
+            Err(e) => {
+                tracing::error!(%message_id, "create_unit insert: {}", e);
+                (None, Some(e.to_string()))
+            }
         }
     };
     let unit_for_ws = created_unit.clone();
