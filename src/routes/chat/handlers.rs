@@ -1173,13 +1173,21 @@ pub async fn broadcast_stage_release_create_effects(
         }
     }
     if let Some(ref nats) = context.runtime_nats_publisher {
-        let subject = context.settings.runtime_nats_release_subject.as_str();
+        let subject = context.settings.runtime_nats_subject_release.as_str();
         if let Err(e) = nats
             .publish_stage_release(subject, project_id, stage_runtime_id, release.revision)
             .await
         {
             tracing::warn!("[broadcast_stage_release_create_effects] NATS publish failed: {}", e);
         }
+    } else {
+        tracing::warn!(
+            target: "runtime_nats",
+            project_id = %project_id,
+            stage_runtime_id = %stage_runtime_id,
+            revision = release.revision,
+            "runtime NATS publisher not configured; stage release not announced to runtimes"
+        );
     }
 }
 
@@ -1378,13 +1386,20 @@ pub async fn handle_create_production_release(
                 }
             }
             if let Some(ref nats) = context.runtime_nats_publisher {
-                let subject = context.settings.runtime_nats_release_subject.as_str();
+                let subject = context.settings.runtime_nats_subject_release.as_str();
                 if let Err(e) = nats
                     .publish_prod_release(subject, project_id, release.revision)
                     .await
                 {
                     tracing::warn!("[handle_create_production_release] NATS publish failed: {}", e);
                 }
+            } else {
+                tracing::warn!(
+                    target: "runtime_nats",
+                    project_id = %project_id,
+                    revision = release.revision,
+                    "runtime NATS publisher not configured; production release not announced to runtimes"
+                );
             }
             HttpResponse::Ok().json(api_success(
                 "Production release created successfully",

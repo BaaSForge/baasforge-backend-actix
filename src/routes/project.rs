@@ -73,15 +73,51 @@ async fn notify_stage_runtime_release_nats(
     deployed_revision: Option<i32>,
     op_label: &'static str,
 ) {
+    let subject = context.settings.runtime_nats_subject_release.as_str();
     let Some(ref nats) = context.runtime_nats_publisher else {
+        tracing::warn!(
+            target: "runtime_nats",
+            op = op_label,
+            subject = %subject,
+            project_id = %project_id,
+            runtime_id = %runtime_id,
+            ?deployed_revision,
+            "runtime NATS publisher not configured; stage runtime will not receive release via NATS"
+        );
         return;
     };
-    let subject = context.settings.runtime_nats_release_subject.as_str();
+    tracing::info!(
+        target: "runtime_nats",
+        op = op_label,
+        subject = %subject,
+        project_id = %project_id,
+        runtime_id = %runtime_id,
+        deployed_revision = ?deployed_revision,
+        "notifying stage runtime via NATS (release deploy event for consumer)"
+    );
     if let Err(e) = nats
         .publish_stage_runtime_release_state(subject, project_id, runtime_id, deployed_revision)
         .await
     {
-        tracing::warn!("[{}] NATS publish failed: {}", op_label, e);
+        tracing::warn!(
+            target: "runtime_nats",
+            op = op_label,
+            subject = %subject,
+            project_id = %project_id,
+            runtime_id = %runtime_id,
+            error = %e,
+            "NATS publish failed after DB success; runtime may be stale"
+        );
+    } else {
+        tracing::info!(
+            target: "runtime_nats",
+            op = op_label,
+            subject = %subject,
+            project_id = %project_id,
+            runtime_id = %runtime_id,
+            deployed_revision = ?deployed_revision,
+            "NATS notify finished OK (message published; consumer should act)"
+        );
     }
 }
 
@@ -671,6 +707,14 @@ pub async fn handle_detach_stage_runtime_live_release(
 
             match outcome {
                 Ok(rt) => {
+                    tracing::info!(
+                        target: "runtime_nats",
+                        path = "POST .../detach-live-release",
+                        body = "detach_only",
+                        project_id = %project_id,
+                        runtime_id = %runtime_id,
+                        "detach-only succeeded in DB; publishing NATS event (clear live release for runtime)"
+                    );
                     notify_stage_runtime_release_nats(
                         &context,
                         project_id,
@@ -950,13 +994,20 @@ pub async fn handle_deploy_production_release(
         )),
         Out::Ok(rt) => {
             if let Some(ref nats) = context.runtime_nats_publisher {
-                let subject = context.settings.runtime_nats_release_subject.as_str();
+                let subject = context.settings.runtime_nats_subject_release.as_str();
                 if let Err(e) = nats
                     .publish_prod_release(subject, project_id, revision)
                     .await
                 {
                     tracing::warn!("[handle_deploy_production_release] NATS publish failed: {}", e);
                 }
+            } else {
+                tracing::warn!(
+                    target: "runtime_nats",
+                    project_id = %project_id,
+                    revision,
+                    "runtime NATS publisher not configured; production deploy not announced to runtimes"
+                );
             }
             HttpResponse::Ok().json(api_success(
                 "Production release deployed on runtime",

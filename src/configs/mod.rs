@@ -98,8 +98,12 @@ pub struct Settings {
     pub llm_provider: LlmProvider,
     /// When set, the API connects to NATS on startup and publishes release events.
     pub runtime_nats_url: Option<String>,
-    /// Subject for runtime release NATS publishes. `RUNTIME_NATS_RELEASE_SUBJECT` must be set.
-    pub runtime_nats_release_subject: String,
+    /// Subject for JetStream release publishes (must match the stream’s subject list).
+    pub runtime_nats_subject_release: String,
+    /// JetStream stream name (listener creates the stream; publisher uses JetStream publish).
+    pub runtime_nats_jetstream_stream_release: String,
+    /// JetStream consumer name on that stream (used by the release listener).
+    pub runtime_nats_jetstream_consumer_release: String,
 }
 
 impl Settings {
@@ -211,13 +215,31 @@ impl Settings {
                 Some(t.to_string())
             }
         });
-        let runtime_nats_release_subject_raw =
-            env::var("RUNTIME_NATS_RELEASE_SUBJECT").expect("RUNTIME_NATS_RELEASE_SUBJECT must be set");
-        let runtime_nats_release_subject = runtime_nats_release_subject_raw.trim();
-        if runtime_nats_release_subject.is_empty() {
-            return Err("RUNTIME_NATS_RELEASE_SUBJECT must not be empty".into());
+        let runtime_nats_subject_release_raw =
+            env::var("RUNTIME_NATS_SUBJECT_RELEASE").expect("RUNTIME_NATS_SUBJECT_RELEASE must be set");
+        let runtime_nats_subject_release = runtime_nats_subject_release_raw.trim();
+        if runtime_nats_subject_release.is_empty() {
+            return Err("RUNTIME_NATS_SUBJECT_RELEASE must not be empty".into());
         }
-        let runtime_nats_release_subject = runtime_nats_release_subject.to_string();
+        let runtime_nats_subject_release = runtime_nats_subject_release.to_string();
+
+        let runtime_nats_jetstream_stream_release_raw =
+            env::var("RUNTIME_NATS_JETSTREAM_STREAM_RELEASE")
+                .expect("RUNTIME_NATS_JETSTREAM_STREAM_RELEASE must be set");
+        let runtime_nats_jetstream_stream_release = runtime_nats_jetstream_stream_release_raw.trim();
+        if runtime_nats_jetstream_stream_release.is_empty() {
+            return Err("RUNTIME_NATS_JETSTREAM_STREAM_RELEASE must not be empty".into());
+        }
+        let runtime_nats_jetstream_stream_release = runtime_nats_jetstream_stream_release.to_string();
+
+        let runtime_nats_jetstream_consumer_release_raw =
+            env::var("RUNTIME_NATS_JETSTREAM_CONSUMER_RELEASE")
+                .expect("RUNTIME_NATS_JETSTREAM_CONSUMER_RELEASE must be set");
+        let runtime_nats_jetstream_consumer_release = runtime_nats_jetstream_consumer_release_raw.trim();
+        if runtime_nats_jetstream_consumer_release.is_empty() {
+            return Err("RUNTIME_NATS_JETSTREAM_CONSUMER_RELEASE must not be empty".into());
+        }
+        let runtime_nats_jetstream_consumer_release = runtime_nats_jetstream_consumer_release.to_string();
 
         Ok(Settings {
             port,
@@ -246,7 +268,9 @@ impl Settings {
             anthropic_thinking_budget_tokens,
             llm_provider,
             runtime_nats_url,
-            runtime_nats_release_subject,
+            runtime_nats_subject_release,
+            runtime_nats_jetstream_stream_release,
+            runtime_nats_jetstream_consumer_release,
         })
     }
 }

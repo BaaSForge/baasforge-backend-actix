@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::io;
 use uuid::Uuid;
 
 /// Matches the consumer’s [`ReleaseDeployEnvironment`] (JSON: `production` / `stage`).
@@ -38,28 +39,63 @@ impl fmt::Display for RuntimeNatsPublishError {
 
 impl std::error::Error for RuntimeNatsPublishError {}
 
-/// Shared [`async_nats::Client`]: one TCP connection and protocol state, publish to **any** subject per call.
+/// JetStream context on a shared [`async_nats::Client`]. Release events must use JetStream publish
+/// so messages land in the stream (core publish does not unless the server mirrors it).
 pub struct RuntimeNatsPublisher {
-    client: async_nats::Client,
+    jetstream: async_nats::jetstream::Context,
 }
 
 impl RuntimeNatsPublisher {
     pub async fn connect(url: &str) -> Result<Self, async_nats::Error> {
-        let client = async_nats::connect(url).await?;
-        Ok(Self { client })
+        // `async_nats::connect` does not apply user:pass from the URL to the CONNECT frame; only
+        // `ConnectOptions` auth is sent. Use explicit options when the URL embeds credentials.
+        let server_addr: async_nats::ServerAddr = url.parse()?;
+        let mut options = async_nats::ConnectOptions::new();
+        if server_addr.has_user_pass() {
+            let user = server_addr
+                .username()
+                .map(String::from)
+                .unwrap_or_default();
+            let pass = server_addr
+                .password()
+                .map(String::from)
+                .unwrap_or_default();
+            options = async_nats::ConnectOptions::with_user_and_password(user, pass);
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "runtime NATS: missing user and password in URL (use nats://user:pass@host:port)",
+            )
+            .into());
+        }
+        let client = async_nats::connect_with_options(server_addr, options).await?;
+        let jetstream = async_nats::jetstream::new(client);
+        Ok(Self { jetstream })
     }
 
-    /// Publish arbitrary JSON to any subject (e.g. `runtime.release`, `alerts.prod`, …).
+    /// Publish arbitrary JSON to a subject that is bound to the runtime release JetStream stream.
     async fn publish_json<T: Serialize>(
         &self,
         subject: &str,
         payload: &T,
     ) -> Result<(), RuntimeNatsPublishError> {
         let bytes = serde_json::to_vec(payload).map_err(RuntimeNatsPublishError::Serialize)?;
-        self.client
+        let payload_json = String::from_utf8_lossy(&bytes);
+        tracing::info!(
+            target: "runtime_nats",
+            subject = %subject,
+            payload = %payload_json,
+            "publishing runtime release deploy event via JetStream (for runtimes to consume)"
+        );
+        self.jetstream
             .publish(subject.to_string(), bytes.into())
             .await
             .map_err(|e| RuntimeNatsPublishError::Publish(e.to_string()))?;
+        tracing::info!(
+            target: "runtime_nats",
+            subject = %subject,
+            "runtime release deploy event published via JetStream successfully"
+        );
         Ok(())
     }
 
@@ -101,6 +137,13 @@ impl RuntimeNatsPublisher {
         match deployed_revision {
             Some(r) => self.publish_stage_release(subject, project_id, runtime_id, r).await,
             None => {
+                tracing::info!(
+                    target: "runtime_nats",
+                    subject = %subject,
+                    project_id = %project_id,
+                    runtime_id = %runtime_id,
+                    "publishing stage live release CLEARED (detach): deployed_revision=null for runtime consumer"
+                );
                 let payload = ReleaseDeployEvent {
                     project_id,
                     environment: ReleaseDeployEnvironment::Stage,

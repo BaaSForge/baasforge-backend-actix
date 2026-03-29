@@ -64,6 +64,8 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
     use actix_web::{App, HttpServer};
 
     let settings = Settings::new()?;
+    // Required for `tracing::` output in this process (same idea as `chat_worker::runner`).
+    tracing_subscriber::fmt::init();
     let port = settings
         .port
         .parse::<u16>()
@@ -113,7 +115,12 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
     let runtime_nats_publisher: SharedRuntimeNatsPublisher = match settings.runtime_nats_url.as_ref() {
         Some(url) => match RuntimeNatsPublisher::connect(url).await {
             Ok(p) => {
-                log::info!("[runtime_nats] Connected");
+                log::info!(
+                    "[runtime_nats] Connected (JetStream stream={}, consumer={}, subject={})",
+                    settings.runtime_nats_jetstream_stream_release,
+                    settings.runtime_nats_jetstream_consumer_release,
+                    settings.runtime_nats_subject_release,
+                );
                 Some(Arc::new(p))
             }
             Err(e) => {
