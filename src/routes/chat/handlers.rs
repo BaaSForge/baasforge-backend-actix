@@ -12,7 +12,7 @@ use crate::models::chat_messages::{
 use crate::models::chat_sessions::{
     ChatSessionInsert, ChatSessionResponse, ChatSessionWithLastMessageResponse,
 };
-use crate::models::projects::{PlatformEnvironmentType, ProjectReleaseResponse, ProjectRuntimeResponse, ProjectUnitResponse};
+use crate::models::projects::{PlatformEnvironmentType, ProjectReleaseResponse, ProjectUnitResponse};
 use crate::routes::AppContext;
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{
@@ -29,17 +29,15 @@ use crate::schema::project_runtimes;
 use crate::schema::projects;
 use crate::services::chat_worker::db::{
     load_chat_session_draft_units_as_of_release_controller_message,
-    load_chat_session_draft_units_before_message_cutoff,
     load_chat_session_draft_units_latest_revision, load_latest_revisions_by_unit_paths,
     load_owned_unit_tips_for_chat_sessions,
     load_owned_releases_by_chat_session, load_pre_chat_base_units_by_unit_paths,
     load_unit_tips_by_ids_for_chat_session, load_units_by_ids_for_chat_session,
     DraftUnitsAsOfReleaseControllerError,
 };
-use crate::services::releases::{
-    combined_units_from_release_metadata, compute_new_units, load_latest_production_release_for_project,
-    merge_combined_units, next_project_release_revision, project_unit_refs_from_responses,
-    ReleaseUnitsMetadata,
+use crate::services::releases::next_project_release_revision;
+use crate::services::stage_release_from_controller::{
+    transaction_create_stage_release_from_controller, StageReleaseFromControllerError,
 };
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 // use actix_ws::Message;
@@ -1106,20 +1104,6 @@ pub struct CreateStageReleaseBody {
     pub stage_project_runtime_id: Uuid,
 }
 
-enum StageReleaseOutcome {
-    Success(ProjectReleaseResponse, ChatMessageRow),
-    SessionNotFound,
-    MessageNotFound,
-    NotReleaseController,
-    /// `type_` is `release_controller_box` but `payload` is NULL (e.g. row not yet filled by worker).
-    ReleaseControllerPayloadMissing,
-    /// Payload present but does not deserialize as [`ReleaseControllerBoxPayload`].
-    ReleaseControllerPayloadInvalid,
-    RuntimeNotFound,
-    RuntimeNotStage,
-    Metadata(String),
-}
-
 enum ProdReleaseOutcome {
     Success(ProjectReleaseResponse, ChatMessageRow),
     SessionNotFound,
@@ -1128,7 +1112,75 @@ enum ProdReleaseOutcome {
     ReleaseControllerPayloadMissing,
     ReleaseControllerPayloadInvalid,
     NoStageRelease,
+    ProdRuntimeNotFound,
     Metadata(String),
+}
+
+pub fn http_response_for_stage_release_from_controller_error(
+    e: StageReleaseFromControllerError,
+) -> HttpResponse {
+    use StageReleaseFromControllerError::*;
+    match e {
+        SessionNotFound => HttpResponse::NotFound().json(api_error("Chat session not found", json!({}))),
+        MessageNotFound => HttpResponse::NotFound()
+            .json(api_error("Release controller message not found", json!({}))),
+        NotReleaseController => HttpResponse::BadRequest().json(api_error(
+            "Message is not a release_controller_box row",
+            json!({}),
+        )),
+        ReleaseControllerPayloadMissing => HttpResponse::BadRequest().json(api_error(
+            "Release controller message has no payload yet; wait for the session to finish updating or refresh",
+            json!({}),
+        )),
+        ReleaseControllerPayloadInvalid => HttpResponse::BadRequest().json(api_error(
+            "Release controller message payload is missing or invalid; try refreshing the chat",
+            json!({}),
+        )),
+        RuntimeNotFound => HttpResponse::NotFound().json(api_error(
+            "Stage project runtime not found for this project",
+            json!({}),
+        )),
+        RuntimeNotStage => HttpResponse::BadRequest().json(api_error(
+            "Referenced runtime is not a stage environment",
+            json!({}),
+        )),
+        Metadata(msg) => HttpResponse::InternalServerError()
+            .json(api_error(&format!("Failed to build release metadata: {}", msg), json!({}))),
+    }
+}
+
+/// WS + NATS after a stage release was created from a release-controller message (shared with detach-live-release).
+pub async fn broadcast_stage_release_create_effects(
+    context: &web::Data<AppContext>,
+    project_id: Uuid,
+    session_id: Uuid,
+    user_id: Uuid,
+    stage_runtime_id: Uuid,
+    release: &ProjectReleaseResponse,
+    row: ChatMessageRow,
+) {
+    if let Some(ref redis_conn) = context.redis_conn {
+        let message: ChatMessageResponse = row.into();
+        let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+            project_id,
+            session_id,
+            message,
+        });
+        let mut guard = redis_conn.lock().await;
+        if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
+        {
+            tracing::warn!("[broadcast_stage_release_create_effects] WS publish failed: {}", e);
+        }
+    }
+    if let Some(ref nats) = context.runtime_nats_publisher {
+        let subject = context.settings.runtime_nats_release_subject.as_str();
+        if let Err(e) = nats
+            .publish_stage_release(subject, project_id, stage_runtime_id, release.revision)
+            .await
+        {
+            tracing::warn!("[broadcast_stage_release_create_effects] NATS publish failed: {}", e);
+        }
+    }
 }
 
 /// POST — create a stage release from the current session draft unit tips vs latest production,
@@ -1150,137 +1202,14 @@ pub async fn handle_create_stage_release(
     let stage_runtime_id = body.stage_project_runtime_id;
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
-        conn.transaction(|conn| {
-            let session_ok = chat_sessions::table
-                .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
-                .filter(projects::owner_user_id.eq(user_id))
-                .filter(chat_sessions::id.eq(session_id))
-                .filter(chat_sessions::project_id.eq(project_id))
-                .select(chat_sessions::id)
-                .first::<Uuid>(conn)
-                .optional()?;
-            if session_ok.is_none() {
-                return Ok(StageReleaseOutcome::SessionNotFound);
-            }
-
-            let msg_row: Option<ChatMessageRow> = chat_messages::table
-                .filter(chat_messages::id.eq(message_id))
-                .filter(chat_messages::chat_session_id.eq(session_id))
-                .select(ChatMessageRow::as_select())
-                .first(conn)
-                .optional()?;
-            let Some(msg_row) = msg_row else {
-                return Ok(StageReleaseOutcome::MessageNotFound);
-            };
-            if msg_row.type_ != ChatMessageType::ReleaseControllerBox {
-                return Ok(StageReleaseOutcome::NotReleaseController);
-            }
-
-            let mut box_payload = match ChatMessagePayload::from_value(
-                &msg_row.type_,
-                msg_row.payload.clone(),
-            ) {
-                Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) => p,
-                Ok(None) => return Ok(StageReleaseOutcome::ReleaseControllerPayloadMissing),
-                Ok(Some(other)) => {
-                    tracing::warn!(
-                        message_id = %message_id,
-                        variant = other.variant_label(),
-                        "release_controller_box row has unexpected payload variant"
-                    );
-                    return Ok(StageReleaseOutcome::ReleaseControllerPayloadInvalid);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        message_id = %message_id,
-                        error = %e,
-                        "release_controller_box payload deserialize failed"
-                    );
-                    return Ok(StageReleaseOutcome::ReleaseControllerPayloadInvalid);
-                }
-            };
-
-            let stage_rt: Option<ProjectRuntimeResponse> = project_runtimes::table
-                .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
-                .filter(projects::owner_user_id.eq(user_id))
-                .filter(project_runtimes::project_id.eq(project_id))
-                .filter(project_runtimes::id.eq(stage_runtime_id))
-                .select(ProjectRuntimeResponse::as_select())
-                .first(conn)
-                .optional()?;
-            let Some(stage_rt) = stage_rt else {
-                return Ok(StageReleaseOutcome::RuntimeNotFound);
-            };
-            if stage_rt.environment != PlatformEnvironmentType::Stage {
-                return Ok(StageReleaseOutcome::RuntimeNotStage);
-            }
-
-            let prev_release = load_latest_production_release_for_project(conn, project_id)?;
-            let previous_combined = match prev_release
-                .as_ref()
-                .and_then(|r| r.units_metadata.as_ref())
-            {
-                Some(m) => match combined_units_from_release_metadata(conn, project_id, Some(m)) {
-                    Ok(u) => u,
-                    Err(e) => {
-                        return Ok(StageReleaseOutcome::Metadata(e.to_string()));
-                    }
-                },
-                None => Vec::new(),
-            };
-
-            let session_tips = load_chat_session_draft_units_before_message_cutoff(
-                conn,
-                project_id,
-                session_id,
-                msg_row.created_at,
-                message_id,
-            )?;
-            let new_units = compute_new_units(&previous_combined, &session_tips);
-            let combined_units = merge_combined_units(&previous_combined, &session_tips);
-
-            let meta = ReleaseUnitsMetadata {
-                previous_unit_refs: project_unit_refs_from_responses(&previous_combined),
-                new_unit_refs: project_unit_refs_from_responses(&new_units),
-                combined_unit_refs: project_unit_refs_from_responses(&combined_units),
-            };
-
-            let revision = next_project_release_revision(conn, project_id, true)?;
-            let inserted: ProjectReleaseResponse = diesel::insert_into(project_releases::table)
-                .values((
-                    project_releases::project_id.eq(project_id),
-                    project_releases::revision.eq(revision),
-                    project_releases::units_metadata.eq(Some(meta)),
-                    project_releases::notes.eq(None::<String>),
-                    project_releases::chat_session_id.eq(Some(session_id)),
-                    project_releases::is_stage.eq(true),
-                ))
-                .returning(ProjectReleaseResponse::as_select())
-                .get_result(conn)?;
-
-            diesel::update(
-                project_runtimes::table
-                    .filter(project_runtimes::id.eq(stage_runtime_id))
-                    .filter(project_runtimes::project_id.eq(project_id)),
-            )
-            .set(project_runtimes::live_release_revision.eq(Some(inserted.revision)))
-            .execute(conn)?;
-
-            box_payload.stage_release = Some(inserted.clone());
-            let payload_json = match serde_json::to_value(&box_payload) {
-                Ok(v) => v,
-                Err(e) => return Ok(StageReleaseOutcome::Metadata(e.to_string())),
-            };
-
-            let updated_row = diesel::update(
-                chat_messages::table.filter(chat_messages::id.eq(message_id)),
-            )
-            .set(chat_messages::payload.eq(Some(payload_json)))
-            .returning(ChatMessageRow::as_returning())
-            .get_result(conn)?;
-
-            Ok(StageReleaseOutcome::Success(inserted, updated_row))
-        })
+        transaction_create_stage_release_from_controller(
+            conn,
+            user_id,
+            project_id,
+            session_id,
+            message_id,
+            stage_runtime_id,
+        )
     })
     .await
     {
@@ -1293,58 +1222,28 @@ pub async fn handle_create_stage_release(
     };
 
     match outcome {
-        StageReleaseOutcome::Success(release, row) => {
-            if let Some(ref redis_conn) = context.redis_conn {
-                let message: ChatMessageResponse = row.into();
-                let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
-                    project_id,
-                    session_id,
-                    message,
-                });
-                let mut guard = redis_conn.lock().await;
-                if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
-                {
-                    tracing::warn!("[handle_create_stage_release] WS publish failed: {}", e);
-                }
-            }
+        Ok((release, row)) => {
+            broadcast_stage_release_create_effects(
+                &context,
+                project_id,
+                session_id,
+                user_id,
+                stage_runtime_id,
+                &release,
+                row,
+            )
+            .await;
             HttpResponse::Ok().json(api_success(
                 "Stage release created successfully",
                 json!({ "release": release }),
             ))
         }
-        StageReleaseOutcome::SessionNotFound => HttpResponse::NotFound()
-            .json(api_error("Chat session not found", json!({}))),
-        StageReleaseOutcome::MessageNotFound => HttpResponse::NotFound()
-            .json(api_error("Release controller message not found", json!({}))),
-        StageReleaseOutcome::NotReleaseController => HttpResponse::BadRequest().json(
-            api_error("Message is not a release_controller_box row", json!({})),
-        ),
-        StageReleaseOutcome::ReleaseControllerPayloadMissing => HttpResponse::BadRequest().json(
-            api_error(
-                "Release controller message has no payload yet; wait for the session to finish updating or refresh",
-                json!({}),
-            ),
-        ),
-        StageReleaseOutcome::ReleaseControllerPayloadInvalid => HttpResponse::BadRequest().json(
-            api_error(
-                "Release controller message payload is missing or invalid; try refreshing the chat",
-                json!({}),
-            ),
-        ),
-        StageReleaseOutcome::RuntimeNotFound => HttpResponse::NotFound().json(api_error(
-            "Stage project runtime not found for this project",
-            json!({}),
-        )),
-        StageReleaseOutcome::RuntimeNotStage => HttpResponse::BadRequest().json(api_error(
-            "Referenced runtime is not a stage environment",
-            json!({}),
-        )),
-        StageReleaseOutcome::Metadata(msg) => HttpResponse::InternalServerError()
-            .json(api_error(&format!("Failed to build release metadata: {}", msg), json!({}))),
+        Err(e) => http_response_for_stage_release_from_controller_error(e),
     }
 }
 
-/// POST — create a production release from the stage release referenced on the controller; updates the box + WS.
+/// POST — create a production release from the stage release referenced on the controller; sets
+/// `live_release_revision` on the project production runtime(s), updates the box + WS.
 pub async fn handle_create_production_release(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -1359,86 +1258,99 @@ pub async fn handle_create_production_release(
     let user_id = access_payload.user_id;
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
-        let session_ok = chat_sessions::table
-            .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
-            .filter(projects::owner_user_id.eq(user_id))
-            .filter(chat_sessions::id.eq(session_id))
-            .filter(chat_sessions::project_id.eq(project_id))
-            .select(chat_sessions::id)
-            .first::<Uuid>(conn)
-            .optional()?;
-        if session_ok.is_none() {
-            return Ok(ProdReleaseOutcome::SessionNotFound);
-        }
-
-        let msg_row: Option<ChatMessageRow> = chat_messages::table
-            .filter(chat_messages::id.eq(message_id))
-            .filter(chat_messages::chat_session_id.eq(session_id))
-            .select(ChatMessageRow::as_select())
-            .first(conn)
-            .optional()?;
-        let Some(msg_row) = msg_row else {
-            return Ok(ProdReleaseOutcome::MessageNotFound);
-        };
-        if msg_row.type_ != ChatMessageType::ReleaseControllerBox {
-            return Ok(ProdReleaseOutcome::NotReleaseController);
-        }
-
-        let mut box_payload = match ChatMessagePayload::from_value(
-            &msg_row.type_,
-            msg_row.payload.clone(),
-        ) {
-            Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) => p,
-            Ok(None) => return Ok(ProdReleaseOutcome::ReleaseControllerPayloadMissing),
-            Ok(Some(other)) => {
-                tracing::warn!(
-                    message_id = %message_id,
-                    variant = other.variant_label(),
-                    "release_controller_box row has unexpected payload variant"
-                );
-                return Ok(ProdReleaseOutcome::ReleaseControllerPayloadInvalid);
+        conn.transaction(|conn| {
+            let session_ok = chat_sessions::table
+                .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+                .filter(projects::owner_user_id.eq(user_id))
+                .filter(chat_sessions::id.eq(session_id))
+                .filter(chat_sessions::project_id.eq(project_id))
+                .select(chat_sessions::id)
+                .first::<Uuid>(conn)
+                .optional()?;
+            if session_ok.is_none() {
+                return Ok(ProdReleaseOutcome::SessionNotFound);
             }
-            Err(e) => {
-                tracing::warn!(
-                    message_id = %message_id,
-                    error = %e,
-                    "release_controller_box payload deserialize failed"
-                );
-                return Ok(ProdReleaseOutcome::ReleaseControllerPayloadInvalid);
+
+            let msg_row: Option<ChatMessageRow> = chat_messages::table
+                .filter(chat_messages::id.eq(message_id))
+                .filter(chat_messages::chat_session_id.eq(session_id))
+                .select(ChatMessageRow::as_select())
+                .first(conn)
+                .optional()?;
+            let Some(msg_row) = msg_row else {
+                return Ok(ProdReleaseOutcome::MessageNotFound);
+            };
+            if msg_row.type_ != ChatMessageType::ReleaseControllerBox {
+                return Ok(ProdReleaseOutcome::NotReleaseController);
             }
-        };
 
-        let Some(stage) = box_payload.stage_release.clone() else {
-            return Ok(ProdReleaseOutcome::NoStageRelease);
-        };
+            let mut box_payload = match ChatMessagePayload::from_value(
+                &msg_row.type_,
+                msg_row.payload.clone(),
+            ) {
+                Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) => p,
+                Ok(None) => return Ok(ProdReleaseOutcome::ReleaseControllerPayloadMissing),
+                Ok(Some(other)) => {
+                    tracing::warn!(
+                        message_id = %message_id,
+                        variant = other.variant_label(),
+                        "release_controller_box row has unexpected payload variant"
+                    );
+                    return Ok(ProdReleaseOutcome::ReleaseControllerPayloadInvalid);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        message_id = %message_id,
+                        error = %e,
+                        "release_controller_box payload deserialize failed"
+                    );
+                    return Ok(ProdReleaseOutcome::ReleaseControllerPayloadInvalid);
+                }
+            };
 
-        let revision = next_project_release_revision(conn, project_id, false)?;
-        let inserted: ProjectReleaseResponse = diesel::insert_into(project_releases::table)
-            .values((
-                project_releases::project_id.eq(project_id),
-                project_releases::revision.eq(revision),
-                project_releases::units_metadata.eq(stage.units_metadata.clone()),
-                project_releases::notes.eq(None::<String>),
-                project_releases::chat_session_id.eq(stage.chat_session_id),
-                project_releases::is_stage.eq(false),
-            ))
-            .returning(ProjectReleaseResponse::as_select())
+            let Some(stage) = box_payload.stage_release.clone() else {
+                return Ok(ProdReleaseOutcome::NoStageRelease);
+            };
+
+            let revision = next_project_release_revision(conn, project_id, false)?;
+            let inserted: ProjectReleaseResponse = diesel::insert_into(project_releases::table)
+                .values((
+                    project_releases::project_id.eq(project_id),
+                    project_releases::revision.eq(revision),
+                    project_releases::units_metadata.eq(stage.units_metadata.clone()),
+                    project_releases::notes.eq(None::<String>),
+                    project_releases::chat_session_id.eq(stage.chat_session_id),
+                    project_releases::is_stage.eq(false),
+                ))
+                .returning(ProjectReleaseResponse::as_select())
+                .get_result(conn)?;
+
+            let n = diesel::update(
+                project_runtimes::table
+                    .filter(project_runtimes::project_id.eq(project_id))
+                    .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Prod)),
+            )
+            .set(project_runtimes::live_release_revision.eq(Some(inserted.revision)))
+            .execute(conn)?;
+            if n == 0 {
+                return Ok(ProdReleaseOutcome::ProdRuntimeNotFound);
+            }
+
+            box_payload.prod_release = Some(inserted.clone());
+            let payload_json = match serde_json::to_value(&box_payload) {
+                Ok(v) => v,
+                Err(e) => return Ok(ProdReleaseOutcome::Metadata(e.to_string())),
+            };
+
+            let updated_row = diesel::update(
+                chat_messages::table.filter(chat_messages::id.eq(message_id)),
+            )
+            .set(chat_messages::payload.eq(Some(payload_json)))
+            .returning(ChatMessageRow::as_returning())
             .get_result(conn)?;
 
-        box_payload.prod_release = Some(inserted.clone());
-        let payload_json = match serde_json::to_value(&box_payload) {
-            Ok(v) => v,
-            Err(e) => return Ok(ProdReleaseOutcome::Metadata(e.to_string())),
-        };
-
-        let updated_row = diesel::update(
-            chat_messages::table.filter(chat_messages::id.eq(message_id)),
-        )
-        .set(chat_messages::payload.eq(Some(payload_json)))
-        .returning(ChatMessageRow::as_returning())
-        .get_result(conn)?;
-
-        Ok(ProdReleaseOutcome::Success(inserted, updated_row))
+            Ok(ProdReleaseOutcome::Success(inserted, updated_row))
+        })
     })
     .await
     {
@@ -1463,6 +1375,15 @@ pub async fn handle_create_production_release(
                 if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
                 {
                     tracing::warn!("[handle_create_production_release] WS publish failed: {}", e);
+                }
+            }
+            if let Some(ref nats) = context.runtime_nats_publisher {
+                let subject = context.settings.runtime_nats_release_subject.as_str();
+                if let Err(e) = nats
+                    .publish_prod_release(subject, project_id, release.revision)
+                    .await
+                {
+                    tracing::warn!("[handle_create_production_release] NATS publish failed: {}", e);
                 }
             }
             HttpResponse::Ok().json(api_success(
@@ -1491,6 +1412,10 @@ pub async fn handle_create_production_release(
         ),
         ProdReleaseOutcome::NoStageRelease => HttpResponse::BadRequest().json(api_error(
             "No stage release on this controller; create a stage release first",
+            json!({}),
+        )),
+        ProdReleaseOutcome::ProdRuntimeNotFound => HttpResponse::BadRequest().json(api_error(
+            "No production runtime exists for this project",
             json!({}),
         )),
         ProdReleaseOutcome::Metadata(msg) => HttpResponse::InternalServerError()

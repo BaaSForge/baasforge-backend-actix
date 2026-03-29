@@ -1,5 +1,5 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
-use crate::libs::unit_slug::compose_unit_id;
+use crate::libs::unit_slug::{compose_unit_id, validate_full_unit_id_for_tool};
 use crate::models::chat_messages::{
     strip_latest_revision_from_stored_json, ChatMessagePayload, ChatMessageResponse, ChatMessageRow,
     ChatMessageStatus, ChatMessageType,
@@ -65,6 +65,9 @@ pub fn payload_from_args(
     if unit_id.is_empty() {
         return Err("remove_unit: unit_id must not be empty".into());
     }
+    validate_full_unit_id_for_tool(&unit_id).map_err(|e| -> BoxError {
+        format!("remove_unit: unit_id invalid: {e}").into()
+    })?;
     let args = ToolRemoveUnitArgs { unit_id };
     Ok(ChatMessagePayload::ToolRemoveUnit(ToolRemoveUnitPayload {
         args,
@@ -90,7 +93,7 @@ pub const TOOL_NAME: &str = "remove_unit";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Soft-remove a unit by inserting a new draft revision: empty code, explanation copied, is_deleted true, new `id` with last segment revision+1, same `chat_session_id` and slugs as the parent row.",
+        description: "Soft-remove a unit by inserting a new draft revision: empty code, explanation copied, is_deleted true, new `id` with last segment revision+1, same `chat_session_id` and slugs as the parent row. `unit_id` must be the full id with revision as digits only in the last segment (no `v`/`rev` prefix).",
         parameters: params_schema(),
     }
 }

@@ -18,6 +18,14 @@ use crate::services::chat_worker::db::project_units_with_latest_revision;
 use crate::services::payment::{
     PaidFeature, most_complete_needed_package, user_missing_paid_features,
 };
+use crate::services::stage_release_from_controller::transaction_create_stage_release_from_controller;
+use crate::services::stage_runtime_release::{
+    StageRuntimeDeployDenied, StageRuntimeDetachDenied, apply_stage_release_deploy_to_runtime,
+    apply_stage_runtime_detach_live_release,
+};
+use crate::routes::chat::handlers::{
+    broadcast_stage_release_create_effects, http_response_for_stage_release_from_controller_error,
+};
 use crate::{libs::api_response::api_success, routes::AppContext};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use diesel::prelude::*;
@@ -32,6 +40,49 @@ pub struct ProjectRequest {
     pub name: String,
     pub slug: String,
     pub language: LanguageType,
+}
+
+#[derive(Deserialize)]
+pub struct DeployReleaseBody {
+    pub revision: i32,
+}
+
+/// Body for [`handle_detach_stage_runtime_live_release`]: matches frontend union (revision | controller | detach-only).
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum DetachLiveReleaseBody {
+    /// Variant A: deploy an existing stage release revision after clearing the previous live release.
+    ByRevision { revision: i32 },
+    /// Variant B: create/attach stage release from release-controller message scope (same as
+    /// `POST .../release-controller-messages/{id}/stage-release`), bound to path `runtime_id`.
+    ByController {
+        chat_session_id: Uuid,
+        release_controller_message_id: Uuid,
+    },
+    /// Detach only: `{}` — clear `live_release_revision` (requires a release to be live).
+    DetachOnly(DetachLiveReleaseBodyEmpty),
+}
+
+#[derive(Deserialize)]
+pub struct DetachLiveReleaseBodyEmpty {}
+
+async fn notify_stage_runtime_release_nats(
+    context: &web::Data<AppContext>,
+    project_id: Uuid,
+    runtime_id: Uuid,
+    deployed_revision: Option<i32>,
+    op_label: &'static str,
+) {
+    let Some(ref nats) = context.runtime_nats_publisher else {
+        return;
+    };
+    let subject = context.settings.runtime_nats_release_subject.as_str();
+    if let Err(e) = nats
+        .publish_stage_runtime_release_state(subject, project_id, runtime_id, deployed_revision)
+        .await
+    {
+        tracing::warn!("[{}] NATS publish failed: {}", op_label, e);
+    }
 }
 
 pub async fn handle_create_project(
@@ -485,12 +536,13 @@ pub async fn handle_list_project_runtimes(
     ))
 }
 
-/// Clears `live_release_revision` on a stage runtime. Returns 400 if the runtime is not stage,
-/// not linked to a release revision, or 404 if the runtime is missing for this project.
+/// Detach live stage release and optionally rebind: by existing revision, by release-controller
+/// message (same as chat stage-release), or `{}` for detach-only.
 pub async fn handle_detach_stage_runtime_live_release(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<DetachLiveReleaseBody>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -501,72 +553,153 @@ pub async fn handle_detach_stage_runtime_live_release(
     let (project_id, runtime_id) = path.into_inner();
     let user_id = access_payload.user_id;
 
-    enum DetachOut {
-        NotFound,
-        NotStage,
-        NotConnected,
-        Ok(ProjectRuntimeResponse),
-    }
+    match body.into_inner() {
+        DetachLiveReleaseBody::ByRevision { revision } => {
+            let outcome = match database::block_on_db(&context.pool, move |conn| {
+                apply_stage_release_deploy_to_runtime(
+                    conn,
+                    user_id,
+                    project_id,
+                    runtime_id,
+                    revision,
+                )
+            })
+            .await
+            {
+                Ok(o) => o,
+                Err(_) => {
+                    log::error!(
+                        "[handle_detach_stage_runtime_live_release] DB/block error (by revision)"
+                    );
+                    return HttpResponse::ServiceUnavailable()
+                        .json(api_error("Database temporarily unavailable", json!({})));
+                }
+            };
 
-    let outcome = match database::block_on_db(&context.pool, move |conn| {
-        let rt: Option<ProjectRuntimeResponse> = project_runtimes::table
-            .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
-            .filter(projects::owner_user_id.eq(user_id))
-            .filter(project_runtimes::project_id.eq(project_id))
-            .filter(project_runtimes::id.eq(runtime_id))
-            .select(ProjectRuntimeResponse::as_select())
-            .first(conn)
-            .optional()?;
-
-        let Some(rt) = rt else {
-            return Ok(DetachOut::NotFound);
-        };
-
-        if rt.environment != PlatformEnvironmentType::Stage {
-            return Ok(DetachOut::NotStage);
+            match outcome {
+                Ok(rt) => {
+                    notify_stage_runtime_release_nats(
+                        &context,
+                        project_id,
+                        runtime_id,
+                        Some(revision),
+                        "handle_detach_stage_runtime_live_release",
+                    )
+                    .await;
+                    HttpResponse::Ok().json(api_success(
+                        "Stage release deployed on runtime",
+                        json!({ "runtime": rt }),
+                    ))
+                }
+                Err(StageRuntimeDeployDenied::NotFound) => HttpResponse::NotFound()
+                    .json(api_error("Project runtime not found", json!({}))),
+                Err(StageRuntimeDeployDenied::NotStage) => HttpResponse::BadRequest().json(
+                    api_error(
+                        "Only stage runtimes can receive a stage release deploy",
+                        json!({}),
+                    ),
+                ),
+                Err(StageRuntimeDeployDenied::NoSuchRelease) => HttpResponse::BadRequest().json(
+                    api_error(
+                        "No stage release with this revision exists for the project",
+                        json!({}),
+                    ),
+                ),
+            }
         }
+        DetachLiveReleaseBody::ByController {
+            chat_session_id,
+            release_controller_message_id,
+        } => {
+            let outcome = match database::block_on_db(&context.pool, move |conn| {
+                transaction_create_stage_release_from_controller(
+                    conn,
+                    user_id,
+                    project_id,
+                    chat_session_id,
+                    release_controller_message_id,
+                    runtime_id,
+                )
+            })
+            .await
+            {
+                Ok(o) => o,
+                Err(_) => {
+                    log::error!(
+                        "[handle_detach_stage_runtime_live_release] DB/block error (by controller)"
+                    );
+                    return HttpResponse::ServiceUnavailable()
+                        .json(api_error("Database temporarily unavailable", json!({})));
+                }
+            };
 
-        if rt.live_release_revision.is_none() {
-            return Ok(DetachOut::NotConnected);
+            match outcome {
+                Ok((release, row)) => {
+                    broadcast_stage_release_create_effects(
+                        &context,
+                        project_id,
+                        chat_session_id,
+                        user_id,
+                        runtime_id,
+                        &release,
+                        row,
+                    )
+                    .await;
+                    HttpResponse::Ok().json(api_success(
+                        "Stage release created successfully",
+                        json!({ "release": release }),
+                    ))
+                }
+                Err(e) => http_response_for_stage_release_from_controller_error(e),
+            }
         }
+        DetachLiveReleaseBody::DetachOnly(_) => {
+            let outcome = match database::block_on_db(&context.pool, move |conn| {
+                apply_stage_runtime_detach_live_release(conn, user_id, project_id, runtime_id)
+            })
+            .await
+            {
+                Ok(o) => o,
+                Err(_) => {
+                    log::error!(
+                        "[handle_detach_stage_runtime_live_release] DB/block error (detach only)"
+                    );
+                    return HttpResponse::ServiceUnavailable()
+                        .json(api_error("Database temporarily unavailable", json!({})));
+                }
+            };
 
-        let updated = diesel::update(
-            project_runtimes::table
-                .filter(project_runtimes::id.eq(runtime_id))
-                .filter(project_runtimes::project_id.eq(project_id)),
-        )
-        .set(project_runtimes::live_release_revision.eq(None::<i32>))
-        .returning(ProjectRuntimeResponse::as_select())
-        .get_result::<ProjectRuntimeResponse>(conn)?;
-
-        Ok(DetachOut::Ok(updated))
-    })
-    .await
-    {
-        Ok(o) => o,
-        Err(_) => {
-            log::error!("[handle_detach_stage_runtime_live_release] DB/block error");
-            return HttpResponse::ServiceUnavailable()
-                .json(api_error("Database temporarily unavailable", json!({})));
+            match outcome {
+                Ok(rt) => {
+                    notify_stage_runtime_release_nats(
+                        &context,
+                        project_id,
+                        runtime_id,
+                        None,
+                        "handle_detach_stage_runtime_live_release",
+                    )
+                    .await;
+                    HttpResponse::Ok().json(api_success(
+                        "Stage runtime detached from live release revision",
+                        json!(rt),
+                    ))
+                }
+                Err(StageRuntimeDetachDenied::NotFound) => HttpResponse::NotFound()
+                    .json(api_error("Project runtime not found", json!({}))),
+                Err(StageRuntimeDetachDenied::NotStage) => HttpResponse::BadRequest().json(
+                    api_error(
+                        "Only stage runtimes can be detached from a live release revision",
+                        json!({}),
+                    ),
+                ),
+                Err(StageRuntimeDetachDenied::NotConnected) => HttpResponse::BadRequest().json(
+                    api_error(
+                        "Stage runtime is not connected to a live release revision",
+                        json!({}),
+                    ),
+                ),
+            }
         }
-    };
-
-    match outcome {
-        DetachOut::NotFound => {
-            HttpResponse::NotFound().json(api_error("Project runtime not found", json!({})))
-        }
-        DetachOut::NotStage => HttpResponse::BadRequest().json(api_error(
-            "Only stage runtimes can be detached from a live release revision",
-            json!({}),
-        )),
-        DetachOut::NotConnected => HttpResponse::BadRequest().json(api_error(
-            "Stage runtime is not connected to a live release revision",
-            json!({}),
-        )),
-        DetachOut::Ok(rt) => HttpResponse::Ok().json(api_success(
-            "Stage runtime detached from live release revision",
-            json!(rt),
-        )),
     }
 }
 
@@ -665,4 +798,170 @@ pub async fn handle_list_project_release_units(
         "Project release units fetched successfully",
         json!(units),
     ))
+}
+
+/// Points a stage runtime at an existing stage release revision (no new `project_releases` row).
+/// Publishes the same NATS event as creating a stage release from chat.
+pub async fn handle_deploy_stage_release(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<DeployReleaseBody>,
+) -> HttpResponse {
+    let extensions = req.extensions();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist");
+
+    let (project_id, runtime_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+    let revision = body.revision;
+
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        apply_stage_release_deploy_to_runtime(conn, user_id, project_id, runtime_id, revision)
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(_) => {
+            log::error!("[handle_deploy_stage_release] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    match outcome {
+        Ok(rt) => {
+            notify_stage_runtime_release_nats(
+                &context,
+                project_id,
+                runtime_id,
+                Some(revision),
+                "handle_deploy_stage_release",
+            )
+            .await;
+            HttpResponse::Ok().json(api_success(
+                "Stage release deployed on runtime",
+                json!({ "runtime": rt }),
+            ))
+        }
+        Err(StageRuntimeDeployDenied::NotFound) => {
+            HttpResponse::NotFound().json(api_error("Project runtime not found", json!({})))
+        }
+        Err(StageRuntimeDeployDenied::NotStage) => HttpResponse::BadRequest().json(api_error(
+            "Only stage runtimes can receive a stage release deploy",
+            json!({}),
+        )),
+        Err(StageRuntimeDeployDenied::NoSuchRelease) => HttpResponse::BadRequest().json(api_error(
+            "No stage release with this revision exists for the project",
+            json!({}),
+        )),
+    }
+}
+
+/// Points a production runtime at an existing production release revision (no new `project_releases` row).
+/// Publishes the same NATS event as promoting to production from chat.
+pub async fn handle_deploy_production_release(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<DeployReleaseBody>,
+) -> HttpResponse {
+    let extensions = req.extensions();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist");
+
+    let (project_id, runtime_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+    let revision = body.revision;
+
+    enum Out {
+        NotFound,
+        NotProd,
+        NoSuchRelease,
+        Ok(ProjectRuntimeResponse),
+    }
+
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        let rt: Option<ProjectRuntimeResponse> = project_runtimes::table
+            .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(project_runtimes::project_id.eq(project_id))
+            .filter(project_runtimes::id.eq(runtime_id))
+            .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Prod))
+            .select(ProjectRuntimeResponse::as_select())
+            .first(conn)
+            .optional()?;
+
+        let Some(rt) = rt else {
+            return Ok(Out::NotFound);
+        };
+
+        if rt.environment != PlatformEnvironmentType::Prod {
+            return Ok(Out::NotProd);
+        }
+
+        let release_ok = project_releases::table
+            .filter(project_releases::project_id.eq(project_id))
+            .filter(project_releases::revision.eq(revision))
+            .filter(project_releases::is_stage.eq(false))
+            .select(project_releases::id)
+            .first::<Uuid>(conn)
+            .optional()?
+            .is_some();
+
+        if !release_ok {
+            return Ok(Out::NoSuchRelease);
+        }
+
+        let updated = diesel::update(
+            project_runtimes::table
+                .filter(project_runtimes::id.eq(runtime_id))
+                .filter(project_runtimes::project_id.eq(project_id)),
+        )
+        .set(project_runtimes::live_release_revision.eq(Some(revision)))
+        .returning(ProjectRuntimeResponse::as_select())
+        .get_result::<ProjectRuntimeResponse>(conn)?;
+
+        Ok(Out::Ok(updated))
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(_) => {
+            log::error!("[handle_deploy_production_release] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    match outcome {
+        Out::NotFound => {
+            HttpResponse::NotFound().json(api_error("Project runtime not found", json!({})))
+        }
+        Out::NotProd => HttpResponse::BadRequest().json(api_error(
+            "Only production runtimes can receive a production release deploy",
+            json!({}),
+        )),
+        Out::NoSuchRelease => HttpResponse::BadRequest().json(api_error(
+            "No production release with this revision exists for the project",
+            json!({}),
+        )),
+        Out::Ok(rt) => {
+            if let Some(ref nats) = context.runtime_nats_publisher {
+                let subject = context.settings.runtime_nats_release_subject.as_str();
+                if let Err(e) = nats
+                    .publish_prod_release(subject, project_id, revision)
+                    .await
+                {
+                    tracing::warn!("[handle_deploy_production_release] NATS publish failed: {}", e);
+                }
+            }
+            HttpResponse::Ok().json(api_success(
+                "Production release deployed on runtime",
+                json!({ "runtime": rt }),
+            ))
+        }
+    }
 }

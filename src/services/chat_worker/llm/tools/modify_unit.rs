@@ -1,5 +1,5 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
-use crate::libs::unit_slug::compose_unit_id;
+use crate::libs::unit_slug::{compose_unit_id, validate_full_unit_id_for_tool, LLM_UNIT_ID_TOOL_DESCRIPTION};
 use crate::models::chat_messages::{
     strip_latest_revision_from_stored_json, ChatMessagePayload, ChatMessageResponse, ChatMessageRow,
     ChatMessageStatus, ChatMessageType,
@@ -23,8 +23,7 @@ use uuid::Uuid;
 
 use super::{BoxError, ToolSpec};
 
-pub const ARG_UNIT_ID_DESCRIPTION: &str =
-    "Exact `id` from list or tool results: context.module.unit_kind.unit_name.revision (dot-separated)—copy the whole string.";
+pub const ARG_UNIT_ID_DESCRIPTION: &str = LLM_UNIT_ID_TOOL_DESCRIPTION;
 /// Description for the `explanation` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_EXPLANATION_DESCRIPTION: &str =
     "English explanation of what this unit does (purpose, boundaries, how others use it).";
@@ -80,6 +79,9 @@ pub fn payload_from_args(
     if unit_id.is_empty() {
         return Err("modify_unit: unit_id must not be empty".into());
     }
+    validate_full_unit_id_for_tool(&unit_id).map_err(|e| -> BoxError {
+        format!("modify_unit: unit_id invalid: {e}").into()
+    })?;
     let args = ToolModifyUnitArgs {
         unit_id,
         explanation: raw.explanation,
@@ -111,7 +113,7 @@ pub const TOOL_NAME: &str = "modify_unit";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Save a new draft revision of an existing unit. Parent row is identified by `unit_id` (full dot-separated id including revision). Inserts a new row with the same slugs and session, new `id` with last segment revision+1, and `revision` = parent.revision + 1. The `code` argument must be JavaScript. Sets is_draft true.",
+        description: "Save a new draft revision of an existing unit. Parent row is identified by `unit_id` (full dot-separated id; last segment is revision digits only, no `v`/`rev` prefix). Inserts a new row with the same slugs and session, new `id` with last segment revision+1, and `revision` = parent.revision + 1. The `code` argument must be JavaScript. Sets is_draft true.",
         parameters: params_schema(),
     }
 }

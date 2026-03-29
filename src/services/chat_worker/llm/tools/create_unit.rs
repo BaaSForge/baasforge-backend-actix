@@ -147,7 +147,7 @@ pub const TOOL_NAME: &str = "create_unit";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Create a new draft unit for this project. Provide context_slug, module_slug, and unit_name_slug (English lowercase and hyphens only). The row `id` is those parts and unit kind, dot-separated, with revision as the last segment (1 for a new unit). The `code` argument must be JavaScript. Inserts a new row with is_draft true.",
+        description: "Create a new draft unit for this project. Provide context_slug, module_slug, and unit_name_slug (English lowercase and hyphens only). The row `id` is those parts and unit kind, dot-separated, with the revision as the last segment: the digit `1` for a new unit (not `v1` or `rev1`). The `code` argument must be JavaScript. Inserts a new row with is_draft true.",
         parameters: params_schema(),
     }
 }

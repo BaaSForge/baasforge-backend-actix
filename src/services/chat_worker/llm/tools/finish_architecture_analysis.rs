@@ -8,6 +8,9 @@ use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent}
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
+use crate::libs::unit_slug::{
+    validate_full_unit_id_for_tool, LLM_FULL_UNIT_ID_ITEM_DESCRIPTION, LLM_RELEVANT_UNIT_IDS_DESCRIPTION,
+};
 use crate::services::chat_worker::db::load_project_units_by_keys;
 use super::analyze_architecture_tool;
 use super::{maybe_complete_invoking_message, BoxError, ToolAnalyzeArchitecturePayload, ToolSpec};
@@ -32,8 +35,7 @@ pub struct ToolFinishArchitectureAnalysisPayload {
     pub error: Option<String>,
 }
 
-pub const ARG_RELEVANT_UNIT_IDS_DESCRIPTION: &str =
-    "Most relevant unit IDs for this analysis: each array element is one full unit id string (dot-separated: context.module.kind.name.revision), as returned by tools or list payloads. Use an empty array when there are no related units.";
+pub const ARG_RELEVANT_UNIT_IDS_DESCRIPTION: &str = LLM_RELEVANT_UNIT_IDS_DESCRIPTION;
 
 pub const ARG_DETAILED_REPORT_DESCRIPTION: &str =
     "Complete architecture analysis for the planner and user: full explanation of current units, relationships, gaps, and risks—not a short recap. Write this only after all tool-based investigation is finished; omit trial-and-error, exploration steps, and intermediate reasoning.";
@@ -67,7 +69,7 @@ fn params_schema() -> Value {
                 "description": ARG_RELEVANT_UNIT_IDS_DESCRIPTION,
                 "items": {
                     "type": "string",
-                    "description": "Full unit id (dot-separated: context.module.kind.name.revision)."
+                    "description": LLM_FULL_UNIT_ID_ITEM_DESCRIPTION
                 }
             },
             "detailed_report": {
@@ -90,6 +92,18 @@ pub fn payload_from_args(
     tool_name: &str,
 ) -> Result<ChatMessagePayload, BoxError> {
     let args = serde_json::from_value::<ToolFinishArchitectureAnalysisArgs>(args).unwrap_or_default();
+    for (i, id) in args.relevant_unit_ids.iter().enumerate() {
+        let t = id.trim();
+        if t.is_empty() {
+            continue;
+        }
+        validate_full_unit_id_for_tool(t).map_err(|e| -> BoxError {
+            format!(
+                "finish_architecture_analysis: relevant_unit_ids[{i}] invalid: {e}"
+            )
+            .into()
+        })?;
+    }
     Ok(ChatMessagePayload::ToolFinishArchitectureAnalysis(
         ToolFinishArchitectureAnalysisPayload {
             args,

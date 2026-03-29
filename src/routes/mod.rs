@@ -18,6 +18,7 @@ use crate::middlewares::project::projects_owner_guard_middleware_factory;
 use crate::middlewares::test::test_closed_stage_guard_middleware;
 use crate::routes::chat::message_queue;
 use crate::services::message_queue as mq_service;
+use crate::services::runtime_nats::RuntimeNatsPublisher;
 use actix_web::Result;
 use actix_web::middleware::from_fn;
 use actix_web::web;
@@ -27,6 +28,8 @@ use tokio::sync::Mutex;
 
 pub type SharedRedisConn = Option<Arc<Mutex<redis::aio::MultiplexedConnection>>>;
 
+pub type SharedRuntimeNatsPublisher = Option<Arc<RuntimeNatsPublisher>>;
+
 #[derive(Clone)]
 pub struct AppContext {
     pub pool: DbPool,
@@ -34,6 +37,7 @@ pub struct AppContext {
     pub ws_broker: Arc<ws::WsBroker>,
     pub rabbit_publisher: Option<Arc<mq_service::SharedRabbitPublisher>>,
     pub redis_conn: SharedRedisConn,
+    pub runtime_nats_publisher: SharedRuntimeNatsPublisher,
 }
 
 impl AppContext {
@@ -43,6 +47,7 @@ impl AppContext {
         ws_broker: Arc<ws::WsBroker>,
         rabbit_publisher: Option<Arc<mq_service::SharedRabbitPublisher>>,
         redis_conn: SharedRedisConn,
+        runtime_nats_publisher: SharedRuntimeNatsPublisher,
     ) -> Self {
         Self {
             pool,
@@ -50,6 +55,7 @@ impl AppContext {
             ws_broker,
             rabbit_publisher,
             redis_conn,
+            runtime_nats_publisher,
         }
     }
 }
@@ -104,12 +110,26 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
             None
         }
     };
+    let runtime_nats_publisher: SharedRuntimeNatsPublisher = match settings.runtime_nats_url.as_ref() {
+        Some(url) => match RuntimeNatsPublisher::connect(url).await {
+            Ok(p) => {
+                log::info!("[runtime_nats] Connected");
+                Some(Arc::new(p))
+            }
+            Err(e) => {
+                log::warn!("[runtime_nats] Failed to connect: {}", e);
+                None
+            }
+        },
+        None => None,
+    };
     let app_context = AppContext::new(
         pool,
         settings.clone(),
         ws_broker,
         rabbit_publisher,
         redis_conn,
+        runtime_nats_publisher,
     );
 
     HttpServer::new(move || {
@@ -260,6 +280,20 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         "/projects/{id}/runtimes/{runtime_id}/detach-live-release",
                         web::post()
                             .to(project::handle_detach_stage_runtime_live_release)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/runtimes/{runtime_id}/deploy-stage-release",
+                        web::post()
+                            .to(project::handle_deploy_stage_release)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/runtimes/{runtime_id}/deploy-production-release",
+                        web::post()
+                            .to(project::handle_deploy_production_release)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )

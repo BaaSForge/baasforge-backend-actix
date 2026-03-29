@@ -96,6 +96,10 @@ pub struct Settings {
     /// `ANTHROPIC_THINKING_BUDGET_TOKENS` is > 0. Passed to the Messages API as `thinking.budget_tokens`.
     pub anthropic_thinking_budget_tokens: Option<u32>,
     pub llm_provider: LlmProvider,
+    /// When set, the API connects to NATS on startup and publishes release events.
+    pub runtime_nats_url: Option<String>,
+    /// Subject for runtime release NATS publishes. `RUNTIME_NATS_RELEASE_SUBJECT` must be set.
+    pub runtime_nats_release_subject: String,
 }
 
 impl Settings {
@@ -199,6 +203,22 @@ impl Settings {
         let llm_provider_str = env::var("LLM_PROVIDER").expect("LLM_PROVIDER must be set");
         let llm_provider = LlmProvider::try_from(llm_provider_str)?;
 
+        let runtime_nats_url = env::var("RUNTIME_NATS_URL").ok().and_then(|s| {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        });
+        let runtime_nats_release_subject_raw =
+            env::var("RUNTIME_NATS_RELEASE_SUBJECT").expect("RUNTIME_NATS_RELEASE_SUBJECT must be set");
+        let runtime_nats_release_subject = runtime_nats_release_subject_raw.trim();
+        if runtime_nats_release_subject.is_empty() {
+            return Err("RUNTIME_NATS_RELEASE_SUBJECT must not be empty".into());
+        }
+        let runtime_nats_release_subject = runtime_nats_release_subject.to_string();
+
         Ok(Settings {
             port,
             app_environment,
@@ -225,6 +245,8 @@ impl Settings {
             anthropic_model,
             anthropic_thinking_budget_tokens,
             llm_provider,
+            runtime_nats_url,
+            runtime_nats_release_subject,
         })
     }
 }
