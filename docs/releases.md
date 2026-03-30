@@ -1,0 +1,9 @@
+# Releases
+
+- releases must be introduced inside a chat session, so they are connected to a chat session
+- the versions in releases and units are just simple int or float, int for units, float for releases, we call it `revision`, not `version`
+- the releases' revisions are incremental but scoped to a chat, user a may create release 11.0 for prod or stage on chat A, then create the same on the chat B, so we have to check the chat session and be aware of the duplication there might exist
+- the last live production release is saved into the chat session when we create it, if the production release has changed to another release X, and X is not for that chat session, then chat session goes into `read-only` mode, which means it can't create release or publish release or create or modify or delete any unit as its not releaseable
+- when we create a release inside a chat, we count all release controller messages in that message and create the release revision based on it, like `15.4` if there is 6 release controller message in that chat and user clicked on the 4th and if the previous live release revision is 14.X
+- user has to build an stage release before creating a production release, so the endpoint creating production release gets an stage release id
+- there might be conflicts on release revisions as user can create different release on different chat sessions, so where we check release X.Y, we must be aware there might be another X.Y for the same stage or prod on another chat, that's very important
