@@ -143,6 +143,21 @@ pub fn project_release_id_for_revision_lane(
         .optional()
 }
 
+/// `live_release_id` from the project’s production runtime (`environment = Prod`), if that runtime
+/// exists and has a live release attached.
+pub fn live_release_id_from_production_runtime(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+) -> Result<Option<Uuid>, diesel::result::Error> {
+    let row = project_runtimes::table
+        .filter(project_runtimes::project_id.eq(project_id))
+        .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Prod))
+        .select(project_runtimes::live_release_id)
+        .first::<Option<Uuid>>(conn)
+        .optional()?;
+    Ok(row.flatten())
+}
+
 /// Production release id currently stored on prod runtimes’ `live_release_id`, if any.
 pub fn production_release_id_for_live_runtimes(
     conn: &mut PooledConn,

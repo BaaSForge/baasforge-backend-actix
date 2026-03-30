@@ -16,6 +16,7 @@ pub struct ChatSessionResponse {
     pub user_id: Uuid,
     pub title: String,
     pub created_at: DateTime<Utc>,
+    pub live_production_release_id: Option<Uuid>,
 }
 
 #[derive(Serialize)]
@@ -34,4 +35,5 @@ pub struct ChatSessionInsert {
     pub project_id: Uuid,
     pub user_id: Uuid,
     pub title: String,
+    pub live_production_release_id: Option<Uuid>,
 }

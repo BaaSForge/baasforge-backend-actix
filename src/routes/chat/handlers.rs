@@ -36,7 +36,8 @@ use crate::services::chat_worker::db::{
     DraftUnitsAsOfReleaseControllerError,
 };
 use crate::services::releases::{
-    next_project_release_revision, production_release_id_for_live_runtimes,
+    live_release_id_from_production_runtime, next_project_release_revision,
+    production_release_id_for_live_runtimes,
 };
 use crate::services::stage_release_from_controller::{
     transaction_create_stage_release_from_controller, StageReleaseFromControllerError,
@@ -1069,10 +1070,13 @@ pub async fn handle_create_project_chat_session(
     let title = chat_session_title_from_string(body.into_inner().title);
 
     let chat_session = match database::block_on_db(&context.pool, move |conn| {
+        let live_production_release_id =
+            live_release_id_from_production_runtime(conn, project_id)?;
         let chat_session = ChatSessionInsert {
             project_id,
             user_id,
             title,
+            live_production_release_id,
         };
         diesel::insert_into(chat_sessions::table)
             .values(&chat_session)
