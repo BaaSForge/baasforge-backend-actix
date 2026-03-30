@@ -35,7 +35,7 @@ pub fn apply_stage_release_deploy_to_runtime(
     user_id: Uuid,
     project_id: Uuid,
     runtime_id: Uuid,
-    revision: i32,
+    revision: f64,
 ) -> Result<Result<(ProjectRuntimeResponse, StageDeployNatsMeta), StageRuntimeDeployDenied>, diesel::result::Error> {
     let rt: Option<ProjectRuntimeResponse> = project_runtimes::table
         .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))

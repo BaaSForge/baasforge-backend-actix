@@ -298,5 +298,5 @@ pub struct ProjectReleaseResponse {
     pub notes: Option<String>,
     pub chat_session_id: Option<Uuid>,
     pub is_stage: bool,
-    pub revision: i32,
+    pub revision: f64,
 }

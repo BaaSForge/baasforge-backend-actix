@@ -131,7 +131,7 @@ pub fn project_unit_refs_from_responses(units: &[ProjectUnitResponse]) -> Vec<Re
 pub fn project_release_id_for_revision_lane(
     conn: &mut PooledConn,
     project_id: Uuid,
-    revision: i32,
+    revision: f64,
     is_stage: bool,
 ) -> Result<Option<Uuid>, diesel::result::Error> {
     project_releases::table
@@ -199,16 +199,16 @@ pub fn next_project_release_revision(
     conn: &mut PooledConn,
     project_id: Uuid,
     is_stage: bool,
-) -> Result<i32, diesel::result::Error> {
+) -> Result<f64, diesel::result::Error> {
     let (k1, k2) = project_release_lane_advisory_lock_keys(project_id, is_stage);
     diesel::sql_query("SELECT pg_advisory_xact_lock($1, $2)")
         .bind::<Integer, _>(k1)
         .bind::<Integer, _>(k2)
         .execute(conn)?;
-    let m: Option<i32> = project_releases::table
+    let m: Option<f64> = project_releases::table
         .filter(project_releases::project_id.eq(project_id))
         .filter(project_releases::is_stage.eq(is_stage))
         .select(max(project_releases::revision))
         .first(conn)?;
-    Ok(m.unwrap_or(0) + 1)
+    Ok(m.unwrap_or(0.0) + 1.0)
 }

@@ -152,7 +152,7 @@ diesel::table! {
         notes -> Nullable<Text>,
         chat_session_id -> Nullable<Uuid>,
         is_stage -> Bool,
-        revision -> Int4,
+        revision -> Float8,
     }
 }
 

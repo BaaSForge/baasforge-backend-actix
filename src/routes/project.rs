@@ -44,7 +44,7 @@ pub struct ProjectRequest {
 
 #[derive(Deserialize)]
 pub struct DeployReleaseBody {
-    pub revision: i32,
+    pub revision: f64,
 }
 
 /// Body for [`handle_detach_stage_runtime_live_release`]: matches frontend union (revision | controller | detach-only).
@@ -52,7 +52,7 @@ pub struct DeployReleaseBody {
 #[serde(untagged)]
 pub enum DetachLiveReleaseBody {
     /// Variant A: deploy an existing stage release revision after clearing the previous live release.
-    ByRevision { revision: i32 },
+    ByRevision { revision: f64 },
     /// Variant B: create/attach stage release from release-controller message scope (same as
     /// `POST .../release-controller-messages/{id}/stage-release`), bound to path `runtime_id`.
     ByController {
@@ -802,7 +802,7 @@ pub async fn handle_list_project_releases(
 pub async fn handle_list_project_release_units(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(Uuid, i32)>,
+    path: web::Path<(Uuid, f64)>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
