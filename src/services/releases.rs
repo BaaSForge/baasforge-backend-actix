@@ -3,7 +3,7 @@ use crate::database::PooledConn;
 use crate::models::projects::{
     PlatformEnvironmentType, ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitType,
 };
-use crate::schema::{project_releases, project_runtimes};
+use crate::schema::{chat_sessions, project_releases, project_runtimes};
 use crate::services::chat_worker::db::load_project_units_by_keys;
 use diesel::dsl::max;
 use diesel::prelude::*;
@@ -141,6 +141,79 @@ pub fn project_release_id_for_revision_lane(
         .select(project_releases::id)
         .first::<Uuid>(conn)
         .optional()
+}
+
+/// User-facing reason when stage/production release or unit mutations are blocked.
+pub const CHAT_SESSION_READ_ONLY_MESSAGE: &str = "This chat is read-only: production’s live release no longer matches this session’s baseline (another conversation promoted a different release, or production drifted). Open a new chat or use a session tied to the current production line to stage, publish, or edit units.";
+
+/// Message for unit tools’ payload **`error`** field when the session is read-only. The tool row is still stored as **Completed** so the model gets a normal tool result (JSON includes `error`, `args`, and null result fields)—same pattern as validation failures.
+#[inline]
+pub fn chat_session_read_only_tool_error(tool_name: &str) -> String {
+    format!(
+        "{tool_name}: {} No changes were applied.",
+        CHAT_SESSION_READ_ONLY_MESSAGE
+    )
+}
+
+/// Production runtime’s current live release id and the `chat_session_id` stored on that release row
+/// (if any). Used to decide whether a chat session may still create releases or mutate units.
+pub fn prod_live_release_source_chat_session(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+) -> Result<(Option<Uuid>, Option<Uuid>), diesel::result::Error> {
+    let current = live_release_id_from_production_runtime(conn, project_id)?;
+    let source_session = if let Some(release_id) = current {
+        project_releases::table
+            .filter(project_releases::id.eq(release_id))
+            .filter(project_releases::project_id.eq(project_id))
+            .select(project_releases::chat_session_id)
+            .first::<Option<Uuid>>(conn)?
+    } else {
+        None
+    };
+    Ok((current, source_session))
+}
+
+/// Whether this session is read-only for releases and unit edits: live production moved away from
+/// the snapshot taken at session creation **and** the current live production release was not
+/// produced from this session.
+pub fn chat_session_read_only_from_baseline(
+    session_baseline_live_release_id: Option<Uuid>,
+    current_live_release_id: Option<Uuid>,
+    current_live_release_chat_session_id: Option<Uuid>,
+    this_session_id: Uuid,
+) -> bool {
+    if current_live_release_id == session_baseline_live_release_id {
+        return false;
+    }
+    if current_live_release_id.is_none() {
+        return false;
+    }
+    current_live_release_chat_session_id != Some(this_session_id)
+}
+
+pub fn chat_session_is_read_only_for_releases(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> Result<bool, diesel::result::Error> {
+    let snapshot: Option<Uuid> = match chat_sessions::table
+        .filter(chat_sessions::id.eq(session_id))
+        .filter(chat_sessions::project_id.eq(project_id))
+        .select(chat_sessions::live_production_release_id)
+        .first::<Option<Uuid>>(conn)
+        .optional()?
+    {
+        Some(s) => s,
+        None => return Ok(false),
+    };
+    let (current, source) = prod_live_release_source_chat_session(conn, project_id)?;
+    Ok(chat_session_read_only_from_baseline(
+        snapshot,
+        current,
+        source,
+        session_id,
+    ))
 }
 
 /// `live_release_id` from the project’s production runtime (`environment = Prod`), if that runtime

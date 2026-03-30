@@ -249,6 +249,17 @@ pub struct ProjectRuntimeResponse {
     pub live_release_id: Option<Uuid>,
 }
 
+/// Runtime row plus the joined [`ProjectReleaseResponse`] for [`crate::schema::project_runtimes::live_release_id`], if set.
+#[derive(Serialize, Queryable, Selectable)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct ProjectRuntimeWithLiveReleaseResponse {
+    #[diesel(embed)]
+    #[serde(flatten)]
+    pub runtime: ProjectRuntimeResponse,
+    #[diesel(embed)]
+    pub live_release: Option<ProjectReleaseResponse>,
+}
+
 /// One unit pointer in [`ReleaseUnitsMetadata`]: `unit_id` is the full stored id (path + revision).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

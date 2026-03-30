@@ -181,10 +181,13 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
     ]
 }
 
+pub use crate::services::chat_worker::agent::tool_names_for_llm_session;
+
 fn tool_queue_registry_for_agent(
     agent: &ChatAgentType,
+    session_read_only: bool,
 ) -> Vec<(&'static str, ChatMessageType, PayloadFromArgsFn)> {
-    let names = crate::services::chat_worker::agent::tool_names_for_agent(agent);
+    let names = tool_names_for_llm_session(agent, session_read_only);
     tool_queue_registry()
         .iter()
         .filter(|(name, _, _)| names.contains(name))
@@ -192,7 +195,7 @@ fn tool_queue_registry_for_agent(
         .collect()
 }
 
-/// Builds a [`ToolContext`] with one callback per tool for this agent (only tools in [`crate::services::chat_worker::agent::tool_names_for_agent`]). Each callback
+/// Builds a [`ToolContext`] with one callback per tool for this agent (see [`tool_names_for_llm_session`]). Each callback
 /// converts args to a queue payload and publishes. Use at the entry point (e.g. processor) before
 /// calling [`with_tool_context`].
 ///
@@ -213,9 +216,12 @@ pub fn tool_context_for_chat_session(
     session_id: Uuid,
     invoking_message_id: Uuid,
     agent: ChatAgentType,
+    session_read_only: bool,
 ) -> ToolContext {
     let mut callbacks = HashMap::new();
-    for (name, message_type, payload_from_args) in tool_queue_registry_for_agent(&agent) {
+    for (name, message_type, payload_from_args) in
+        tool_queue_registry_for_agent(&agent, session_read_only)
+    {
         let publisher = publisher.clone();
         let message_type = message_type.clone();
         let agent = agent.clone();

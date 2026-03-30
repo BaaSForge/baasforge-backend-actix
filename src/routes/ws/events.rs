@@ -16,6 +16,8 @@ pub enum WsServerEvent {
     ChatSessionGenerationStarted(ChatSessionGenerationStartedPayload),
     /// Broadcast when generation ended with no content and no tool calls (LLM sent nothing).
     ChatSessionGenerationEnded(ChatSessionGenerationEndedPayload),
+    /// Production runtime’s live release changed for this project; client should refetch runtimes (and related state).
+    ProductionLiveReleaseChanged(ProductionLiveReleaseChangedPayload),
     ProjectDeleted(ProjectDeletedPayload),
     RuntimeCreated(RuntimeCreatedPayload),
     ProjectUnitCreated(ProjectUnitEventPayload),
@@ -42,6 +44,11 @@ pub struct ChatSessionGenerationStartedPayload {
 pub struct ChatSessionGenerationEndedPayload {
     pub project_id: Uuid,
     pub session_id: Uuid,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProductionLiveReleaseChangedPayload {
+    pub project_id: Uuid,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

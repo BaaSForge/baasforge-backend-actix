@@ -10,14 +10,16 @@ use crate::models::chat_messages::{
     ChatSessionRoleType,
 };
 use crate::models::chat_sessions::{
-    ChatSessionInsert, ChatSessionResponse, ChatSessionWithLastMessageResponse,
+    ChatSessionDetailResponse, ChatSessionInsert, ChatSessionResponse,
+    ChatSessionWithLastMessageResponse,
 };
 use crate::models::projects::{PlatformEnvironmentType, ProjectReleaseResponse, ProjectUnitResponse};
 use crate::routes::AppContext;
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{
     ChatSessionGenerationEndedPayload, ChatSessionGenerationStartedPayload,
-    ChatSessionMessageStatusChangePayload, ChatSessionMessageUpdatedPayload, WsServerEvent,
+    ChatSessionMessageStatusChangePayload, ChatSessionMessageUpdatedPayload,
+    ProductionLiveReleaseChangedPayload, WsServerEvent,
 };
 use crate::routes::ws::redis::{publish_event_to_channel, user_channel};
 use crate::routes::ws::set_stopped_message_id;
@@ -36,8 +38,10 @@ use crate::services::chat_worker::db::{
     DraftUnitsAsOfReleaseControllerError,
 };
 use crate::services::releases::{
+    chat_session_is_read_only_for_releases, chat_session_read_only_from_baseline,
     live_release_id_from_production_runtime, next_project_release_revision,
-    production_release_id_for_live_runtimes,
+    prod_live_release_source_chat_session, production_release_id_for_live_runtimes,
+    CHAT_SESSION_READ_ONLY_MESSAGE,
 };
 use crate::services::stage_release_from_controller::{
     transaction_create_stage_release_from_controller, StageReleaseFromControllerError,
@@ -74,6 +78,9 @@ pub async fn handle_list_project_chat_sessions(
             .order(chat_sessions::created_at.desc())
             .select(ChatSessionResponse::as_select())
             .load::<ChatSessionResponse>(conn)?;
+
+        let (current_live, live_source_session) =
+            prod_live_release_source_chat_session(conn, project_id)?;
 
         if sessions.is_empty() {
             return Ok::<_, diesel::result::Error>(Vec::new());
@@ -112,17 +119,26 @@ pub async fn handle_list_project_chat_sessions(
         Ok::<_, diesel::result::Error>(
             sessions
                 .into_iter()
-                .map(|session| ChatSessionWithLastMessageResponse {
-                    last_message: latest_by_session_id.remove(&session.id),
-                    owned_units: owned_units_by_session
-                        .get(&session.id)
-                        .cloned()
-                        .unwrap_or_default(),
-                    owned_releases: owned_releases_by_session
-                        .get(&session.id)
-                        .cloned()
-                        .unwrap_or_default(),
-                    session,
+                .map(|session| {
+                    let read_only = chat_session_read_only_from_baseline(
+                        session.live_production_release_id,
+                        current_live,
+                        live_source_session,
+                        session.id,
+                    );
+                    ChatSessionWithLastMessageResponse {
+                        read_only,
+                        last_message: latest_by_session_id.remove(&session.id),
+                        owned_units: owned_units_by_session
+                            .get(&session.id)
+                            .cloned()
+                            .unwrap_or_default(),
+                        owned_releases: owned_releases_by_session
+                            .get(&session.id)
+                            .cloned()
+                            .unwrap_or_default(),
+                        session,
+                    }
                 })
                 .collect(),
         )
@@ -166,7 +182,16 @@ pub async fn handle_get_project_chat_session(
             .select(ChatSessionResponse::as_select())
             .get_result::<ChatSessionResponse>(conn)?;
 
-        Ok::<_, diesel::result::Error>(session)
+        let (current_live, live_source_session) =
+            prod_live_release_source_chat_session(conn, project_id)?;
+        let read_only = chat_session_read_only_from_baseline(
+            session.live_production_release_id,
+            current_live,
+            live_source_session,
+            session.id,
+        );
+
+        Ok::<_, diesel::result::Error>(ChatSessionDetailResponse { session, read_only })
     })
     .await
     {
@@ -184,10 +209,7 @@ pub async fn handle_get_project_chat_session(
         }
     };
 
-    HttpResponse::Ok().json(api_success(
-        "Chat session fetched successfully",
-        json!(response),
-    ))
+    HttpResponse::Ok().json(api_success("Chat session fetched successfully", json!(response)))
 }
 
 const DEFAULT_MESSAGES_PAGE_SIZE: i64 = 50;
@@ -1095,7 +1117,10 @@ pub async fn handle_create_project_chat_session(
 
     HttpResponse::Ok().json(api_success(
         "Project chat session created successfully",
-        json!(chat_session),
+        json!(ChatSessionDetailResponse {
+            session: chat_session,
+            read_only: false,
+        }),
     ))
 }
 
@@ -1113,6 +1138,7 @@ pub struct CreateStageReleaseBody {
 enum ProdReleaseOutcome {
     Success(ProjectReleaseResponse, ChatMessageRow, Option<Uuid>),
     SessionNotFound,
+    SessionReadOnly,
     MessageNotFound,
     NotReleaseController,
     ReleaseControllerPayloadMissing,
@@ -1128,6 +1154,8 @@ pub fn http_response_for_stage_release_from_controller_error(
     use StageReleaseFromControllerError::*;
     match e {
         SessionNotFound => HttpResponse::NotFound().json(api_error("Chat session not found", json!({}))),
+        SessionReadOnly => HttpResponse::Forbidden()
+            .json(api_error(CHAT_SESSION_READ_ONLY_MESSAGE, json!({}))),
         MessageNotFound => HttpResponse::NotFound()
             .json(api_error("Release controller message not found", json!({}))),
         NotReleaseController => HttpResponse::BadRequest().json(api_error(
@@ -1152,6 +1180,54 @@ pub fn http_response_for_stage_release_from_controller_error(
         )),
         Metadata(msg) => HttpResponse::InternalServerError()
             .json(api_error(&format!("Failed to build release metadata: {}", msg), json!({}))),
+    }
+}
+
+/// After production’s live release changes, notify the project owner so the client can refetch runtimes.
+pub async fn broadcast_production_live_release_changed(
+    context: &web::Data<AppContext>,
+    project_id: Uuid,
+) {
+    let Some(ref redis_conn) = context.redis_conn else {
+        return;
+    };
+    let pool = context.pool.clone();
+    let owner_user_id = match database::block_on_db(&pool, move |conn| {
+        projects::table
+            .filter(projects::id.eq(project_id))
+            .select(projects::owner_user_id)
+            .first::<Uuid>(conn)
+            .optional()
+    })
+    .await
+    {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            tracing::warn!(
+                project_id = %project_id,
+                "[broadcast_production_live_release_changed] project not found"
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(
+                ?e,
+                "[broadcast_production_live_release_changed] DB failed"
+            );
+            return;
+        }
+    };
+
+    let event = WsServerEvent::ProductionLiveReleaseChanged(ProductionLiveReleaseChangedPayload {
+        project_id,
+    });
+    let mut guard = redis_conn.lock().await;
+    if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(owner_user_id), &event).await
+    {
+        tracing::warn!(
+            "[broadcast_production_live_release_changed] WS publish failed: {}",
+            e
+        );
     }
 }
 
@@ -1293,6 +1369,10 @@ pub async fn handle_create_production_release(
                 return Ok(ProdReleaseOutcome::SessionNotFound);
             }
 
+            if chat_session_is_read_only_for_releases(conn, project_id, session_id)? {
+                return Ok(ProdReleaseOutcome::SessionReadOnly);
+            }
+
             let msg_row: Option<ChatMessageRow> = chat_messages::table
                 .filter(chat_messages::id.eq(message_id))
                 .filter(chat_messages::chat_session_id.eq(session_id))
@@ -1405,6 +1485,7 @@ pub async fn handle_create_production_release(
                     tracing::warn!("[handle_create_production_release] WS publish failed: {}", e);
                 }
             }
+            broadcast_production_live_release_changed(&context, project_id).await;
             if let Some(ref nats) = context.runtime_nats_publisher {
                 let subject = context.settings.runtime_nats_subject_release.as_str();
                 if let Err(e) = nats
@@ -1433,6 +1514,8 @@ pub async fn handle_create_production_release(
         }
         ProdReleaseOutcome::SessionNotFound => HttpResponse::NotFound()
             .json(api_error("Chat session not found", json!({}))),
+        ProdReleaseOutcome::SessionReadOnly => HttpResponse::Forbidden()
+            .json(api_error(CHAT_SESSION_READ_ONLY_MESSAGE, json!({}))),
         ProdReleaseOutcome::MessageNotFound => HttpResponse::NotFound()
             .json(api_error("Release controller message not found", json!({}))),
         ProdReleaseOutcome::NotReleaseController => HttpResponse::BadRequest().json(

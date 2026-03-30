@@ -12,6 +12,9 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
 use crate::services::chat_worker::units_definitions;
+use crate::services::releases::{
+    chat_session_is_read_only_for_releases, chat_session_read_only_tool_error,
+};
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::dsl::exists;
 use diesel::prelude::*;
@@ -209,7 +212,19 @@ pub async fn handler(
     let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
     let tool_name = Some(TOOL_NAME.to_string());
 
-    let slug_error: Option<String> = if !is_valid_slug(&args.context_slug) {
+    let read_only_block: Option<String> = match block_on_db_tokio(&pool, move |conn| {
+        chat_session_is_read_only_for_releases(conn, project_id, session_id)
+    })
+    .await
+    {
+        Ok(true) => Some(chat_session_read_only_tool_error(TOOL_NAME)),
+        Ok(false) => None,
+        Err(e) => Some(format!("create_unit: {}", e)),
+    };
+
+    let slug_error: Option<String> = if let Some(msg) = read_only_block {
+        Some(msg)
+    } else if !is_valid_slug(&args.context_slug) {
         Some("create_unit: context_slug must be only English lowercase letters and hyphens (-)".to_string())
     } else if !is_valid_slug(&args.module_slug) {
         Some("create_unit: module_slug must be only English lowercase letters and hyphens (-)".to_string())

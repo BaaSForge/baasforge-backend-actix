@@ -23,7 +23,6 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
 use super::{BoxError, tools};
-use crate::services::chat_worker::agent::tool_names_for_agent;
 use crate::services::chat_worker::llm::history::{
     session_messages_to_upstream_entries, UpstreamHistoryEntry,
 };
@@ -66,11 +65,12 @@ fn openai_msg(
 
 fn to_openai_functions_for_agent(
     agent: &ChatAgentType,
+    session_read_only: bool,
 ) -> Vec<openai::chat::ChatCompletionFunctionDefinition> {
-    let names = tool_names_for_agent(agent);
+    let names = tools::tool_names_for_llm_session(agent, session_read_only);
     tools::all_tool_specs()
         .into_iter()
-        .filter(|t| names.contains(&t.name))
+        .filter(|t| names.iter().any(|&n| n == t.name))
         .map(|t| openai::chat::ChatCompletionFunctionDefinition {
             name: t.name.to_string(),
             description: Some(t.description.to_string()),
@@ -334,11 +334,12 @@ pub async fn call_gpt_stream(
     session_id: uuid::Uuid,
     agent: ChatAgentType,
     queue_invoking_message_id: Option<uuid::Uuid>,
+    session_read_only: bool,
 ) -> Result<GenerateOutcome, BoxError> {
     let entries = session_messages_to_upstream_entries(session_messages, user_text);
-    let system_prompt = system_prompt_for_agent(&agent);
-    let messages = entries_to_openai_messages(&entries, system_prompt);
-    let functions = to_openai_functions_for_agent(&agent);
+    let system_prompt = system_prompt_for_agent(&agent, session_read_only);
+    let messages = entries_to_openai_messages(&entries, system_prompt.as_ref());
+    let functions = to_openai_functions_for_agent(&agent, session_read_only);
     let mut rx = stream_openai_tools(
         credentials,
         model,

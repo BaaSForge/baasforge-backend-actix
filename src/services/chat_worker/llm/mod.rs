@@ -67,6 +67,7 @@ impl LlmClient {
         session_id: Uuid,
         agent: ChatAgentType,
         queue_invoking_message_id: Option<Uuid>,
+        session_read_only: bool,
     ) -> Result<GenerateOutcome, BoxError> {
         match self {
             LlmClient::OpenAi {
@@ -89,6 +90,7 @@ impl LlmClient {
                     session_id,
                     agent,
                     queue_invoking_message_id,
+                    session_read_only,
                 )
                 .await
             }
@@ -112,6 +114,7 @@ impl LlmClient {
                     session_id,
                     agent,
                     queue_invoking_message_id,
+                    session_read_only,
                 )
                 .await
             }
@@ -135,6 +138,7 @@ impl LlmClient {
                     session_id,
                     agent,
                     queue_invoking_message_id,
+                    session_read_only,
                 )
                 .await
             }

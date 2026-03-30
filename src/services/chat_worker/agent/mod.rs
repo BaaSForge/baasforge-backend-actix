@@ -2,7 +2,10 @@ mod architecture_analyzer;
 mod developer;
 mod nested_branch_history;
 mod planner;
+mod session_read_only;
 mod solution_analyzer;
+
+pub use session_read_only::{system_prompt_for_agent, tool_names_for_llm_session};
 
 use crate::database::PooledConn;
 use crate::models::chat_messages::{ChatAgentType, ChatMessageType, ChatSessionRoleType};
@@ -21,15 +24,6 @@ pub fn tool_names_for_agent(agent: &ChatAgentType) -> &'static [&'static str] {
         ChatAgentType::ArchitectureAnalyzer => architecture_analyzer::tool_names(),
         ChatAgentType::SolutionAnalyzer => solution_analyzer::tool_names(),
         ChatAgentType::Developer => developer::tool_names(),
-    }
-}
-
-pub fn system_prompt_for_agent(agent: &ChatAgentType) -> &'static str {
-    match agent {
-        ChatAgentType::Planner => *planner::SYSTEM_PROMPT_WITH_UNIT_BRIEFS,
-        ChatAgentType::ArchitectureAnalyzer => *architecture_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
-        ChatAgentType::SolutionAnalyzer => *solution_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
-        ChatAgentType::Developer => *developer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
     }
 }
 

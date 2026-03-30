@@ -4,7 +4,8 @@ use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
     FrameworkType, LanguageType, PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse,
-    ProjectResponse, ProjectRuntimeInsert, ProjectRuntimeResponse, ProjectUnitRow,
+    ProjectResponse, ProjectRuntimeInsert, ProjectRuntimeResponse,
+    ProjectRuntimeWithLiveReleaseResponse, ProjectUnitRow,
 };
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
@@ -24,7 +25,8 @@ use crate::services::stage_runtime_release::{
     apply_stage_runtime_detach_live_release,
 };
 use crate::routes::chat::handlers::{
-    broadcast_stage_release_create_effects, http_response_for_stage_release_from_controller_error,
+    broadcast_production_live_release_changed, broadcast_stage_release_create_effects,
+    http_response_for_stage_release_from_controller_error,
 };
 use crate::{libs::api_response::api_success, routes::AppContext};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
@@ -556,14 +558,19 @@ pub async fn handle_list_project_runtimes(
     let runtimes = match database::block_on_db(&context.pool, move |conn| {
         let mut q = project_runtimes::table
             .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+            .left_join(
+                project_releases::table.on(
+                    project_runtimes::live_release_id.eq(project_releases::id.nullable()),
+                ),
+            )
             .filter(projects::owner_user_id.eq(user_id))
             .filter(project_runtimes::project_id.eq(project_id))
             .into_boxed();
         if let Some(env) = env_filter {
             q = q.filter(project_runtimes::environment.eq(env));
         }
-        q.select(ProjectRuntimeResponse::as_select())
-            .load::<ProjectRuntimeResponse>(conn)
+        q.select(ProjectRuntimeWithLiveReleaseResponse::as_select())
+            .load::<ProjectRuntimeWithLiveReleaseResponse>(conn)
     })
     .await
     {
@@ -1030,6 +1037,7 @@ pub async fn handle_deploy_production_release(
                     "runtime NATS publisher not configured; production deploy not announced to runtimes"
                 );
             }
+            broadcast_production_live_release_changed(&context, project_id).await;
             HttpResponse::Ok().json(api_success(
                 "Production release deployed on runtime",
                 json!({ "runtime": rt }),
