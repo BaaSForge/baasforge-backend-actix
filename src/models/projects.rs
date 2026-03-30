@@ -245,7 +245,8 @@ pub struct ProjectRuntimeResponse {
     pub server_cluster_deployment_status: Option<DeploymentStatusType>,
     pub server_cluster_deployment_is_healthy: Option<bool>,
     pub server_cluster_deployment_last_health: Option<DateTime<Utc>>,
-    pub live_release_revision: Option<i32>,
+    /// [`crate::schema::project_releases::id`] when this runtime has a live release.
+    pub live_release_id: Option<Uuid>,
 }
 
 /// One unit pointer in [`ReleaseUnitsMetadata`]: `unit_id` is the full stored id (path + revision).

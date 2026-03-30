@@ -18,8 +18,13 @@ pub struct ReleaseDeployEvent {
     pub environment: ReleaseDeployEnvironment,
     #[serde(default)]
     pub runtime_id: Option<Uuid>,
-    /// `None` / JSON `null`: no live release (e.g. stage runtime detached). Otherwise the deployed revision.
-    pub deployed_revision: Option<i32>,
+    /// `project_releases.id` now live (`null` when detached / no deploy).
+    #[serde(default)]
+    pub deployed_release_id: Option<Uuid>,
+    /// `project_releases.id` that was live immediately before this event. `null` when there was
+    /// none (e.g. first release deployed to this runtime / environment).
+    #[serde(default)]
+    pub previous_release_id: Option<Uuid>,
 }
 
 #[derive(Debug)]
@@ -104,15 +109,17 @@ impl RuntimeNatsPublisher {
         subject: &str,
         project_id: Uuid,
         runtime_id: Uuid,
-        deployed_revision: i32,
+        deployed_release_id: Uuid,
+        previous_release_id: Option<Uuid>,
     ) -> Result<(), RuntimeNatsPublishError> {
-        let payload = ReleaseDeployEvent {
+        self.publish_stage_runtime_release_state(
+            subject,
             project_id,
-            environment: ReleaseDeployEnvironment::Stage,
-            runtime_id: Some(runtime_id),
-            deployed_revision: Some(deployed_revision),
-        };
-        self.publish_json(subject, &payload).await
+            runtime_id,
+            Some(deployed_release_id),
+            previous_release_id,
+        )
+        .await
     }
 
     /// Stage runtime no longer has a live release revision (detach). Same subject as deploy events.
@@ -121,34 +128,52 @@ impl RuntimeNatsPublisher {
         subject: &str,
         project_id: Uuid,
         runtime_id: Uuid,
+        previous_release_id: Option<Uuid>,
     ) -> Result<(), RuntimeNatsPublishError> {
-        self.publish_stage_runtime_release_state(subject, project_id, runtime_id, None)
-            .await
+        self.publish_stage_runtime_release_state(
+            subject,
+            project_id,
+            runtime_id,
+            None,
+            previous_release_id,
+        )
+        .await
     }
 
-    /// `Some(revision)` = stage deploy; `None` = detached / no live release.
+    /// `Some(deployed_release_id)` = stage deploy; `None` = detached / no live release.
     pub async fn publish_stage_runtime_release_state(
         &self,
         subject: &str,
         project_id: Uuid,
         runtime_id: Uuid,
-        deployed_revision: Option<i32>,
+        deployed_release_id: Option<Uuid>,
+        previous_release_id: Option<Uuid>,
     ) -> Result<(), RuntimeNatsPublishError> {
-        match deployed_revision {
-            Some(r) => self.publish_stage_release(subject, project_id, runtime_id, r).await,
+        match deployed_release_id {
+            Some(dr) => {
+                let payload = ReleaseDeployEvent {
+                    project_id,
+                    environment: ReleaseDeployEnvironment::Stage,
+                    runtime_id: Some(runtime_id),
+                    deployed_release_id: Some(dr),
+                    previous_release_id,
+                };
+                self.publish_json(subject, &payload).await
+            }
             None => {
                 tracing::info!(
                     target: "runtime_nats",
                     subject = %subject,
                     project_id = %project_id,
                     runtime_id = %runtime_id,
-                    "publishing stage live release CLEARED (detach): deployed_revision=null for runtime consumer"
+                    "publishing stage live release CLEARED (detach): no deployed_release_id for runtime consumer"
                 );
                 let payload = ReleaseDeployEvent {
                     project_id,
                     environment: ReleaseDeployEnvironment::Stage,
                     runtime_id: Some(runtime_id),
-                    deployed_revision: None,
+                    deployed_release_id: None,
+                    previous_release_id,
                 };
                 self.publish_json(subject, &payload).await
             }
@@ -159,13 +184,15 @@ impl RuntimeNatsPublisher {
         &self,
         subject: &str,
         project_id: Uuid,
-        deployed_revision: i32,
+        deployed_release_id: Uuid,
+        previous_release_id: Option<Uuid>,
     ) -> Result<(), RuntimeNatsPublishError> {
         let payload = ReleaseDeployEvent {
             project_id,
             environment: ReleaseDeployEnvironment::Production,
             runtime_id: None,
-            deployed_revision: Some(deployed_revision),
+            deployed_release_id: Some(deployed_release_id),
+            previous_release_id,
         };
         self.publish_json(subject, &payload).await
     }

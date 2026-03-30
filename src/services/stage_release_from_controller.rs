@@ -42,7 +42,10 @@ pub fn transaction_create_stage_release_from_controller(
     session_id: Uuid,
     message_id: Uuid,
     stage_runtime_id: Uuid,
-) -> Result<Result<(ProjectReleaseResponse, ChatMessageRow), StageReleaseFromControllerError>, diesel::result::Error> {
+) -> Result<
+    Result<(ProjectReleaseResponse, ChatMessageRow, Option<Uuid>), StageReleaseFromControllerError>,
+    diesel::result::Error,
+> {
     conn.transaction(|conn| {
         let session_ok = chat_sessions::table
             .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
@@ -108,6 +111,8 @@ pub fn transaction_create_stage_release_from_controller(
             return Ok(Err(StageReleaseFromControllerError::RuntimeNotStage));
         }
 
+        let previous_stage_release_id = stage_rt.live_release_id;
+
         let prev_release = load_latest_production_release_for_project(conn, project_id)?;
         let previous_combined = match prev_release
             .as_ref()
@@ -156,7 +161,7 @@ pub fn transaction_create_stage_release_from_controller(
                 .filter(project_runtimes::id.eq(stage_runtime_id))
                 .filter(project_runtimes::project_id.eq(project_id)),
         )
-        .set(project_runtimes::live_release_revision.eq(Some(inserted.revision)))
+        .set(project_runtimes::live_release_id.eq(Some(inserted.id)))
         .execute(conn)?;
 
         box_payload.stage_release = Some(inserted.clone());
@@ -172,6 +177,6 @@ pub fn transaction_create_stage_release_from_controller(
         .returning(ChatMessageRow::as_returning())
         .get_result(conn)?;
 
-        Ok(Ok((inserted, updated_row)))
+        Ok(Ok((inserted, updated_row, previous_stage_release_id)))
     })
 }

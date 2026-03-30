@@ -35,7 +35,9 @@ use crate::services::chat_worker::db::{
     load_unit_tips_by_ids_for_chat_session, load_units_by_ids_for_chat_session,
     DraftUnitsAsOfReleaseControllerError,
 };
-use crate::services::releases::next_project_release_revision;
+use crate::services::releases::{
+    next_project_release_revision, production_release_id_for_live_runtimes,
+};
 use crate::services::stage_release_from_controller::{
     transaction_create_stage_release_from_controller, StageReleaseFromControllerError,
 };
@@ -1105,7 +1107,7 @@ pub struct CreateStageReleaseBody {
 }
 
 enum ProdReleaseOutcome {
-    Success(ProjectReleaseResponse, ChatMessageRow),
+    Success(ProjectReleaseResponse, ChatMessageRow, Option<Uuid>),
     SessionNotFound,
     MessageNotFound,
     NotReleaseController,
@@ -1158,6 +1160,7 @@ pub async fn broadcast_stage_release_create_effects(
     stage_runtime_id: Uuid,
     release: &ProjectReleaseResponse,
     row: ChatMessageRow,
+    previous_stage_release_id: Option<Uuid>,
 ) {
     if let Some(ref redis_conn) = context.redis_conn {
         let message: ChatMessageResponse = row.into();
@@ -1175,7 +1178,13 @@ pub async fn broadcast_stage_release_create_effects(
     if let Some(ref nats) = context.runtime_nats_publisher {
         let subject = context.settings.runtime_nats_subject_release.as_str();
         if let Err(e) = nats
-            .publish_stage_release(subject, project_id, stage_runtime_id, release.revision)
+            .publish_stage_release(
+                subject,
+                project_id,
+                stage_runtime_id,
+                release.id,
+                previous_stage_release_id,
+            )
             .await
         {
             tracing::warn!("[broadcast_stage_release_create_effects] NATS publish failed: {}", e);
@@ -1230,7 +1239,7 @@ pub async fn handle_create_stage_release(
     };
 
     match outcome {
-        Ok((release, row)) => {
+        Ok((release, row, previous_stage_release_id)) => {
             broadcast_stage_release_create_effects(
                 &context,
                 project_id,
@@ -1239,6 +1248,7 @@ pub async fn handle_create_stage_release(
                 stage_runtime_id,
                 &release,
                 row,
+                previous_stage_release_id,
             )
             .await;
             HttpResponse::Ok().json(api_success(
@@ -1251,7 +1261,7 @@ pub async fn handle_create_stage_release(
 }
 
 /// POST — create a production release from the stage release referenced on the controller; sets
-/// `live_release_revision` on the project production runtime(s), updates the box + WS.
+/// `live_release_id` on the project production runtime(s), updates the box + WS.
 pub async fn handle_create_production_release(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -1320,6 +1330,8 @@ pub async fn handle_create_production_release(
                 return Ok(ProdReleaseOutcome::NoStageRelease);
             };
 
+            let previous_prod_release_id = production_release_id_for_live_runtimes(conn, project_id)?;
+
             let revision = next_project_release_revision(conn, project_id, false)?;
             let inserted: ProjectReleaseResponse = diesel::insert_into(project_releases::table)
                 .values((
@@ -1338,7 +1350,7 @@ pub async fn handle_create_production_release(
                     .filter(project_runtimes::project_id.eq(project_id))
                     .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Prod)),
             )
-            .set(project_runtimes::live_release_revision.eq(Some(inserted.revision)))
+            .set(project_runtimes::live_release_id.eq(Some(inserted.id)))
             .execute(conn)?;
             if n == 0 {
                 return Ok(ProdReleaseOutcome::ProdRuntimeNotFound);
@@ -1357,7 +1369,11 @@ pub async fn handle_create_production_release(
             .returning(ChatMessageRow::as_returning())
             .get_result(conn)?;
 
-            Ok(ProdReleaseOutcome::Success(inserted, updated_row))
+            Ok(ProdReleaseOutcome::Success(
+                inserted,
+                updated_row,
+                previous_prod_release_id,
+            ))
         })
     })
     .await
@@ -1371,7 +1387,7 @@ pub async fn handle_create_production_release(
     };
 
     match outcome {
-        ProdReleaseOutcome::Success(release, row) => {
+        ProdReleaseOutcome::Success(release, row, previous_prod_release_id) => {
             if let Some(ref redis_conn) = context.redis_conn {
                 let message: ChatMessageResponse = row.into();
                 let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
@@ -1388,7 +1404,12 @@ pub async fn handle_create_production_release(
             if let Some(ref nats) = context.runtime_nats_publisher {
                 let subject = context.settings.runtime_nats_subject_release.as_str();
                 if let Err(e) = nats
-                    .publish_prod_release(subject, project_id, release.revision)
+                    .publish_prod_release(
+                        subject,
+                        project_id,
+                        release.id,
+                        previous_prod_release_id,
+                    )
                     .await
                 {
                     tracing::warn!("[handle_create_production_release] NATS publish failed: {}", e);

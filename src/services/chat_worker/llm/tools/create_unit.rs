@@ -13,7 +13,10 @@ use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
 use crate::services::chat_worker::units_definitions;
 use crate::services::message_queue::SharedRabbitPublisher;
+use diesel::dsl::exists;
 use diesel::prelude::*;
+use diesel::result::DatabaseErrorKind;
+use diesel::select;
 use gemini_rust::tools::model::FunctionDeclaration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,6 +41,18 @@ pub const ARG_UNIT_NAME_SLUG_DESCRIPTION: &str =
     "Unit name slug describing what this unit does: only English lowercase letters and hyphen (-), e.g. adjust-levels.";
 
 const INITIAL_REVISION: i32 = 1;
+
+fn duplicate_unit_path_error_message(
+    context_slug: &str,
+    module_slug: &str,
+    unit_type_slug: &str,
+    unit_name_slug: &str,
+) -> String {
+    format!(
+        "create_unit: a unit already exists in this chat session with the same path ({}.{}.{}.{}). Use modify_unit with the existing unit id from list or tool results instead of create_unit.",
+        context_slug, module_slug, unit_type_slug, unit_name_slug
+    )
+}
 
 /// LLM JSON shape for `create_unit`; `unit_type` is parsed to [`ProjectUnitType`] in [`payload_from_args`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -229,20 +244,57 @@ pub async fn handler(
     let (created_unit, error) = if let Some(msg) = slug_error {
         (None, Some(msg))
     } else {
+        let dup_msg = duplicate_unit_path_error_message(
+            &args.context_slug,
+            &args.module_slug,
+            args.unit_type.as_slug(),
+            &args.unit_name_slug,
+        );
+        let pid = project_id;
+        let sid = session_id;
+        let ctx = args.context_slug.clone();
+        let mod_slug = args.module_slug.clone();
+        let ut = args.unit_type;
+        let un = args.unit_name_slug.clone();
         match block_on_db_tokio(&pool, move |conn| {
-            diesel::insert_into(project_units::table)
-                .values(&insert)
-                .returning(ProjectUnitRow::as_returning())
-                .get_result::<ProjectUnitRow>(conn)
+            select(exists(
+                project_units::table
+                    .filter(project_units::project_id.eq(pid))
+                    .filter(project_units::context_slug.eq(&ctx))
+                    .filter(project_units::module_slug.eq(&mod_slug))
+                    .filter(project_units::unit_type.eq(ut))
+                    .filter(project_units::unit_name_slug.eq(&un)),
+            ))
+            .get_result::<bool>(conn)
         })
         .await
         {
-            Ok(u) => {
-                let rev = u.revision;
-                (Some(ProjectUnitResponse::from_row(u, rev)), None)
+            Ok(true) => (None, Some(dup_msg)),
+            Ok(false) => {
+                match block_on_db_tokio(&pool, move |conn| {
+                    diesel::insert_into(project_units::table)
+                        .values(&insert)
+                        .returning(ProjectUnitRow::as_returning())
+                        .get_result::<ProjectUnitRow>(conn)
+                })
+                .await
+                {
+                    Ok(u) => {
+                        let rev = u.revision;
+                        (Some(ProjectUnitResponse::from_row(u, rev)), None)
+                    }
+                    Err(BlockingDbError::Query(diesel::result::Error::DatabaseError(
+                        DatabaseErrorKind::UniqueViolation,
+                        _,
+                    ))) => (None, Some(dup_msg)),
+                    Err(e) => {
+                        tracing::error!(%message_id, "create_unit insert: {}", e);
+                        (None, Some(e.to_string()))
+                    }
+                }
             }
             Err(e) => {
-                tracing::error!(%message_id, "create_unit insert: {}", e);
+                tracing::error!(%message_id, "create_unit duplicate check: {}", e);
                 (None, Some(e.to_string()))
             }
         }

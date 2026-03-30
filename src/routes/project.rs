@@ -59,7 +59,7 @@ pub enum DetachLiveReleaseBody {
         chat_session_id: Uuid,
         release_controller_message_id: Uuid,
     },
-    /// Detach only: `{}` — clear `live_release_revision` (requires a release to be live).
+    /// Detach only: `{}` — clear `live_release_id` (requires a release to be live).
     DetachOnly(DetachLiveReleaseBodyEmpty),
 }
 
@@ -70,7 +70,8 @@ async fn notify_stage_runtime_release_nats(
     context: &web::Data<AppContext>,
     project_id: Uuid,
     runtime_id: Uuid,
-    deployed_revision: Option<i32>,
+    deployed_release_id: Option<Uuid>,
+    previous_release_id: Option<Uuid>,
     op_label: &'static str,
 ) {
     let subject = context.settings.runtime_nats_subject_release.as_str();
@@ -81,7 +82,8 @@ async fn notify_stage_runtime_release_nats(
             subject = %subject,
             project_id = %project_id,
             runtime_id = %runtime_id,
-            ?deployed_revision,
+            ?deployed_release_id,
+            ?previous_release_id,
             "runtime NATS publisher not configured; stage runtime will not receive release via NATS"
         );
         return;
@@ -92,11 +94,18 @@ async fn notify_stage_runtime_release_nats(
         subject = %subject,
         project_id = %project_id,
         runtime_id = %runtime_id,
-        deployed_revision = ?deployed_revision,
+        deployed_release_id = ?deployed_release_id,
+        previous_release_id = ?previous_release_id,
         "notifying stage runtime via NATS (release deploy event for consumer)"
     );
     if let Err(e) = nats
-        .publish_stage_runtime_release_state(subject, project_id, runtime_id, deployed_revision)
+        .publish_stage_runtime_release_state(
+            subject,
+            project_id,
+            runtime_id,
+            deployed_release_id,
+            previous_release_id,
+        )
         .await
     {
         tracing::warn!(
@@ -115,7 +124,7 @@ async fn notify_stage_runtime_release_nats(
             subject = %subject,
             project_id = %project_id,
             runtime_id = %runtime_id,
-            deployed_revision = ?deployed_revision,
+            deployed_release_id = ?deployed_release_id,
             "NATS notify finished OK (message published; consumer should act)"
         );
     }
@@ -613,12 +622,14 @@ pub async fn handle_detach_stage_runtime_live_release(
             };
 
             match outcome {
-                Ok(rt) => {
+                Ok((rt, nats_meta)) => {
+                    // `previous_release_id` is None on first stage deploy (nothing was live before).
                     notify_stage_runtime_release_nats(
                         &context,
                         project_id,
                         runtime_id,
-                        Some(revision),
+                        Some(nats_meta.deployed_release_id),
+                        nats_meta.previous_release_id,
                         "handle_detach_stage_runtime_live_release",
                     )
                     .await;
@@ -670,7 +681,7 @@ pub async fn handle_detach_stage_runtime_live_release(
             };
 
             match outcome {
-                Ok((release, row)) => {
+                Ok((release, row, previous_stage_release_id)) => {
                     broadcast_stage_release_create_effects(
                         &context,
                         project_id,
@@ -679,6 +690,7 @@ pub async fn handle_detach_stage_runtime_live_release(
                         runtime_id,
                         &release,
                         row,
+                        previous_stage_release_id,
                     )
                     .await;
                     HttpResponse::Ok().json(api_success(
@@ -706,7 +718,7 @@ pub async fn handle_detach_stage_runtime_live_release(
             };
 
             match outcome {
-                Ok(rt) => {
+                Ok((rt, previous_release_id)) => {
                     tracing::info!(
                         target: "runtime_nats",
                         path = "POST .../detach-live-release",
@@ -720,6 +732,7 @@ pub async fn handle_detach_stage_runtime_live_release(
                         project_id,
                         runtime_id,
                         None,
+                        previous_release_id,
                         "handle_detach_stage_runtime_live_release",
                     )
                     .await;
@@ -875,12 +888,14 @@ pub async fn handle_deploy_stage_release(
     };
 
     match outcome {
-        Ok(rt) => {
+        Ok((rt, nats_meta)) => {
+            // `previous_release_id` is None on first stage deploy (nothing was live before).
             notify_stage_runtime_release_nats(
                 &context,
                 project_id,
                 runtime_id,
-                Some(revision),
+                Some(nats_meta.deployed_release_id),
+                nats_meta.previous_release_id,
                 "handle_deploy_stage_release",
             )
             .await;
@@ -924,7 +939,7 @@ pub async fn handle_deploy_production_release(
         NotFound,
         NotProd,
         NoSuchRelease,
-        Ok(ProjectRuntimeResponse),
+        Ok(ProjectRuntimeResponse, Uuid, Option<Uuid>),
     }
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
@@ -946,29 +961,30 @@ pub async fn handle_deploy_production_release(
             return Ok(Out::NotProd);
         }
 
-        let release_ok = project_releases::table
+        let deployed_release_id = project_releases::table
             .filter(project_releases::project_id.eq(project_id))
             .filter(project_releases::revision.eq(revision))
             .filter(project_releases::is_stage.eq(false))
             .select(project_releases::id)
             .first::<Uuid>(conn)
-            .optional()?
-            .is_some();
+            .optional()?;
 
-        if !release_ok {
+        let Some(deployed_release_id) = deployed_release_id else {
             return Ok(Out::NoSuchRelease);
-        }
+        };
+
+        let previous_release_id = rt.live_release_id;
 
         let updated = diesel::update(
             project_runtimes::table
                 .filter(project_runtimes::id.eq(runtime_id))
                 .filter(project_runtimes::project_id.eq(project_id)),
         )
-        .set(project_runtimes::live_release_revision.eq(Some(revision)))
+        .set(project_runtimes::live_release_id.eq(Some(deployed_release_id)))
         .returning(ProjectRuntimeResponse::as_select())
         .get_result::<ProjectRuntimeResponse>(conn)?;
 
-        Ok(Out::Ok(updated))
+        Ok(Out::Ok(updated, deployed_release_id, previous_release_id))
     })
     .await
     {
@@ -992,11 +1008,16 @@ pub async fn handle_deploy_production_release(
             "No production release with this revision exists for the project",
             json!({}),
         )),
-        Out::Ok(rt) => {
+        Out::Ok(rt, deployed_release_id, previous_release_id) => {
             if let Some(ref nats) = context.runtime_nats_publisher {
                 let subject = context.settings.runtime_nats_subject_release.as_str();
                 if let Err(e) = nats
-                    .publish_prod_release(subject, project_id, revision)
+                    .publish_prod_release(
+                        subject,
+                        project_id,
+                        deployed_release_id,
+                        previous_release_id,
+                    )
                     .await
                 {
                     tracing::warn!("[handle_deploy_production_release] NATS publish failed: {}", e);
