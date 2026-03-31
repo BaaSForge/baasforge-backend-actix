@@ -2,9 +2,10 @@ use crate::database::PooledConn;
 use crate::libs::unit_slug::UnitPath;
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageStatus, ChatMessageType};
 use crate::models::projects::{
-    ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType,
+    PlatformEnvironmentType, ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitRow,
+    ProjectUnitType,
 };
-use crate::schema::{chat_messages, project_releases, project_units};
+use crate::schema::{chat_messages, project_releases, project_runtimes, project_units};
 use chrono::{DateTime, Utc};
 use diesel::dsl::{exists, max, min, not};
 use diesel::prelude::*;
@@ -33,7 +34,6 @@ macro_rules! select_project_unit_row {
             $a.field(project_units::revision),
             $a.field(project_units::code),
             $a.field(project_units::explanation),
-            $a.field(project_units::is_draft),
             $a.field(project_units::unit_type),
             $a.field(project_units::is_deleted),
             $a.field(project_units::context_slug),
@@ -142,120 +142,120 @@ macro_rules! inner_is_newer_same_unit {
     };
 }
 
-/// `NOT is_draft` **or** row belongs to this chat session (draft visibility for cross-session reads).
-macro_rules! release_visibility {
-    ($a:expr, $chat_session_id:expr) => {
-        $a.field(project_units::is_draft)
-            .eq(false)
-            .or($a.field(project_units::chat_session_id).eq($chat_session_id))
-    };
+// TODO: use vector db instead of postgres
+/// Resolve the live production release: prod runtime `live_release_id`, else newest prod row by `created_at`.
+pub fn load_latest_production_release_for_project(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+) -> Result<Option<ProjectReleaseResponse>, diesel::result::Error> {
+    let ids: Vec<Option<Uuid>> = project_runtimes::table
+        .filter(project_runtimes::project_id.eq(project_id))
+        .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Prod))
+        .select(project_runtimes::live_release_id)
+        .load(conn)?;
+
+    for id in ids.into_iter().flatten() {
+        let r = project_releases::table
+            .filter(project_releases::id.eq(id))
+            .filter(project_releases::project_id.eq(project_id))
+            .filter(project_releases::is_stage.eq(false))
+            .select(ProjectReleaseResponse::as_select())
+            .first(conn)
+            .optional()?;
+        if r.is_some() {
+            return Ok(r);
+        }
+    }
+
+    project_releases::table
+        .filter(project_releases::project_id.eq(project_id))
+        .filter(project_releases::is_stage.eq(false))
+        .order(project_releases::created_at.desc())
+        .select(ProjectReleaseResponse::as_select())
+        .first(conn)
+        .optional()
 }
 
-// TODO: use vector db instead of postgres
-/// Load units that belong to the latest production release for the project.
-///
-/// Draft revisions are only included when they belong to `chat_session_id`, so other sessions' drafts are never exposed.
-///
-/// Only the tip of each revision chain is returned: among rows visible under the draft rule, we keep
-/// the largest `revision` per logical unit `(chat_session_id, context_slug, module_slug, unit_type, unit_name_slug)`.
-/// Stored `id` includes revision as the last dot-separated segment, so we group by slug columns, not by `id`.
+/// Load unit rows referenced by the latest production release’s `combinedUnitIDs` metadata.
+pub fn load_units_from_latest_production_metadata(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    let keys: Vec<(Uuid, String)> = load_latest_production_release_for_project(conn, project_id)?
+        .and_then(|r| r.units_metadata)
+        .map(|m| {
+            m.combined_unit_refs
+                .into_iter()
+                .map(|r| (r.chat_session_id, r.unit_id))
+                .collect()
+        })
+        .unwrap_or_default();
+    load_project_units_by_keys(conn, project_id, &keys)
+}
+
+/// Load units from the latest production release metadata, filtered by a case-insensitive substring
+/// match on id, slugs, code, or explanation. `chat_session_id` is unused (kept for tool/API stability).
 pub fn load_units_for_latest_production_release(
     conn: &mut PooledConn,
     project_id: Uuid,
-    chat_session_id: Uuid,
+    _chat_session_id: Uuid,
     query: &str,
 ) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
     tracing::debug!(query = %query, "load_units_for_latest_production_release");
-
-    let (pu_outer, pu_inner) = diesel::alias!(
-        crate::schema::project_units as pu_outer,
-        crate::schema::project_units as pu_inner
-    );
-
-    pu_outer
-        .filter(pu_outer.field(project_units::project_id).eq(project_id))
-        .filter(release_visibility!(pu_outer, chat_session_id))
-        .filter(not(exists(
-            pu_inner.filter(
-                inner_is_newer_same_unit!(pu_outer, pu_inner)
-                    .and(pu_inner.field(project_units::project_id).eq(project_id))
-                    .and(release_visibility!(pu_inner, chat_session_id)),
-            ),
-        )))
-        .select(select_project_unit_row!(pu_outer))
-        .load::<ProjectUnitRow>(conn)
-        .and_then(|rows| project_units_with_latest_revision(conn, project_id, rows))
+    let mut units = load_units_from_latest_production_metadata(conn, project_id)?;
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Ok(units);
+    }
+    units.retain(|u| {
+        u.id.to_lowercase().contains(&q)
+            || u.context_slug.to_lowercase().contains(&q)
+            || u.module_slug.to_lowercase().contains(&q)
+            || u.unit_name_slug.to_lowercase().contains(&q)
+            || u.code.as_deref().unwrap_or("").to_lowercase().contains(&q)
+            || u.explanation.as_deref().unwrap_or("").to_lowercase().contains(&q)
+    });
+    Ok(units)
 }
 
-/// Distinct `context_slug` values among visible tip units (same visibility and revision-tip rules as
-/// [`load_units_for_latest_production_release`]).
+/// Distinct `context_slug` values from the latest production release snapshot.
 pub fn list_distinct_context_slugs_visible_tip_units(
     conn: &mut PooledConn,
     project_id: Uuid,
-    chat_session_id: Uuid,
+    _chat_session_id: Uuid,
 ) -> Result<Vec<String>, diesel::result::Error> {
-    let (pu_outer, pu_inner) = diesel::alias!(
-        crate::schema::project_units as pu_outer,
-        crate::schema::project_units as pu_inner
-    );
-
-    pu_outer
-        .filter(pu_outer.field(project_units::project_id).eq(project_id))
-        .filter(release_visibility!(pu_outer, chat_session_id))
-        .filter(not(exists(
-            pu_inner.filter(
-                inner_is_newer_same_unit!(pu_outer, pu_inner)
-                    .and(pu_inner.field(project_units::project_id).eq(project_id))
-                    .and(release_visibility!(pu_inner, chat_session_id)),
-            ),
-        )))
-        .select(pu_outer.field(project_units::context_slug))
-        .distinct()
-        .order_by(pu_outer.field(project_units::context_slug))
-        .load::<String>(conn)
+    let units = load_units_from_latest_production_metadata(conn, project_id)?;
+    let mut seen = HashSet::new();
+    let mut out: Vec<String> = units
+        .into_iter()
+        .map(|u| u.context_slug.clone())
+        .filter(|c| seen.insert(c.clone()))
+        .collect();
+    out.sort();
+    Ok(out)
 }
 
-/// Distinct `(context_slug, module_slug)` pairs for the given contexts, using the same visible tip rules
-/// as [`load_units_for_latest_production_release`].
+/// Distinct `(context_slug, module_slug)` pairs from the latest production snapshot, limited to `context_slugs`.
 pub fn list_distinct_context_module_pairs_visible_tip_units(
     conn: &mut PooledConn,
     project_id: Uuid,
-    chat_session_id: Uuid,
+    _chat_session_id: Uuid,
     context_slugs: &[String],
 ) -> Result<Vec<(String, String)>, diesel::result::Error> {
     if context_slugs.is_empty() {
         return Ok(vec![]);
     }
-    let (pu_outer, pu_inner) = diesel::alias!(
-        crate::schema::project_units as pu_outer,
-        crate::schema::project_units as pu_inner
-    );
-
-    pu_outer
-        .filter(pu_outer.field(project_units::project_id).eq(project_id))
-        .filter(release_visibility!(pu_outer, chat_session_id))
-        .filter(
-            pu_outer
-                .field(project_units::context_slug)
-                .eq_any(context_slugs),
-        )
-        .filter(not(exists(
-            pu_inner.filter(
-                inner_is_newer_same_unit!(pu_outer, pu_inner)
-                    .and(pu_inner.field(project_units::project_id).eq(project_id))
-                    .and(release_visibility!(pu_inner, chat_session_id)),
-            ),
-        )))
-        .select((
-            pu_outer.field(project_units::context_slug),
-            pu_outer.field(project_units::module_slug),
-        ))
-        .distinct()
-        .order_by((
-            pu_outer.field(project_units::context_slug),
-            pu_outer.field(project_units::module_slug),
-        ))
-        .load::<(String, String)>(conn)
+    let allow: HashSet<&str> = context_slugs.iter().map(|s| s.as_str()).collect();
+    let units = load_units_from_latest_production_metadata(conn, project_id)?;
+    let mut pairs: HashSet<(String, String)> = HashSet::new();
+    for u in units {
+        if allow.contains(u.context_slug.as_str()) {
+            pairs.insert((u.context_slug.clone(), u.module_slug.clone()));
+        }
+    }
+    let mut out: Vec<_> = pairs.into_iter().collect();
+    out.sort();
+    Ok(out)
 }
 
 /// Builds ordered module lists per context (one entry per `contexts` element, stable order, deduped request).
@@ -302,8 +302,8 @@ pub fn modules_by_context_slugs_visible_tip_units(
         .collect())
 }
 
-/// Draft units for a chat session: one row per logical unit (max `revision` among draft rows in that session).
-pub fn load_chat_session_draft_units_latest_revision(
+/// Latest tip row per logical unit in `session_id` (no newer revision in that session for the same slugs).
+pub fn load_chat_session_unit_tips_for_merge(
     conn: &mut PooledConn,
     project_id: Uuid,
     session_id: Uuid,
@@ -316,13 +316,11 @@ pub fn load_chat_session_draft_units_latest_revision(
     pu_outer
         .filter(pu_outer.field(project_units::project_id).eq(project_id))
         .filter(pu_outer.field(project_units::chat_session_id).eq(session_id))
-        .filter(pu_outer.field(project_units::is_draft).eq(true))
         .filter(not(exists(
             pu_inner.filter(
                 inner_is_newer_same_unit!(pu_outer, pu_inner)
                     .and(pu_inner.field(project_units::project_id).eq(project_id))
-                    .and(pu_inner.field(project_units::chat_session_id).eq(session_id))
-                    .and(pu_inner.field(project_units::is_draft).eq(true)),
+                    .and(pu_inner.field(project_units::chat_session_id).eq(session_id)),
             ),
         )))
         .select(select_project_unit_row!(pu_outer))
@@ -414,7 +412,6 @@ pub fn load_chat_session_draft_units_before_message_cutoff(
     let rows: Vec<ProjectUnitRow> = project_units::table
         .filter(project_units::project_id.eq(project_id))
         .filter(project_units::chat_session_id.eq(session_id))
-        .filter(project_units::is_draft.eq(true))
         .filter(project_units::id.eq_any(ids))
         .select(ProjectUnitRow::as_select())
         .load(conn)?;
@@ -544,7 +541,7 @@ pub fn load_owned_releases_by_chat_session(
 }
 
 /// Latest revision per logical unit for each session (same “no newer revision exists” pattern as
-/// [`load_chat_session_draft_units_latest_revision`], without filtering on `is_draft`).
+/// [`load_chat_session_unit_tips_for_merge`]).
 pub fn load_owned_unit_tips_for_chat_sessions(
     conn: &mut PooledConn,
     project_id: Uuid,

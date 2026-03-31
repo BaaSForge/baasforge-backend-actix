@@ -1,7 +1,6 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
 use crate::models::chat_messages::{
-    strip_latest_revision_from_stored_json, ChatMessagePayload, ChatMessageResponse, ChatMessageRow,
-    ChatMessageStatus, ChatMessageType,
+    ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
 use crate::models::projects::ProjectUnitResponse;
 use schemars::JsonSchema;
@@ -149,7 +148,6 @@ pub async fn handler(
         error,
     };
     let payload_value = serde_json::to_value(&full_payload)
-        .map(strip_latest_revision_from_stored_json)
         .map_err(|e| -> BoxError { format!("serialize units: {}", e).into() })?;
     let updated_row = block_on_db_tokio(&pool, move |conn| {
         diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))

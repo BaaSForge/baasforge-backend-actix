@@ -148,7 +148,6 @@ diesel::table! {
         project_id -> Uuid,
         code -> Nullable<Text>,
         explanation -> Nullable<Text>,
-        is_draft -> Bool,
         chat_session_id -> Uuid,
         unit_type -> ProjectUnitType,
         is_deleted -> Bool,

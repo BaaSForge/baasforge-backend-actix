@@ -51,7 +51,7 @@ pub use remove_unit::ToolRemoveUnitPayload;
 use crate::database::{DbPool, block_on_db_tokio};
 use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
-    strip_latest_revision_from_stored_json, ChatAgentType, ChatMessagePayload, ChatMessageStatus,
+    ChatAgentType, ChatMessagePayload, ChatMessageStatus,
     ChatMessageType, ChatSessionRoleType, TextPayload,
 };
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
@@ -336,7 +336,7 @@ pub async fn set_tool_message_failed(
                     serde_json::Value::String(error_for_db.clone()),
                 );
             }
-            strip_latest_revision_from_stored_json(v)
+            v
         });
 
         if let Some(p) = merged_payload {

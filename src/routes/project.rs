@@ -5,11 +5,13 @@ use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
     PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse, ProjectResponse,
     ProjectRuntimeInsert, ProjectRuntimeResponse, ProjectReleaseWithBaseline,
-    ProjectRuntimeWithLiveReleaseApi, ProjectRuntimeWithLiveReleaseResponse, ProjectUnitRow,
+    ProjectRuntimeWithLiveReleaseApi, ProjectRuntimeWithLiveReleaseResponse,
 };
 use crate::services::releases::{
-    attach_base_production_releases, project_release_id_for_revision_lane, ProjectReleaseRevisionLookup,
+    attach_base_production_releases, attach_is_draft_flags_from_latest_production,
+    project_release_id_for_revision_lane, ProjectReleaseRevisionLookup,
 };
+use crate::services::chat_worker::db::load_units_from_latest_production_metadata;
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
@@ -18,7 +20,6 @@ use crate::schema::project_releases;
 use crate::schema::project_runtimes;
 use crate::schema::project_units;
 use crate::schema::projects;
-use crate::services::chat_worker::db::project_units_with_latest_revision;
 use crate::services::payment::{
     PaidFeature, most_complete_needed_package, user_missing_paid_features,
 };
@@ -508,14 +509,18 @@ pub async fn handle_list_project_non_draft_units(
     let user_id = access_payload.user_id;
 
     let units = match database::block_on_db(&context.pool, move |conn| {
-        let rows = project_units::table
-            .inner_join(projects::table.on(project_units::project_id.eq(projects::id)))
+        let project_owned = projects::table
+            .filter(projects::id.eq(project_id))
             .filter(projects::owner_user_id.eq(user_id))
-            .filter(project_units::project_id.eq(project_id))
-            .filter(project_units::is_draft.eq(false))
-            .select(ProjectUnitRow::as_select())
-            .load::<ProjectUnitRow>(conn)?;
-        project_units_with_latest_revision(conn, project_id, rows)
+            .select(projects::id)
+            .first::<Uuid>(conn)
+            .optional()?
+            .is_some();
+        if !project_owned {
+            return Ok::<_, diesel::result::Error>(vec![]);
+        }
+        let rows = load_units_from_latest_production_metadata(conn, project_id)?;
+        attach_is_draft_flags_from_latest_production(conn, project_id, rows)
     })
     .await
     {
@@ -906,6 +911,7 @@ pub async fn handle_list_project_release_units(
 
         let units =
             crate::services::chat_worker::db::load_project_units_by_keys(conn, project_id, &keys)?;
+        let units = attach_is_draft_flags_from_latest_production(conn, project_id, units)?;
         Ok(Some(units))
     })
     .await

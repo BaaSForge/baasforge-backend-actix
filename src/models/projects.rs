@@ -86,7 +86,6 @@ pub struct ProjectUnitInsert {
     pub revision: i32,
     pub code: Option<String>,
     pub explanation: Option<String>,
-    pub is_draft: bool,
     pub unit_type: ProjectUnitType,
     pub is_deleted: bool,
     pub context_slug: String,
@@ -134,7 +133,6 @@ pub struct ProjectUnitRow {
     pub revision: i32,
     pub code: Option<String>,
     pub explanation: Option<String>,
-    pub is_draft: bool,
     pub unit_type: ProjectUnitType,
     pub is_deleted: bool,
     pub context_slug: String,
@@ -148,6 +146,8 @@ struct ProjectUnitResponseDe {
     row: ProjectUnitRow,
     #[serde(default)]
     latest_revision: Option<i32>,
+    #[serde(default)]
+    is_draft: Option<bool>,
 }
 
 impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
@@ -156,6 +156,7 @@ impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
         Self {
             row: d.row,
             latest_revision,
+            is_draft: d.is_draft,
         }
     }
 }
@@ -169,19 +170,28 @@ impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
 /// `POST .../unit-latest-revisions-by-ids` returns only the max `revision` per unit path without loading full rows.
 /// `POST .../unit-pre-chat-base-by-paths` returns the row at `MIN(revision) - 1` per path (state before the first in-session revision).
 ///
-/// JSON is a single flat object (`row` fields + `latest_revision`). Use [`Deref`] to access row
+/// JSON is a single flat object (`row` fields + `latest_revision`, optional `is_draft`). Use [`Deref`] to access row
 /// fields as `unit.revision`, `unit.context_slug`, etc.
+///
+/// `is_draft` is only set on project **units** HTTP responses: `true` when this unit’s ref is not in
+/// the latest production release metadata. Chat/tool payloads omit it (treated as in-session work).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(from = "ProjectUnitResponseDe")]
 pub struct ProjectUnitResponse {
     #[serde(flatten)]
     pub row: ProjectUnitRow,
     pub latest_revision: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_draft: Option<bool>,
 }
 
 impl ProjectUnitResponse {
     pub fn from_row(row: ProjectUnitRow, latest_revision: i32) -> Self {
-        Self { row, latest_revision }
+        Self {
+            row,
+            latest_revision,
+            is_draft: None,
+        }
     }
 }
 

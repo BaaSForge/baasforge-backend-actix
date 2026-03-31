@@ -32,8 +32,7 @@ use crate::schema::project_releases;
 use crate::schema::project_runtimes;
 use crate::schema::projects;
 use crate::services::chat_worker::db::{
-    load_chat_session_draft_units_as_of_release_controller_message,
-    load_chat_session_draft_units_latest_revision, load_latest_revisions_by_unit_paths,
+    load_chat_session_draft_units_as_of_release_controller_message, load_latest_revisions_by_unit_paths,
     load_owned_unit_tips_for_chat_sessions,
     load_owned_releases_by_chat_session, load_pre_chat_base_units_by_unit_paths,
     load_unit_tips_by_ids_for_chat_session, load_units_by_ids_for_chat_session,
@@ -43,8 +42,9 @@ use crate::services::releases::{
     attach_base_production_releases, chat_session_is_read_only_for_releases,
     chat_session_read_only_from_baseline, enrich_chat_message_response_releases,
     enrich_owned_releases_by_session_map, insert_production_release_from_stage_row,
-    live_release_id_from_production_runtime, prod_live_release_source_chat_session,
-    production_release_id_for_live_runtimes, CHAT_SESSION_READ_ONLY_MESSAGE,
+    live_release_id_from_production_runtime, load_chat_session_units_merged_with_latest_production,
+    prod_live_release_source_chat_session, production_release_id_for_live_runtimes,
+    CHAT_SESSION_READ_ONLY_MESSAGE,
 };
 use crate::services::stage_release_from_controller::{
     transaction_create_stage_release_from_controller, StageReleaseFromControllerError,
@@ -671,7 +671,7 @@ pub async fn handle_list_chat_session_draft_units(
         if session_exists.is_none() {
             return Err(diesel::result::Error::NotFound);
         }
-        load_chat_session_draft_units_latest_revision(conn, project_id, session_id)
+        load_chat_session_units_merged_with_latest_production(conn, project_id, session_id)
     })
     .await
     {

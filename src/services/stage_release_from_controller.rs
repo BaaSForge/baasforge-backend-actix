@@ -15,8 +15,9 @@ use crate::schema::projects;
 use crate::services::chat_worker::db::load_chat_session_draft_units_before_message_cutoff;
 use crate::services::releases::{
     chat_session_is_read_only_for_releases, combined_units_from_release_metadata, compute_new_units,
-    load_baseline_production_release_for_chat_session, merge_combined_units,
-    project_unit_refs_from_responses, revision_for_chat_release_controller, ReleaseUnitsMetadata,
+    load_baseline_production_release_for_chat_session, load_latest_production_release_for_project,
+    merge_combined_units, project_unit_refs_from_responses, revision_for_chat_release_controller,
+    ReleaseUnitsMetadata,
 };
 use diesel::prelude::*;
 use uuid::Uuid;
@@ -124,17 +125,18 @@ pub fn transaction_create_stage_release_from_controller(
             (Some(id), Some(_)) => Some(*id),
             _ => None,
         };
-        let previous_combined = match prev_release
-            .as_ref()
-            .and_then(|r| r.units_metadata.as_ref())
-        {
-            Some(m) => match combined_units_from_release_metadata(conn, project_id, Some(m)) {
-                Ok(u) => u,
-                Err(e) => {
-                    return Ok(Err(StageReleaseFromControllerError::Metadata(e.to_string())));
+        // Merge against the **current** live production snapshot (not the session baseline).
+        let previous_combined = match load_latest_production_release_for_project(conn, project_id)? {
+            Some(r) if r.units_metadata.is_some() => {
+                match combined_units_from_release_metadata(conn, project_id, r.units_metadata.as_ref())
+                {
+                    Ok(u) => u,
+                    Err(e) => {
+                        return Ok(Err(StageReleaseFromControllerError::Metadata(e.to_string())));
+                    }
                 }
-            },
-            None => Vec::new(),
+            }
+            _ => Vec::new(),
         };
 
         let session_tips = load_chat_session_draft_units_before_message_cutoff(

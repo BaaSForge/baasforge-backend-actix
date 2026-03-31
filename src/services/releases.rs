@@ -17,6 +17,8 @@ use diesel::sql_types::Integer;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+pub use crate::services::chat_worker::db::load_latest_production_release_for_project;
+
 /// Two `int4` keys for [`pg_advisory_xact_lock`](https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS).
 /// Stage and production lanes for the same project must not share a lock (they have independent revision sequences).
 fn project_release_lane_advisory_lock_keys(project_id: Uuid, is_stage: bool) -> (i32, i32) {
@@ -431,38 +433,58 @@ pub fn enrich_chat_message_response_releases(
     Ok(msg)
 }
 
-/// Resolve the baseline production release: prod runtimes’ `live_release_id` points at a
-/// **production** row (`is_stage = false`), or fall back to the latest prod release by `created_at`.
-pub fn load_latest_production_release_for_project(
+/// `(chat_session_id, unit_id)` refs present in the latest production release combined snapshot.
+pub fn released_unit_refs_set_from_latest_production(
     conn: &mut PooledConn,
     project_id: Uuid,
-) -> Result<Option<ProjectReleaseResponse>, diesel::result::Error> {
-    let ids: Vec<Option<Uuid>> = project_runtimes::table
-        .filter(project_runtimes::project_id.eq(project_id))
-        .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Prod))
-        .select(project_runtimes::live_release_id)
-        .load(conn)?;
+) -> Result<HashSet<(Uuid, String)>, diesel::result::Error> {
+    Ok(
+        load_latest_production_release_for_project(conn, project_id)?
+            .and_then(|r| r.units_metadata)
+            .map(|m| {
+                m.combined_unit_refs
+                    .into_iter()
+                    .map(|r| (r.chat_session_id, r.unit_id))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
 
-    for id in ids.into_iter().flatten() {
-        let r = project_releases::table
-            .filter(project_releases::id.eq(id))
-            .filter(project_releases::project_id.eq(project_id))
-            .filter(project_releases::is_stage.eq(false))
-            .select(ProjectReleaseResponse::as_select())
-            .first(conn)
-            .optional()?;
-        if r.is_some() {
-            return Ok(r);
-        }
+/// Sets [`ProjectUnitResponse::is_draft`] per unit: `false` if the ref appears in the latest
+/// production combined metadata, otherwise `true`.
+pub fn attach_is_draft_flags_from_latest_production(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    mut units: Vec<ProjectUnitResponse>,
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    let released = released_unit_refs_set_from_latest_production(conn, project_id)?;
+    for u in units.iter_mut() {
+        u.is_draft = Some(!released.contains(&(u.chat_session_id, u.id.clone())));
     }
+    Ok(units)
+}
 
-    project_releases::table
-        .filter(project_releases::project_id.eq(project_id))
-        .filter(project_releases::is_stage.eq(false))
-        .order(project_releases::created_at.desc())
-        .select(ProjectReleaseResponse::as_select())
-        .first(conn)
-        .optional()
+/// Chat “current units” list: latest production combined snapshot merged with this session’s unit tips
+/// (same merge rules as stage release metadata).
+pub fn load_chat_session_units_merged_with_latest_production(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    let previous_combined = {
+        let prod = load_latest_production_release_for_project(conn, project_id)?;
+        match prod.as_ref().and_then(|r| r.units_metadata.as_ref()) {
+            Some(m) => combined_units_from_release_metadata(conn, project_id, Some(m))?,
+            None => Vec::new(),
+        }
+    };
+    let session_tips = crate::services::chat_worker::db::load_chat_session_unit_tips_for_merge(
+        conn,
+        project_id,
+        session_id,
+    )?;
+    Ok(merge_combined_units(&previous_combined, &session_tips))
 }
 
 /// 1-based index of this message among `ReleaseControllerBox` rows in the session (order: `created_at`, `id`).

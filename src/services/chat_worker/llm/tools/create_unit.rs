@@ -1,8 +1,7 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
 use crate::libs::unit_slug::{compose_unit_id, is_valid_slug};
 use crate::models::chat_messages::{
-    strip_latest_revision_from_stored_json, ChatMessagePayload, ChatMessageResponse, ChatMessageRow,
-    ChatMessageStatus, ChatMessageType,
+    ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
 use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType};
 use crate::routes::ws::events::{
@@ -156,7 +155,7 @@ pub const TOOL_NAME: &str = "create_unit";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Create a new draft unit for this project. Provide context_slug, module_slug, and unit_name_slug (English lowercase and hyphens only). The row `id` is those parts and unit kind, dot-separated, with the revision as the last segment: the digit `1` for a new unit (not `v1` or `rev1`). The `code` argument must be JavaScript. Inserts a new row with is_draft true.",
+        description: "Create a new unit row for this project (in-session work until released). Provide context_slug, module_slug, and unit_name_slug (English lowercase and hyphens only). The row `id` is those parts and unit kind, dot-separated, with the revision as the last segment: the digit `1` for a new unit (not `v1` or `rev1`). The `code` argument must be JavaScript.",
         parameters: params_schema(),
     }
 }
@@ -249,7 +248,6 @@ pub async fn handler(
         code: Some(args.code.clone()),
         explanation: Some(args.explanation.clone()),
         unit_type: args.unit_type.clone(),
-        is_draft: true,
         is_deleted: false,
         context_slug: args.context_slug.clone(),
         module_slug: args.module_slug.clone(),
@@ -324,7 +322,6 @@ pub async fn handler(
         tool_name,
     };
     let payload_value = serde_json::to_value(&full_payload)
-        .map(strip_latest_revision_from_stored_json)
         .map_err(|e| -> BoxError { format!("serialize create_unit result: {}", e).into() })?;
     let updated_row = block_on_db_tokio(&pool, move |conn| {
         diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))

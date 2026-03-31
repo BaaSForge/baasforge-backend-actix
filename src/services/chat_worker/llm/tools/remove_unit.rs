@@ -1,8 +1,7 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
 use crate::libs::unit_slug::{compose_unit_id, validate_full_unit_id_for_tool};
 use crate::models::chat_messages::{
-    strip_latest_revision_from_stored_json, ChatMessagePayload, ChatMessageResponse, ChatMessageRow,
-    ChatMessageStatus, ChatMessageType,
+    ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
 use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow};
 use crate::routes::ws::events::{
@@ -175,7 +174,6 @@ pub async fn handler(
             code: Some(String::new()),
             explanation: parent.explanation.clone(),
             unit_type: parent.unit_type,
-            is_draft: true,
             is_deleted: true,
             context_slug: parent.context_slug.clone(),
             module_slug: parent.module_slug.clone(),
@@ -211,7 +209,6 @@ pub async fn handler(
         tool_name,
     };
     let payload_value = serde_json::to_value(&full_payload)
-        .map(strip_latest_revision_from_stored_json)
         .map_err(|e| -> BoxError { format!("serialize remove_unit result: {}", e).into() })?;
     let updated_row = block_on_db_tokio(&pool, move |conn| {
         diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
