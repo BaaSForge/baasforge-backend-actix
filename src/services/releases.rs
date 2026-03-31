@@ -1,4 +1,8 @@
 //! Stage and production release creation: metadata shape and merge helpers.
+//!
+//! Production releases are created by promoting an existing stage row: [`insert_production_release_from_stage_row`]
+//! copies `units_metadata` (and session linkage) from that row. Unit diffs and merges run only when
+//! the stage release is created—not again at production time.
 use crate::database::PooledConn;
 use crate::models::chat_messages::ChatMessageType;
 use crate::models::projects::{
@@ -339,4 +343,47 @@ pub fn revision_for_chat_release_controller(
 
     let ordinal = release_controller_ordinal_in_session(conn, session_id, message_id)?;
     Ok(compose_chat_release_revision(major, ordinal))
+}
+
+/// `true` when the stage row is scoped to `session_id` (`project_releases.chat_session_id`).
+#[must_use]
+pub fn stage_release_belongs_to_chat_session(
+    stage: &ProjectReleaseResponse,
+    session_id: Uuid,
+) -> bool {
+    stage.chat_session_id == Some(session_id)
+}
+
+/// Inserts a **production** `project_releases` row by copying persisted content from a **stage** row.
+///
+/// Callers must load `stage` from the database (`is_stage == true`, matching project/session) and
+/// pass the same `stage_release_id` the client sent. This function assigns a new production
+/// [`revision_for_chat_release_controller`] (production lane); it does **not** recompute
+/// [`ReleaseUnitsMetadata`]—that was fixed when the stage release was created.
+///
+/// **Invariant:** `stage` must belong to `session_id` (see [`stage_release_belongs_to_chat_session`]);
+/// the HTTP handler loads the row with `chat_session_id = session_id`.
+pub fn insert_production_release_from_stage_row(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    message_id: Uuid,
+    stage: &ProjectReleaseResponse,
+) -> Result<ProjectReleaseResponse, diesel::result::Error> {
+    debug_assert!(
+        stage_release_belongs_to_chat_session(stage, session_id),
+        "production promotion requires a stage row scoped to this chat session"
+    );
+    let revision = revision_for_chat_release_controller(conn, project_id, session_id, message_id, false)?;
+    diesel::insert_into(project_releases::table)
+        .values((
+            project_releases::project_id.eq(project_id),
+            project_releases::revision.eq(revision),
+            project_releases::units_metadata.eq(stage.units_metadata.clone()),
+            project_releases::notes.eq(None::<String>),
+            project_releases::chat_session_id.eq(stage.chat_session_id),
+            project_releases::is_stage.eq(false),
+        ))
+        .returning(ProjectReleaseResponse::as_select())
+        .get_result(conn)
 }

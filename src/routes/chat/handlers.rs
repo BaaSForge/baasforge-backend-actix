@@ -39,7 +39,7 @@ use crate::services::chat_worker::db::{
 };
 use crate::services::releases::{
     chat_session_is_read_only_for_releases, chat_session_read_only_from_baseline,
-    live_release_id_from_production_runtime, revision_for_chat_release_controller,
+    insert_production_release_from_stage_row, live_release_id_from_production_runtime,
     prod_live_release_source_chat_session, production_release_id_for_live_runtimes,
     CHAT_SESSION_READ_ONLY_MESSAGE,
 };
@@ -1135,6 +1135,14 @@ pub struct CreateStageReleaseBody {
     pub stage_project_runtime_id: Uuid,
 }
 
+/// Body for POST `.../production-release`. `stage_release_id` must identify a **stage** row with
+/// `project_releases.chat_session_id` equal to the `{session_id}` in the URL (same id as on the
+/// release controller message after staging).
+#[derive(Debug, Deserialize)]
+pub struct CreateProductionReleaseBody {
+    pub stage_release_id: Uuid,
+}
+
 enum ProdReleaseOutcome {
     Success(ProjectReleaseResponse, ChatMessageRow, Option<Uuid>),
     SessionNotFound,
@@ -1144,6 +1152,8 @@ enum ProdReleaseOutcome {
     ReleaseControllerPayloadMissing,
     ReleaseControllerPayloadInvalid,
     NoStageRelease,
+    StageReleaseIdMismatch,
+    StageReleaseNotFoundForSession,
     ProdRuntimeNotFound,
     Metadata(String),
 }
@@ -1340,12 +1350,14 @@ pub async fn handle_create_stage_release(
     }
 }
 
-/// POST — create a production release from the stage release referenced on the controller; sets
-/// `live_release_id` on the project production runtime(s), updates the box + WS.
+/// POST — promote a stage release to production: request body carries `stage_release_id`; the server
+/// loads that stage row and inserts a production `project_releases` row with the same
+/// `units_metadata` (no draft/merge recomputation—those ran when the stage release was created).
 pub async fn handle_create_production_release(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<(Uuid, Uuid, Uuid)>,
+    body: web::Json<CreateProductionReleaseBody>,
 ) -> HttpResponse {
     let extensions = req.extensions();
     let access_payload = extensions
@@ -1354,6 +1366,7 @@ pub async fn handle_create_production_release(
 
     let (project_id, session_id, message_id) = path.into_inner();
     let user_id = access_payload.user_id;
+    let stage_release_id = body.stage_release_id;
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
         conn.transaction(|conn| {
@@ -1410,30 +1423,40 @@ pub async fn handle_create_production_release(
                 }
             };
 
-            let Some(stage) = box_payload.stage_release.clone() else {
+            let Some(stage_on_controller) = box_payload.stage_release.as_ref() else {
                 return Ok(ProdReleaseOutcome::NoStageRelease);
+            };
+            if stage_on_controller.id != stage_release_id {
+                return Ok(ProdReleaseOutcome::StageReleaseIdMismatch);
+            }
+            if let Some(cid) = stage_on_controller.chat_session_id {
+                if cid != session_id {
+                    return Ok(ProdReleaseOutcome::StageReleaseNotFoundForSession);
+                }
+            }
+
+            // Stage must be a row for this project, this session, and stage lane (not another chat).
+            let Some(stage) = project_releases::table
+                .filter(project_releases::id.eq(stage_release_id))
+                .filter(project_releases::project_id.eq(project_id))
+                .filter(project_releases::chat_session_id.eq(Some(session_id)))
+                .filter(project_releases::is_stage.eq(true))
+                .select(ProjectReleaseResponse::as_select())
+                .first(conn)
+                .optional()?
+            else {
+                return Ok(ProdReleaseOutcome::StageReleaseNotFoundForSession);
             };
 
             let previous_prod_release_id = production_release_id_for_live_runtimes(conn, project_id)?;
 
-            let revision = revision_for_chat_release_controller(
+            let inserted = insert_production_release_from_stage_row(
                 conn,
                 project_id,
                 session_id,
                 message_id,
-                false,
+                &stage,
             )?;
-            let inserted: ProjectReleaseResponse = diesel::insert_into(project_releases::table)
-                .values((
-                    project_releases::project_id.eq(project_id),
-                    project_releases::revision.eq(revision),
-                    project_releases::units_metadata.eq(stage.units_metadata.clone()),
-                    project_releases::notes.eq(None::<String>),
-                    project_releases::chat_session_id.eq(stage.chat_session_id),
-                    project_releases::is_stage.eq(false),
-                ))
-                .returning(ProjectReleaseResponse::as_select())
-                .get_result(conn)?;
 
             let n = diesel::update(
                 project_runtimes::table
@@ -1543,6 +1566,16 @@ pub async fn handle_create_production_release(
             "No stage release on this controller; create a stage release first",
             json!({}),
         )),
+        ProdReleaseOutcome::StageReleaseIdMismatch => HttpResponse::BadRequest().json(api_error(
+            "stage_release_id does not match the stage release on this release controller message",
+            json!({}),
+        )),
+        ProdReleaseOutcome::StageReleaseNotFoundForSession => HttpResponse::BadRequest().json(
+            api_error(
+                "No stage release with this id for this chat session: the stage row must belong to the session in the URL (create stage from this session first)",
+                json!({}),
+            ),
+        ),
         ProdReleaseOutcome::ProdRuntimeNotFound => HttpResponse::BadRequest().json(api_error(
             "No production runtime exists for this project",
             json!({}),
