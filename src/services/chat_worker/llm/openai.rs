@@ -69,7 +69,7 @@ fn to_openai_functions_for_agent(
     let names = tools::tool_names_for_llm_session(agent);
     tools::all_tool_specs()
         .into_iter()
-        .filter(|t| names.iter().any(|&n| n == t.name))
+        .filter(|t| names.contains(&t.name))
         .map(|t| openai::chat::ChatCompletionFunctionDefinition {
             name: t.name.to_string(),
             description: Some(t.description.to_string()),
@@ -256,14 +256,13 @@ async fn stream_openai_tools(
         "tools": tools_json,
         "tool_choice": "auto"
     });
-    if let Some(effort) = reasoning_effort.map(str::trim).filter(|s| !s.is_empty()) {
-        if let Some(obj) = body.as_object_mut() {
+    if let Some(effort) = reasoning_effort.map(str::trim).filter(|s| !s.is_empty())
+        && let Some(obj) = body.as_object_mut() {
             obj.insert(
                 "reasoning_effort".to_string(),
                 Value::String(effort.to_string()),
             );
         }
-    }
     let url = format!("{}chat/completions", credentials.base_url());
     let response = reqwest::Client::new()
         .post(&url)
@@ -396,8 +395,8 @@ pub async fn call_gpt_stream(
         }
         if let Some(c) = chunk.content.as_ref().filter(|s| !s.is_empty()) {
             full_text.push_str(c);
-            if !is_tool_response {
-                if let Some(ref conn) = redis_conn {
+            if !is_tool_response
+                && let Some(ref conn) = redis_conn {
                     let mut guard = conn.lock().await;
                     if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
                         return Ok(GenerateOutcome::Stopped(TextPayload {
@@ -422,7 +421,6 @@ pub async fn call_gpt_stream(
                     .await;
                     chunk_index += 1;
                 }
-            }
         }
         if let Some(ref tcs) = chunk.tool_calls {
             for (idx, id, name, args) in tcs {

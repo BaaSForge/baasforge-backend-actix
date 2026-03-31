@@ -194,8 +194,8 @@ fn prefix_fallback_before_each_message(
                 let _ = tool_result_from_payload(&msg_type, payload, &mut fallback);
             }
             (ChatSessionRoleType::Ai, ChatMessageType::Text) => {
-                if let Some(tp) = parse_text_payload(payload) {
-                    if let Some(ref calls) = tp.requested_tool_calls {
+                if let Some(tp) = parse_text_payload(payload)
+                    && let Some(ref calls) = tp.requested_tool_calls {
                         for tc in calls {
                             let _ = tc.tool_call_id.clone().unwrap_or_else(|| {
                                 let id = format!("tool_{}", fallback);
@@ -204,7 +204,6 @@ fn prefix_fallback_before_each_message(
                             });
                         }
                     }
-                }
             }
             _ => {}
         }
@@ -215,9 +214,7 @@ fn prefix_fallback_before_each_message(
 fn resolved_tool_call_ids_for_text_payload(tp: &TextPayload, fb_before: usize) -> (Vec<String>, usize) {
     let mut fb = fb_before;
     let calls = tp
-        .requested_tool_calls
-        .as_ref()
-        .map(|c| c.as_slice())
+        .requested_tool_calls.as_deref()
         .unwrap_or(&[]);
     let mut ids = Vec::with_capacity(calls.len());
     for tc in calls {

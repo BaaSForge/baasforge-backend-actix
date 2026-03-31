@@ -274,15 +274,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         && matches!(
                             outcome,
                             GenerateOutcome::Completed(p)
-                                if !p
+                                if p
                                     .requested_tool_calls
-                                    .as_ref()
-                                    .is_some_and(|c| !c.is_empty())
+                                    .as_ref().is_none_or(|c| c.is_empty())
                         )
                     {
                         let next_count =
                             payload.sub_agent_stuck_continuation_count.saturating_add(1);
-                        match serde_json::to_value(&ChatMessagePayload::Text(TextPayload {
+                        match serde_json::to_value(ChatMessagePayload::Text(TextPayload {
                             text: SUB_AGENT_STUCK_NUDGE.to_string(),
                             requested_tool_calls: None,
                             thinking_blocks: None,
@@ -550,8 +549,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
                 }
             });
-            let role = payload.role.clone();
-            let type_ = payload.type_.clone();
+            let role = payload.role;
+            let type_ = payload.type_;
             let insert_message_id = response_message_id;
             let invoking_message_id_insert = payload.invoking_message_id;
             let agent_insert = payload.agent.clone();
@@ -603,7 +602,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
 
             spawn_tool_message_handler(
-                payload.type_.clone(),
+                payload.type_,
                 ToolMessageContext {
                     pool: pool.clone(),
                     redis_conn: redis_conn.clone(),
@@ -611,7 +610,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     session_id,
                     message_id: response_message_id,
                     user_id,
-                    message_type: payload.type_.clone(),
+                    message_type: payload.type_,
                     payload: chat_payload,
                     invoking_message_id: payload.invoking_message_id,
                     rabbit_publisher: Some(rabbit_publisher.clone()),

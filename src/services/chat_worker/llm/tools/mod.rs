@@ -190,7 +190,7 @@ fn tool_queue_registry_for_agent(
     tool_queue_registry()
         .iter()
         .filter(|(name, _, _)| names.contains(name))
-        .map(|(name, msg_type, fn_ptr)| (*name, msg_type.clone(), *fn_ptr))
+        .map(|(name, msg_type, fn_ptr)| (*name, *msg_type, *fn_ptr))
         .collect()
 }
 
@@ -220,7 +220,7 @@ pub fn tool_context_for_chat_session(
     for (name, message_type, payload_from_args) in tool_queue_registry_for_agent(&agent)
     {
         let publisher = publisher.clone();
-        let message_type = message_type.clone();
+        let message_type = message_type;
         let agent = agent.clone();
         // Own the name per callback so `payload_from_args` always receives this tool’s name (same as the map key).
         let registered_tool_name = (*name).to_string();
@@ -231,7 +231,7 @@ pub fn tool_context_for_chat_session(
                 let user_id = user_id;
                 let project_id = project_id;
                 let session_id = session_id;
-                let message_type = message_type.clone();
+                let message_type = message_type;
                 let payload_from_args = payload_from_args;
                 let agent = agent.clone();
                 let registered_tool_name = registered_tool_name.clone();
@@ -699,10 +699,10 @@ pub async fn maybe_complete_invoking_message(
             }
         };
 
-    if publish_queue_continuation {
-        if let Some(publisher) = rabbit_publisher {
+    if publish_queue_continuation
+        && let Some(publisher) = rabbit_publisher {
         let response_message_id = new_uuid();
-        let continuation_payload = serde_json::to_value(&ChatMessagePayload::Text(TextPayload {
+        let continuation_payload = serde_json::to_value(ChatMessagePayload::Text(TextPayload {
             text: String::new(),
             ..Default::default()
         }))
@@ -743,7 +743,6 @@ pub async fn maybe_complete_invoking_message(
             );
         }
         }
-    }
 }
 
 /// Spawns the appropriate tool handler for the given message type. Does nothing if the type

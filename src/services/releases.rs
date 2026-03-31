@@ -356,9 +356,7 @@ pub fn enrich_owned_releases_by_session_map(
 ) -> Result<HashMap<Uuid, Vec<ProjectReleaseWithBaseline>>, diesel::result::Error> {
     let flat: Vec<ProjectReleaseResponse> = map.values().flatten().cloned().collect();
     if flat.is_empty() {
-        return Ok(map
-            .into_iter()
-            .map(|(k, _)| (k, Vec::new()))
+        return Ok(map.into_keys().map(|k| (k, Vec::new()))
             .collect());
     }
     let enriched = attach_base_production_releases(conn, project_id, flat)?;
@@ -373,7 +371,7 @@ pub fn enrich_owned_releases_by_session_map(
                     by_id
                         .get(&r.id)
                         .cloned()
-                        .unwrap_or_else(|| ProjectReleaseWithBaseline {
+                        .unwrap_or(ProjectReleaseWithBaseline {
                             release: r,
                             base_production_release: None,
                         })

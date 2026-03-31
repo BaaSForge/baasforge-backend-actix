@@ -1019,21 +1019,18 @@ fn filter_sort_paginate_release_units(
     };
 
     units.retain(|u| {
-        if let Some(ref ts) = type_set {
-            if !ts.contains(&u.unit_type) {
+        if let Some(ref ts) = type_set
+            && !ts.contains(&u.unit_type) {
                 return false;
             }
-        }
-        if let Some(ref cs) = ctx_set {
-            if !cs.contains(u.context_slug.as_str()) {
+        if let Some(ref cs) = ctx_set
+            && !cs.contains(u.context_slug.as_str()) {
                 return false;
             }
-        }
-        if let Some(ref ps) = pair_set {
-            if !ps.contains(&(u.context_slug.clone(), u.module_slug.clone())) {
+        if let Some(ref ps) = pair_set
+            && !ps.contains(&(u.context_slug.clone(), u.module_slug.clone())) {
                 return false;
             }
-        }
         true
     });
 

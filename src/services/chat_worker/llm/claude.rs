@@ -178,8 +178,8 @@ fn build_request_body(
         "messages": messages_value,
         "tools": tools_json,
     });
-    if let Some(budget) = thinking_budget_tokens {
-        if let Some(obj) = body.as_object_mut() {
+    if let Some(budget) = thinking_budget_tokens
+        && let Some(obj) = body.as_object_mut() {
             obj.insert(
                 "thinking".to_string(),
                 serde_json::json!({
@@ -188,7 +188,6 @@ fn build_request_body(
                 }),
             );
         }
-    }
     body
 }
 
@@ -199,7 +198,7 @@ fn to_tools_json(agent: &ChatAgentType) -> Vec<Value> {
     let names = tools::tool_names_for_llm_session(agent);
     tools::all_tool_specs()
         .into_iter()
-        .filter(|t| names.iter().any(|&n| n == t.name))
+        .filter(|t| names.contains(&t.name))
         .map(|t| {
             serde_json::json!({
                 "name": t.name,

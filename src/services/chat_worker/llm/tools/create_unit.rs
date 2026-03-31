@@ -232,7 +232,7 @@ pub async fn handler(
         revision: INITIAL_REVISION,
         code: Some(args.code.clone()),
         explanation: Some(args.explanation.clone()),
-        unit_type: args.unit_type.clone(),
+        unit_type: args.unit_type,
         is_deleted: false,
         context_slug: args.context_slug.clone(),
         module_slug: args.module_slug.clone(),
@@ -249,7 +249,7 @@ pub async fn handler(
             &args.unit_name_slug,
         );
         let pid = project_id;
-        let sid = session_id;
+        let _sid = session_id;
         let ctx = args.context_slug.clone();
         let mod_slug = args.module_slug.clone();
         let ut = args.unit_type;

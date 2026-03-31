@@ -388,7 +388,7 @@ pub async fn handle_create_chat_session_message(
     let user_insert = ChatMessageInsert {
         chat_session_id: session_id,
         role: ChatSessionRoleType::User,
-        type_: body.type_.clone(),
+        type_: body.type_,
         payload: body.payload.clone(),
         status: ChatMessageStatus::Completed,
         agent: None, // user message; agent is only set for AI role
@@ -452,7 +452,7 @@ pub async fn handle_create_chat_session_message(
     let queue_message = ChatSessionQueueMessage {
         user_id,
         role: ChatSessionRoleType::Ai,
-        type_: message.type_.clone(),
+        type_: message.type_,
         payload: queue_payload,
         response_message_id,
         retry_num: 0,
@@ -1444,11 +1444,10 @@ pub async fn handle_create_production_release(
             if stage_release_id != stage_on_controller.release.id {
                 return Ok(ProdReleaseOutcome::StageReleaseIdMismatch);
             }
-            if let Some(cid) = stage_on_controller.release.chat_session_id {
-                if cid != session_id {
+            if let Some(cid) = stage_on_controller.release.chat_session_id
+                && cid != session_id {
                     return Ok(ProdReleaseOutcome::StageReleaseNotFoundForSession);
                 }
-            }
 
             // Stage must be a row for this project, this session, and stage lane (not another chat).
             let Some(stage) = project_releases::table

@@ -79,7 +79,7 @@ pub fn load_nested_branch_history(
     let tool_ok = chat_messages::table
         .filter(chat_messages::id.eq(anchor))
         .filter(chat_messages::chat_session_id.eq(session_id))
-        .filter(chat_messages::type_.eq(expected_anchor_type.clone()))
+        .filter(chat_messages::type_.eq(expected_anchor_type))
         .select(chat_messages::id)
         .first::<Uuid>(conn)
         .optional()?

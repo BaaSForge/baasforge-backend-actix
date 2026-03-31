@@ -383,25 +383,22 @@ pub fn load_chat_session_draft_units_before_message_cutoff(
         };
         match parsed {
             ChatMessagePayload::ToolCreateUnit(p) => {
-                if p.error.is_none() {
-                    if let Some(u) = p.created_unit {
+                if p.error.is_none()
+                    && let Some(u) = p.created_unit {
                         tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
                     }
-                }
             }
             ChatMessagePayload::ToolModifyUnit(p) => {
-                if p.error.is_none() {
-                    if let Some(u) = p.revised_unit {
+                if p.error.is_none()
+                    && let Some(u) = p.revised_unit {
                         tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
                     }
-                }
             }
             ChatMessagePayload::ToolRemoveUnit(p) => {
-                if p.error.is_none() {
-                    if let Some(u) = p.removed_unit {
+                if p.error.is_none()
+                    && let Some(u) = p.removed_unit {
                         tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
                     }
-                }
             }
             _ => {}
         }
@@ -535,11 +532,10 @@ pub fn load_owned_releases_by_chat_session(
         .collect();
 
     for r in rows {
-        if let Some(sid) = r.chat_session_id {
-            if let Some(vec) = map.get_mut(&sid) {
+        if let Some(sid) = r.chat_session_id
+            && let Some(vec) = map.get_mut(&sid) {
                 vec.push(r);
             }
-        }
     }
     Ok(map)
 }

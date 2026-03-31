@@ -100,7 +100,7 @@ fn to_gemini_declarations_for_agent(
     let names = super::tools::tool_names_for_llm_session(agent);
     gemini_declaration_fns_by_name()
         .iter()
-        .filter(|(name, _)| names.iter().any(|&n| n == *name))
+        .filter(|(name, _)| names.contains(name))
         .map(|(_, f)| f())
         .collect()
 }
