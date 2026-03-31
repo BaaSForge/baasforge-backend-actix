@@ -268,13 +268,17 @@ pub async fn call_gemini_stream(
                         if tc.name.is_empty() {
                             continue;
                         }
-                        let Some(sig) = &tc.thought_signature else {
-                            continue;
-                        };
-                        let model_content = Content::function_call_with_thought(
-                            FunctionCall::new(tc.name.clone(), tc.arguments.clone()),
-                            sig.clone(),
-                        );
+                        let fc = FunctionCall::new(tc.name.clone(), tc.arguments.clone());
+                        let model_content =
+                            match tc
+                                .thought_signature
+                                .as_ref()
+                                .map(|s| s.trim())
+                                .filter(|s| !s.is_empty())
+                            {
+                                Some(sig) => Content::function_call_with_thought(fc, sig.to_string()),
+                                None => Content::function_call(fc),
+                            };
                         request = request.with_message(Message {
                             content: model_content,
                             role: Role::Model,
@@ -289,8 +293,12 @@ pub async fn call_gemini_stream(
                 content,
                 ..
             } => {
+                let response_value = match serde_json::from_str::<Value>(&content) {
+                    Ok(v) => v,
+                    Err(_) => serde_json::json!({ "text": content }),
+                };
                 request = request
-                    .with_function_response_str(tool_name, content.clone())
+                    .with_function_response(tool_name.clone(), response_value)
                     .map_err(|e| format!("Gemini history function response: {}", e))?;
             }
         }
@@ -480,9 +488,13 @@ pub async fn call_gemini_stream(
 
         for (req, (name, args, _thought_sig)) in requested.iter().zip(all_function_calls.iter()) {
             tracing::info!(tool = %name, args = ?args, "Gemini: executing tool");
-            tools::execute_tool_async(name, args.clone(), req.tool_call_id.clone())
-                .await
-                .map_err(|e| format!("Tool execution failed: {}", e))?;
+            if let Err(e) = tools::execute_tool_async(name, args.clone(), req.tool_call_id.clone()).await {
+                tracing::warn!(
+                    tool = %name,
+                    "Tool arg validation failed (Failed row persisted); continuing remaining tool calls: {}",
+                    e
+                );
+            }
         }
         Some(requested)
     };

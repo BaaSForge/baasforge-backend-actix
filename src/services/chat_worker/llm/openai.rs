@@ -516,7 +516,13 @@ pub async fn call_gpt_stream(
             } else {
                 Some(id.clone())
             };
-            tools::execute_tool_async(name, args, tool_call_id).await?;
+            if let Err(e) = tools::execute_tool_async(name, args, tool_call_id).await {
+                tracing::warn!(
+                    tool = %name,
+                    "Tool arg validation failed (Failed row persisted); continuing remaining tool calls: {}",
+                    e
+                );
+            }
         }
         Some(requested)
     } else {

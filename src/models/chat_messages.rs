@@ -331,15 +331,21 @@ pub struct ChatMessageRow {
 
 impl From<ChatMessageRow> for ChatMessageResponse {
     fn from(row: ChatMessageRow) -> Self {
-        let payload = ChatMessagePayload::from_value(&row.type_, row.payload)
+        let payload = ChatMessagePayload::from_value(&row.type_, row.payload.clone())
             .ok()
             .flatten();
+        let payload_raw = if payload.is_none() {
+            row.payload.clone()
+        } else {
+            None
+        };
         ChatMessageResponse {
             id: row.id,
             chat_session_id: row.chat_session_id,
             role: row.role,
             type_: row.type_,
             payload,
+            payload_raw,
             status: row.status,
             created_at: row.created_at,
             invoking_message_id: row.invoking_message_id,
@@ -356,6 +362,10 @@ pub struct ChatMessageResponse {
     #[serde(rename = "type")]
     pub type_: ChatMessageType,
     pub payload: Option<ChatMessagePayload>,
+    /// When `payload` is `None` but the row still has JSON (e.g. tool-call args rejected before the
+    /// queue, or any payload that does not match the typed union), this is the DB value as-is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_raw: Option<Value>,
     pub status: ChatMessageStatus,
     pub created_at: DateTime<Utc>,
     /// Same semantics as [`ChatMessageRow::invoking_message_id`].

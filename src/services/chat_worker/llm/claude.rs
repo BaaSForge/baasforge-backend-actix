@@ -673,13 +673,19 @@ pub async fn call_claude_stream(
             }
             for r in &requested {
                 tracing::info!(tool = %r.tool_name, args = ?r.tool_arguments_to_pass, "Claude: executing tool");
-                tools::execute_tool_async(
+                if let Err(e) = tools::execute_tool_async(
                     &r.tool_name,
                     r.tool_arguments_to_pass.clone(),
                     r.tool_call_id.clone(),
                 )
                 .await
-                .map_err(|e| format!("Tool execution failed: {}", e))?;
+                {
+                    tracing::warn!(
+                        tool = %r.tool_name,
+                        "Tool arg validation failed (Failed row persisted); continuing remaining tool calls: {}",
+                        e
+                    );
+                }
             }
             Some(requested)
         }

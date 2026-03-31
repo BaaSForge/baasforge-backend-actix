@@ -11,7 +11,7 @@
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload, ThinkingBlock,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 
 /// [`ChatMessageType`] values that must never be sent to LLM APIs (UI/session metadata only).
@@ -87,6 +87,30 @@ fn parse_text_payload(payload: &Option<Value>) -> Option<TextPayload> {
         .and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
+/// If the tool row JSON has a top-level `error` string (including pre-queue failure shapes stored in
+/// the DB `payload` column), wrap the tool result in a small JSON object with `tool_error` plus
+/// `details`. **Must stay valid JSON** — Gemini replays use `serde_json::from_str` on tool responses.
+fn emphasize_tool_error_for_upstream(payload: &Option<Value>, content: String) -> String {
+    let Some(err) = payload.as_ref().and_then(|v| {
+        v.get("error")
+            .and_then(|e| e.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    }) else {
+        return content;
+    };
+    let details = match serde_json::from_str::<Value>(&content) {
+        Ok(v) => v,
+        Err(_) => Value::String(content.clone()),
+    };
+    serde_json::to_string(&json!({
+        "tool_error": err,
+        "details": details,
+    }))
+    .unwrap_or(content)
+}
+
 /// Extract tool_call_id, tool_name, and result content from a tool-result payload.
 fn tool_result_from_payload(
     type_: &ChatMessageType,
@@ -160,14 +184,30 @@ fn tool_result_from_payload(
             p.tool_name.clone(),
             serde_json::to_string(p).unwrap_or_default(),
         ),
-        _ => (
-            None,
-            None,
-            payload
+        _ => {
+            let (loose_id, loose_name) = if is_tool_result_type(type_) {
+                payload
+                    .as_ref()
+                    .map(|v| {
+                        (
+                            v.get("tool_call_id")
+                                .and_then(|x| x.as_str())
+                                .map(String::from),
+                            v.get("tool_name")
+                                .and_then(|x| x.as_str())
+                                .map(String::from),
+                        )
+                    })
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
+            };
+            let content = payload
                 .as_ref()
                 .map(|p| serde_json::to_string(p).unwrap_or_default())
-                .unwrap_or_default(),
-        ),
+                .unwrap_or_default();
+            (loose_id, loose_name, content)
+        }
     };
     let tool_use_id = tool_use_id_opt.unwrap_or_else(|| {
         let id = format!("tool_{}", *fallback_id);
@@ -175,6 +215,7 @@ fn tool_result_from_payload(
         id
     });
     let tool_name = tool_name_opt.unwrap_or_default();
+    let content = emphasize_tool_error_for_upstream(payload, content);
     (tool_use_id, tool_name, content)
 }
 

@@ -6,7 +6,7 @@
 //! - **`MESSAGE_TYPE: ChatMessageType`** — Message type for queue/DB messages produced by this tool.
 //! - **`spec() -> ToolSpec`** — Name, description, and JSON schema for parameters (for LLM declarations).
 //! - **`handler(...)`** — Async fn that processes a consumed queue message (same signature for all tools: DB pool, Redis, ids, typed [`ChatMessagePayload`], optional Rabbit publisher).
-//! - **`payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError>`** — Builds queue payload from LLM args (used by [`tool_context_for_chat_session`]). Use only for JSON shape / coercion; **business validation** (invalid ids, empty required fields, etc.) belongs in **`handler`**, which should complete the message with `status` **Completed** and `error` set on the payload—never `return Err` from `payload_from_args` for that, or the whole turn fails before the tool row is queued.
+//! - **`payload_from_args(args: Value) -> Result<ChatMessagePayload, BoxError>`** — Builds queue payload from LLM args (used by [`tool_context_for_chat_session`]). Use only for JSON shape / coercion; **business validation** (invalid ids, empty required fields, etc.) belongs in **`handler`**, which should complete the message with `status` **Completed** and `error` set on the payload—never `return Err` from `payload_from_args` for that, or the whole turn fails before the tool row is queued. **Serde / schema validation** `Err` from `payload_from_args` is persisted as a **Failed** tool row (with `error`, `raw_arguments`, `tool_call_id`, `tool_name`) so the next LLM turn can see it in history.
 //! - **`gemini_declaration() -> FunctionDeclaration`** — Gemini declaration with parameter schema (used in `llm/gemini.rs`).
 //! - **Parameter descriptions** — For each argument field, define a `pub const ARG_<NAME>_DESCRIPTION: &str` and use it in both `#[schemars(description = ARG_<NAME>_DESCRIPTION)]` on the args struct and in `params_schema()` (OpenAI/Claude) so Gemini and other providers stay aligned.
 //!
@@ -51,11 +51,13 @@ pub use remove_unit::ToolRemoveUnitPayload;
 use crate::database::{DbPool, block_on_db_tokio};
 use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessagePayload, ChatMessageStatus,
+    ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageStatus,
     ChatMessageType, ChatSessionRoleType, TextPayload,
 };
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
-use crate::routes::ws::events::{ChatSessionMessageStatusChangePayload, WsServerEvent};
+use crate::routes::ws::events::{
+    ChatSessionMessageCreatedPayload, ChatSessionMessageStatusChangePayload, WsServerEvent,
+};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
@@ -87,10 +89,18 @@ pub struct ToolSpec {
 }
 
 /// Context for tool execution (callbacks keyed by TOOL_NAME). Set once per request via [`with_tool_context`].
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ToolContext {
     /// Map from tool name (e.g. each module’s `TOOL_NAME`) to callback that publishes to the queue.
     pub callbacks: HashMap<String, OnToolCall>,
+}
+
+impl Default for ToolContext {
+    fn default() -> Self {
+        Self {
+            callbacks: HashMap::new(),
+        }
+    }
 }
 
 tokio::task_local! {
@@ -209,6 +219,8 @@ fn tool_queue_registry_for_agent(
 /// the sub-agent’s `Text` output is nested under the tool (see `ChatSessionQueueMessage` docs).
 /// `agent` is stored on the queue message so the worker can set it on the created message row.
 pub fn tool_context_for_chat_session(
+    pool: DbPool,
+    redis_conn: RedisConn,
     publisher: Arc<SharedRabbitPublisher>,
     user_id: Uuid,
     project_id: Uuid,
@@ -219,14 +231,17 @@ pub fn tool_context_for_chat_session(
     let mut callbacks = HashMap::new();
     for (name, message_type, payload_from_args) in tool_queue_registry_for_agent(&agent)
     {
+        let pool = pool.clone();
+        let redis_conn = redis_conn.clone();
         let publisher = publisher.clone();
-        let message_type = message_type;
         let agent = agent.clone();
         // Own the name per callback so `payload_from_args` always receives this tool’s name (same as the map key).
         let registered_tool_name = (*name).to_string();
         callbacks.insert(
             registered_tool_name.clone(),
             Arc::new(move |args: Value, tool_call_id: Option<String>| {
+                let pool = pool.clone();
+                let redis_conn = redis_conn.clone();
                 let publisher = publisher.clone();
                 let user_id = user_id;
                 let project_id = project_id;
@@ -237,8 +252,34 @@ pub fn tool_context_for_chat_session(
                 let registered_tool_name = registered_tool_name.clone();
                 Box::pin(async move {
                     let response_message_id = new_uuid();
-                    let payload = payload_from_args(args, tool_call_id, registered_tool_name.as_str())
-                        .map_err(|e| -> BoxError { e })?;
+                    let args_for_failure = args.clone();
+                    let tool_call_id_for_failure = tool_call_id.clone();
+                    let payload = match payload_from_args(
+                        args,
+                        tool_call_id.clone(),
+                        registered_tool_name.as_str(),
+                    ) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            persist_tool_args_parse_failure(
+                                &pool,
+                                &redis_conn,
+                                user_id,
+                                project_id,
+                                session_id,
+                                invoking_message_id,
+                                agent.clone(),
+                                message_type,
+                                response_message_id,
+                                registered_tool_name.as_str(),
+                                tool_call_id_for_failure,
+                                &args_for_failure,
+                                &e.to_string(),
+                            )
+                            .await;
+                            return Err(e);
+                        }
+                    };
                     let payload_json = serde_json::to_value(&payload)
                         .map_err(|e| -> BoxError { format!("queue tool payload json: {}", e).into() })?;
                     let message = ChatSessionQueueMessage {
@@ -263,6 +304,77 @@ pub fn tool_context_for_chat_session(
         );
     }
     ToolContext { callbacks }
+}
+
+/// Inserts a Failed tool row when `payload_from_args` rejects LLM arguments (nothing is published to
+/// the queue). The next LLM pass loads this row in session history so the model can correct inputs.
+#[allow(clippy::too_many_arguments)]
+async fn persist_tool_args_parse_failure(
+    pool: &DbPool,
+    redis_conn: &RedisConn,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
+    invoking_message_id: Uuid,
+    agent: ChatAgentType,
+    message_type: ChatMessageType,
+    message_id: Uuid,
+    tool_name: &str,
+    tool_call_id: Option<String>,
+    raw_arguments: &Value,
+    error: &str,
+) {
+    let payload = serde_json::json!({
+        "error": error,
+        "tool_name": tool_name,
+        "tool_call_id": tool_call_id,
+        "raw_arguments": raw_arguments,
+    });
+    let insert_message_id = message_id;
+    let session_id_ins = session_id;
+    let agent_ins = agent.clone();
+    let row = match block_on_db_tokio(pool, move |conn| {
+        diesel::insert_into(chat_messages::table)
+            .values((
+                chat_messages::id.eq(insert_message_id),
+                chat_messages::chat_session_id.eq(session_id_ins),
+                chat_messages::role.eq(ChatSessionRoleType::Ai),
+                chat_messages::type_.eq(message_type),
+                chat_messages::payload.eq(Some(payload.clone())),
+                chat_messages::status.eq(ChatMessageStatus::Failed),
+                chat_messages::invoking_message_id.eq(Some(invoking_message_id)),
+                chat_messages::agent.eq(Some(agent_ins)),
+            ))
+            .returning(crate::models::chat_messages::ChatMessageRow::as_returning())
+            .get_result(conn)
+    })
+    .await
+    {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!(
+                %message_id,
+                %tool_name,
+                "persist_tool_args_parse_failure: insert failed: {}",
+                e
+            );
+            return;
+        }
+    };
+    let channel = user_channel(user_id);
+    let created_message = ChatMessageResponse::from(row);
+    let event = WsServerEvent::ChatSessionMessageCreated(ChatSessionMessageCreatedPayload {
+        project_id,
+        session_id,
+        message: created_message,
+    });
+    let mut guard = redis_conn.lock().await;
+    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+        tracing::warn!(
+            "persist_tool_args_parse_failure: failed to publish ChatSessionMessageCreated: {}",
+            e
+        );
+    }
 }
 
 pub fn all_tool_specs() -> Vec<ToolSpec> {
@@ -319,35 +431,35 @@ pub async fn set_tool_message_failed(
 ) {
     let error_for_db = error.clone();
     if let Err(e) = block_on_db_tokio(pool, move |conn| {
-        let payload_opt: Option<serde_json::Value> = chat_messages::table
+        let row_opt = chat_messages::table
             .filter(chat_messages::id.eq(message_id))
             .select(chat_messages::payload)
-            .first(conn)
-            .optional()?
-            .flatten();
+            .first::<Option<serde_json::Value>>(conn)
+            .optional()?;
 
-        let merged_payload = payload_opt.map(|mut v| {
-            if let serde_json::Value::Object(map) = &mut v {
-                map.insert(
-                    "error".to_string(),
-                    serde_json::Value::String(error_for_db.clone()),
-                );
+        let Some(maybe_payload) = row_opt else {
+            return Ok(());
+        };
+
+        let new_payload = match maybe_payload {
+            Some(mut v) if v.is_object() => {
+                if let Value::Object(ref mut map) = v {
+                    map.insert(
+                        "error".to_string(),
+                        Value::String(error_for_db.clone()),
+                    );
+                }
+                v
             }
-            v
-        });
+            Some(_) | None => serde_json::json!({ "error": error_for_db }),
+        };
 
-        if let Some(p) = merged_payload {
-            diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
-                .set((
-                    chat_messages::status.eq(ChatMessageStatus::Failed),
-                    chat_messages::payload.eq(Some(p)),
-                ))
-                .execute(conn)?;
-        } else {
-            diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
-                .set(chat_messages::status.eq(ChatMessageStatus::Failed))
-                .execute(conn)?;
-        }
+        diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+            .set((
+                chat_messages::status.eq(ChatMessageStatus::Failed),
+                chat_messages::payload.eq(Some(new_payload)),
+            ))
+            .execute(conn)?;
         Ok::<_, diesel::result::Error>(())
     })
     .await

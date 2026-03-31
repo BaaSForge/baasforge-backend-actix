@@ -60,7 +60,9 @@ pub fn subtree_message_ids(
     Ok(ids)
 }
 
-/// Loads **completed** history only under the nested branch rooted at the given tool message id.
+/// Loads history under the nested branch rooted at the given tool message id:
+/// **Completed**, **Failed**, **Generating**, and **Stopped** rows so assistant `tool_use` turns,
+/// tool validation failures, and user-stopped runs still pair with their tool results on replay.
 ///
 /// When `anchor_tool_message_id` is missing, the row is not the expected tool type, or it is not in
 /// `session_id`, returns an empty history.
@@ -115,7 +117,12 @@ pub fn load_nested_branch_history(
         chat_messages::table
             .filter(chat_messages::chat_session_id.eq(session_id))
             .filter(chat_messages::id.eq_any(ids))
-            .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
+            .filter(
+                chat_messages::status
+                    .eq(ChatMessageStatus::Completed)
+                    .or(chat_messages::status.eq(ChatMessageStatus::Failed))
+                    .or(chat_messages::status.eq(ChatMessageStatus::Stopped)),
+            )
             .order(chat_messages::id.asc())
             .select(ChatMessageRow::as_select())
             .load(conn)?

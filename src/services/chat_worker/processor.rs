@@ -6,7 +6,9 @@ use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent}
 use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::load_history_for_agent;
-use crate::services::chat_worker::llm::tools::{tool_context_for_chat_session, with_tool_context};
+use crate::services::chat_worker::llm::tools::{
+    maybe_complete_invoking_message, tool_context_for_chat_session, with_tool_context,
+};
 use crate::services::releases::chat_session_stale_base_release;
 use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient};
 use diesel::prelude::*;
@@ -60,6 +62,8 @@ pub async fn process_one(
     // message), whether the agent is Planner or a nested sub-agent — so nested tool calls chain
     // under the correct parent message.
     let tool_ctx = tool_context_for_chat_session(
+        pool.clone(),
+        redis_conn.clone(),
         rabbit_publisher.clone(),
         user_id,
         project_id,
@@ -162,6 +166,39 @@ pub async fn process_one(
                         })?;
                 }
                 info!(%project_id, %session_id, "Processed and saved AI response");
+
+                if has_tool_calls {
+                    let expected_tool_count = text_payload
+                        .requested_tool_calls
+                        .as_ref()
+                        .map_or(0, |c| c.len());
+                    let placeholder_id = placeholder_ai_message_id;
+                    let existing_child_count: i64 =
+                        block_on_db_tokio(pool, move |conn| {
+                            chat_messages::table
+                                .filter(
+                                    chat_messages::invoking_message_id
+                                        .eq(placeholder_id),
+                                )
+                                .count()
+                                .get_result(conn)
+                        })
+                        .await
+                        .unwrap_or(0);
+                    if existing_child_count >= expected_tool_count as i64 {
+                        maybe_complete_invoking_message(
+                            pool,
+                            redis_conn,
+                            Some(rabbit_publisher),
+                            placeholder_ai_message_id,
+                            user_id,
+                            project_id,
+                            session_id,
+                            true,
+                        )
+                        .await;
+                    }
+                }
             }
             Ok(GenerateOutcome::Completed(text_payload))
         }
