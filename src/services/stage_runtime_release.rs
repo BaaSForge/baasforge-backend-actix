@@ -1,4 +1,4 @@
-//! Shared DB logic for pointing a stage project runtime at a stage release revision, or clearing it.
+//! Shared DB logic for pointing a project runtime at a release revision, or clearing it.
 
 use crate::database::PooledConn;
 use crate::models::projects::{PlatformEnvironmentType, ProjectRuntimeResponse};
@@ -134,4 +134,113 @@ pub fn apply_stage_runtime_detach_live_release(
     .get_result::<ProjectRuntimeResponse>(conn)?;
 
     Ok(Ok((updated, previous_release_id)))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeDetachDenied {
+    NotFound,
+    NotConnected,
+}
+
+/// Clears `live_release_id` on any runtime regardless of environment.
+/// Returns the updated runtime, its environment, and the previously-live release id.
+pub fn apply_runtime_detach_live_release(
+    conn: &mut PooledConn,
+    user_id: Uuid,
+    project_id: Uuid,
+    runtime_id: Uuid,
+) -> Result<Result<(ProjectRuntimeResponse, Option<Uuid>), RuntimeDetachDenied>, diesel::result::Error> {
+    let rt: Option<ProjectRuntimeResponse> = project_runtimes::table
+        .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(user_id))
+        .filter(project_runtimes::project_id.eq(project_id))
+        .filter(project_runtimes::id.eq(runtime_id))
+        .select(ProjectRuntimeResponse::as_select())
+        .first(conn)
+        .optional()?;
+
+    let Some(rt) = rt else {
+        return Ok(Err(RuntimeDetachDenied::NotFound));
+    };
+
+    let previous_release_id = rt.live_release_id;
+
+    if previous_release_id.is_none() {
+        return Ok(Err(RuntimeDetachDenied::NotConnected));
+    }
+
+    let updated = diesel::update(
+        project_runtimes::table
+            .filter(project_runtimes::id.eq(runtime_id))
+            .filter(project_runtimes::project_id.eq(project_id)),
+    )
+    .set(project_runtimes::live_release_id.eq(None::<Uuid>))
+    .returning(ProjectRuntimeResponse::as_select())
+    .get_result::<ProjectRuntimeResponse>(conn)?;
+
+    Ok(Ok((updated, previous_release_id)))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeDeployDenied {
+    NotFound,
+    EnvironmentMismatch,
+    NoSuchRelease,
+    AmbiguousRevision,
+}
+
+/// Points a runtime at an existing release revision for the given environment.
+/// `is_stage_lane` controls which release lane is queried.
+pub fn apply_release_deploy_to_runtime(
+    conn: &mut PooledConn,
+    user_id: Uuid,
+    project_id: Uuid,
+    runtime_id: Uuid,
+    revision: f64,
+    chat_session_id: Uuid,
+    expected_env: PlatformEnvironmentType,
+) -> Result<Result<(ProjectRuntimeResponse, Uuid, Option<Uuid>), RuntimeDeployDenied>, diesel::result::Error> {
+    let rt: Option<ProjectRuntimeResponse> = project_runtimes::table
+        .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(user_id))
+        .filter(project_runtimes::project_id.eq(project_id))
+        .filter(project_runtimes::id.eq(runtime_id))
+        .filter(project_runtimes::environment.eq(expected_env.clone()))
+        .select(ProjectRuntimeResponse::as_select())
+        .first(conn)
+        .optional()?;
+
+    let Some(rt) = rt else {
+        return Ok(Err(RuntimeDeployDenied::NotFound));
+    };
+
+    let is_stage_lane = expected_env == PlatformEnvironmentType::Stage;
+    let deployed_release_id = match project_release_id_for_revision_lane(
+        conn,
+        project_id,
+        revision,
+        is_stage_lane,
+        chat_session_id,
+    )? {
+        ProjectReleaseRevisionLookup::One(id) => id,
+        ProjectReleaseRevisionLookup::NoRow => {
+            return Ok(Err(RuntimeDeployDenied::NoSuchRelease));
+        }
+        ProjectReleaseRevisionLookup::Ambiguous => {
+            return Ok(Err(RuntimeDeployDenied::AmbiguousRevision));
+        }
+    };
+
+    let previous_release_id = rt.live_release_id;
+
+    let updated = diesel::update(
+        project_runtimes::table
+            .filter(project_runtimes::id.eq(runtime_id))
+            .filter(project_runtimes::project_id.eq(project_id)),
+    )
+    .set(project_runtimes::live_release_id.eq(Some(deployed_release_id)))
+    .returning(ProjectRuntimeResponse::as_select())
+    .get_result::<ProjectRuntimeResponse>(conn)?;
+
+    Ok(Ok((updated, deployed_release_id, previous_release_id)))
 }

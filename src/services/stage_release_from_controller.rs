@@ -1,6 +1,6 @@
 //! Create a stage `project_releases` row from a release-controller message and point a stage runtime at it.
 //! Shared by [`crate::routes::chat::handlers::handle_create_stage_release`] and
-//! [`crate::routes::project::handle_detach_stage_runtime_live_release`] (controller variant).
+//! [`crate::routes::project::handle_detach_runtime_live_release`] (controller variant).
 
 use crate::database::PooledConn;
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageRow, ChatMessageType};

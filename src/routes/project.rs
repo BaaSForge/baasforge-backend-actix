@@ -29,8 +29,9 @@ use crate::services::payment::{
 };
 use crate::services::stage_release_from_controller::transaction_create_stage_release_from_controller;
 use crate::services::stage_runtime_release::{
-    StageRuntimeDeployDenied, StageRuntimeDetachDenied, apply_stage_release_deploy_to_runtime,
-    apply_stage_runtime_detach_live_release,
+    RuntimeDeployDenied, RuntimeDetachDenied, StageRuntimeDeployDenied,
+    apply_release_deploy_to_runtime, apply_runtime_detach_live_release,
+    apply_stage_release_deploy_to_runtime,
 };
 use crate::routes::chat::handlers::{
     broadcast_production_live_release_changed, broadcast_stage_release_create_effects,
@@ -58,7 +59,7 @@ pub struct DeployReleaseBody {
     pub chat_session_id: Uuid,
 }
 
-/// Body for [`handle_detach_stage_runtime_live_release`]: matches frontend union (revision | controller | detach-only).
+/// Body for [`handle_detach_runtime_live_release`]: matches frontend union (revision | controller | detach-only).
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum DetachLiveReleaseBody {
@@ -141,6 +142,78 @@ async fn notify_stage_runtime_release_nats(
             deployed_release_id = ?deployed_release_id,
             "NATS notify finished OK (message published; consumer should act)"
         );
+    }
+}
+
+fn resolve_runtime_environment(
+    conn: &mut database::PooledConn,
+    user_id: Uuid,
+    project_id: Uuid,
+    runtime_id: Uuid,
+) -> Result<Option<PlatformEnvironmentType>, diesel::result::Error> {
+    project_runtimes::table
+        .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(user_id))
+        .filter(project_runtimes::project_id.eq(project_id))
+        .filter(project_runtimes::id.eq(runtime_id))
+        .select(project_runtimes::environment)
+        .first::<PlatformEnvironmentType>(conn)
+        .optional()
+}
+
+fn env_display_label(env: &PlatformEnvironmentType) -> &'static str {
+    match env {
+        PlatformEnvironmentType::Stage => "Stage",
+        PlatformEnvironmentType::Prod => "Production",
+    }
+}
+
+/// Dispatches NATS notification based on the runtime's environment.
+async fn notify_runtime_release(
+    context: &web::Data<AppContext>,
+    env: &PlatformEnvironmentType,
+    project_id: Uuid,
+    runtime_id: Uuid,
+    deployed_release_id: Option<Uuid>,
+    previous_release_id: Option<Uuid>,
+    op_label: &'static str,
+) {
+    match env {
+        PlatformEnvironmentType::Stage => {
+            notify_stage_runtime_release_nats(
+                context,
+                project_id,
+                runtime_id,
+                deployed_release_id,
+                previous_release_id,
+                op_label,
+            )
+            .await;
+        }
+        PlatformEnvironmentType::Prod => {
+            if let Some(deployed_id) = deployed_release_id {
+                if let Some(ref nats) = context.runtime_nats_publisher {
+                    let subject = context.settings.runtime_nats_subject_release.as_str();
+                    if let Err(e) = nats
+                        .publish_prod_release(
+                            subject,
+                            project_id,
+                            deployed_id,
+                            previous_release_id,
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            op = op_label,
+                            "[{}] NATS prod publish failed: {}",
+                            op_label,
+                            e
+                        );
+                    }
+                }
+            }
+            broadcast_production_live_release_changed(context, project_id).await;
+        }
     }
 }
 
@@ -547,6 +620,11 @@ pub struct ListProjectRuntimesQuery {
     pub stage: Option<bool>,
 }
 
+#[derive(Deserialize)]
+pub struct ListProjectReleasesQuery {
+    pub environment: Option<PlatformEnvironmentType>,
+}
+
 pub async fn handle_list_project_runtimes(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -627,9 +705,9 @@ pub async fn handle_list_project_runtimes(
     ))
 }
 
-/// Detach live stage release and optionally rebind: by existing revision, by release-controller
-/// message (same as chat stage-release), or `{}` for detach-only.
-pub async fn handle_detach_stage_runtime_live_release(
+/// Detach live release and optionally rebind: by existing revision, by release-controller
+/// message (stage only), or `{}` for detach-only. Works for both stage and production runtimes.
+pub async fn handle_detach_runtime_live_release(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<(Uuid, Uuid)>,
@@ -649,184 +727,238 @@ pub async fn handle_detach_stage_runtime_live_release(
             revision,
             chat_session_id,
         } => {
-            let outcome = match database::block_on_db(&context.pool, move |conn| {
-                apply_stage_release_deploy_to_runtime(
-                    conn,
-                    user_id,
-                    project_id,
-                    runtime_id,
-                    revision,
-                    chat_session_id,
-                )
-            })
+            handle_detach_by_revision(
+                &context,
+                user_id,
+                project_id,
+                runtime_id,
+                revision,
+                chat_session_id,
+            )
             .await
-            {
-                Ok(o) => o,
-                Err(_) => {
-                    log::error!(
-                        "[handle_detach_stage_runtime_live_release] DB/block error (by revision)"
-                    );
-                    return HttpResponse::ServiceUnavailable()
-                        .json(api_error("Database temporarily unavailable", json!({})));
-                }
-            };
-
-            match outcome {
-                Ok((rt, nats_meta)) => {
-                    // `previous_release_id` is None on first stage deploy (nothing was live before).
-                    notify_stage_runtime_release_nats(
-                        &context,
-                        project_id,
-                        runtime_id,
-                        Some(nats_meta.deployed_release_id),
-                        nats_meta.previous_release_id,
-                        "handle_detach_stage_runtime_live_release",
-                    )
-                    .await;
-                    HttpResponse::Ok().json(api_success(
-                        "Stage release deployed on runtime",
-                        json!({ "runtime": rt }),
-                    ))
-                }
-                Err(StageRuntimeDeployDenied::NotFound) => HttpResponse::NotFound()
-                    .json(api_error("Project runtime not found", json!({}))),
-                Err(StageRuntimeDeployDenied::NotStage) => HttpResponse::BadRequest().json(
-                    api_error(
-                        "Only stage runtimes can receive a stage release deploy",
-                        json!({}),
-                    ),
-                ),
-                Err(StageRuntimeDeployDenied::NoSuchRelease) => HttpResponse::BadRequest().json(
-                    api_error(
-                        "No stage release with this revision exists for this project and chat session",
-                        json!({}),
-                    ),
-                ),
-                Err(StageRuntimeDeployDenied::AmbiguousRevision) => HttpResponse::BadRequest()
-                    .json(api_error(
-                        "Multiple stage release rows match this project, chat session, and revision",
-                        json!({}),
-                    )),
-            }
         }
         DetachLiveReleaseBody::ByController {
             chat_session_id,
             release_controller_message_id,
         } => {
-            let outcome = match database::block_on_db(&context.pool, move |conn| {
-                transaction_create_stage_release_from_controller(
-                    conn,
-                    user_id,
-                    project_id,
-                    chat_session_id,
-                    release_controller_message_id,
-                    runtime_id,
-                )
-            })
+            handle_detach_by_controller(
+                &context,
+                user_id,
+                project_id,
+                runtime_id,
+                chat_session_id,
+                release_controller_message_id,
+            )
             .await
-            {
-                Ok(o) => o,
-                Err(_) => {
-                    log::error!(
-                        "[handle_detach_stage_runtime_live_release] DB/block error (by controller)"
-                    );
-                    return HttpResponse::ServiceUnavailable()
-                        .json(api_error("Database temporarily unavailable", json!({})));
-                }
-            };
-
-            match outcome {
-                Ok((release, row, previous_stage_release_id)) => {
-                    let release_for_broadcast = release.clone();
-                    let release_with_base = match database::block_on_db(&context.pool, move |conn| {
-                        attach_base_production_releases(conn, project_id, vec![release])
-                    })
-                    .await
-                    {
-                        Ok(mut v) => v.pop().expect("one release"),
-                        Err(_) => {
-                            log::error!(
-                                "[handle_detach_stage_runtime_live_release] DB/block error (attach baseline)"
-                            );
-                            return HttpResponse::ServiceUnavailable()
-                                .json(api_error("Database temporarily unavailable", json!({})));
-                        }
-                    };
-                    broadcast_stage_release_create_effects(
-                        &context,
-                        project_id,
-                        chat_session_id,
-                        user_id,
-                        runtime_id,
-                        &release_for_broadcast,
-                        row,
-                        previous_stage_release_id,
-                    )
-                    .await;
-                    HttpResponse::Ok().json(api_success(
-                        "Stage release created successfully",
-                        json!({ "release": release_with_base }),
-                    ))
-                }
-                Err(e) => http_response_for_stage_release_from_controller_error(e),
-            }
         }
         DetachLiveReleaseBody::DetachOnly(_) => {
-            let outcome = match database::block_on_db(&context.pool, move |conn| {
-                apply_stage_runtime_detach_live_release(conn, user_id, project_id, runtime_id)
+            handle_detach_only(&context, user_id, project_id, runtime_id).await
+        }
+    }
+}
+
+async fn handle_detach_by_revision(
+    context: &web::Data<AppContext>,
+    user_id: Uuid,
+    project_id: Uuid,
+    runtime_id: Uuid,
+    revision: f64,
+    chat_session_id: Uuid,
+) -> HttpResponse {
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        let Some(env) = resolve_runtime_environment(conn, user_id, project_id, runtime_id)? else {
+            return Ok(None);
+        };
+        let result = apply_release_deploy_to_runtime(
+            conn,
+            user_id,
+            project_id,
+            runtime_id,
+            revision,
+            chat_session_id,
+            env.clone(),
+        )?;
+        Ok(Some((env, result)))
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(_) => {
+            log::error!("[handle_detach_runtime_live_release] DB/block error (by revision)");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    let Some((env, deploy_result)) = outcome else {
+        return HttpResponse::NotFound().json(api_error("Project runtime not found", json!({})));
+    };
+
+    let env_label = env_display_label(&env);
+    match deploy_result {
+        Ok((rt, deployed_release_id, previous_release_id)) => {
+            notify_runtime_release(
+                context,
+                &env,
+                project_id,
+                runtime_id,
+                Some(deployed_release_id),
+                previous_release_id,
+                "handle_detach_runtime_live_release",
+            )
+            .await;
+            HttpResponse::Ok().json(api_success(
+                &format!("{} release deployed on runtime", env_label),
+                json!({ "runtime": rt }),
+            ))
+        }
+        Err(RuntimeDeployDenied::NotFound) => {
+            HttpResponse::NotFound().json(api_error("Project runtime not found", json!({})))
+        }
+        Err(RuntimeDeployDenied::EnvironmentMismatch) => HttpResponse::BadRequest().json(
+            api_error("Runtime environment mismatch", json!({})),
+        ),
+        Err(RuntimeDeployDenied::NoSuchRelease) => HttpResponse::BadRequest().json(api_error(
+            &format!(
+                "No {} release with this revision exists for this project and chat session",
+                env_label.to_lowercase()
+            ),
+            json!({}),
+        )),
+        Err(RuntimeDeployDenied::AmbiguousRevision) => HttpResponse::BadRequest().json(
+            api_error(
+                &format!(
+                    "Multiple {} release rows match this project, chat session, and revision",
+                    env_label.to_lowercase()
+                ),
+                json!({}),
+            ),
+        ),
+    }
+}
+
+/// Release-controller flow is stage-only by design.
+async fn handle_detach_by_controller(
+    context: &web::Data<AppContext>,
+    user_id: Uuid,
+    project_id: Uuid,
+    runtime_id: Uuid,
+    chat_session_id: Uuid,
+    release_controller_message_id: Uuid,
+) -> HttpResponse {
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        transaction_create_stage_release_from_controller(
+            conn,
+            user_id,
+            project_id,
+            chat_session_id,
+            release_controller_message_id,
+            runtime_id,
+        )
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(_) => {
+            log::error!(
+                "[handle_detach_runtime_live_release] DB/block error (by controller)"
+            );
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    match outcome {
+        Ok((release, row, previous_stage_release_id)) => {
+            let release_for_broadcast = release.clone();
+            let release_with_base = match database::block_on_db(&context.pool, move |conn| {
+                attach_base_production_releases(conn, project_id, vec![release])
             })
             .await
             {
-                Ok(o) => o,
+                Ok(mut v) => v.pop().expect("one release"),
                 Err(_) => {
                     log::error!(
-                        "[handle_detach_stage_runtime_live_release] DB/block error (detach only)"
+                        "[handle_detach_runtime_live_release] DB/block error (attach baseline)"
                     );
                     return HttpResponse::ServiceUnavailable()
                         .json(api_error("Database temporarily unavailable", json!({})));
                 }
             };
-
-            match outcome {
-                Ok((rt, previous_release_id)) => {
-                    tracing::info!(
-                        target: "runtime_nats",
-                        path = "POST .../detach-live-release",
-                        body = "detach_only",
-                        project_id = %project_id,
-                        runtime_id = %runtime_id,
-                        "detach-only succeeded in DB; publishing NATS event (clear live release for runtime)"
-                    );
-                    notify_stage_runtime_release_nats(
-                        &context,
-                        project_id,
-                        runtime_id,
-                        None,
-                        previous_release_id,
-                        "handle_detach_stage_runtime_live_release",
-                    )
-                    .await;
-                    HttpResponse::Ok().json(api_success(
-                        "Stage runtime detached from live release revision",
-                        json!(rt),
-                    ))
-                }
-                Err(StageRuntimeDetachDenied::NotFound) => HttpResponse::NotFound()
-                    .json(api_error("Project runtime not found", json!({}))),
-                Err(StageRuntimeDetachDenied::NotStage) => HttpResponse::BadRequest().json(
-                    api_error(
-                        "Only stage runtimes can be detached from a live release revision",
-                        json!({}),
-                    ),
-                ),
-                Err(StageRuntimeDetachDenied::NotConnected) => HttpResponse::BadRequest().json(
-                    api_error(
-                        "Stage runtime is not connected to a live release revision",
-                        json!({}),
-                    ),
-                ),
-            }
+            broadcast_stage_release_create_effects(
+                &context,
+                project_id,
+                chat_session_id,
+                user_id,
+                runtime_id,
+                &release_for_broadcast,
+                row,
+                previous_stage_release_id,
+            )
+            .await;
+            HttpResponse::Ok().json(api_success(
+                "Stage release created successfully",
+                json!({ "release": release_with_base }),
+            ))
         }
+        Err(e) => http_response_for_stage_release_from_controller_error(e),
+    }
+}
+
+async fn handle_detach_only(
+    context: &web::Data<AppContext>,
+    user_id: Uuid,
+    project_id: Uuid,
+    runtime_id: Uuid,
+) -> HttpResponse {
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        apply_runtime_detach_live_release(conn, user_id, project_id, runtime_id)
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(_) => {
+            log::error!(
+                "[handle_detach_runtime_live_release] DB/block error (detach only)"
+            );
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    match outcome {
+        Ok((rt, previous_release_id)) => {
+            tracing::info!(
+                target: "runtime_nats",
+                path = "POST .../detach-live-release",
+                body = "detach_only",
+                project_id = %project_id,
+                runtime_id = %runtime_id,
+                env = ?rt.environment,
+                "detach-only succeeded in DB; publishing NATS event (clear live release for runtime)"
+            );
+            notify_runtime_release(
+                context,
+                &rt.environment,
+                project_id,
+                runtime_id,
+                None,
+                previous_release_id,
+                "handle_detach_runtime_live_release",
+            )
+            .await;
+            HttpResponse::Ok().json(api_success(
+                "Runtime detached from live release",
+                json!(rt),
+            ))
+        }
+        Err(RuntimeDetachDenied::NotFound) => {
+            HttpResponse::NotFound().json(api_error("Project runtime not found", json!({})))
+        }
+        Err(RuntimeDetachDenied::NotConnected) => HttpResponse::BadRequest().json(api_error(
+            "Runtime is not connected to a live release",
+            json!({}),
+        )),
     }
 }
 
@@ -834,6 +966,7 @@ pub async fn handle_list_project_releases(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<Uuid>,
+    query: web::Query<ListProjectReleasesQuery>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -843,12 +976,19 @@ pub async fn handle_list_project_releases(
 
     let project_id = path.into_inner();
     let user_id = access_payload.user_id;
+    let env_filter = query.environment.clone();
 
     let releases = match database::block_on_db(&context.pool, move |conn| {
-        let rows: Vec<ProjectReleaseResponse> = project_releases::table
+        let mut q = project_releases::table
             .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(project_releases::project_id.eq(project_id))
+            .into_boxed();
+        if let Some(env) = env_filter {
+            let is_stage = env == PlatformEnvironmentType::Stage;
+            q = q.filter(project_releases::is_stage.eq(is_stage));
+        }
+        let rows: Vec<ProjectReleaseResponse> = q
             .order(project_releases::revision.desc())
             .then_order_by(project_releases::created_at.desc())
             .select(ProjectReleaseResponse::as_select())

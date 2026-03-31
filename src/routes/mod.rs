@@ -274,7 +274,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                     .route(
                         "/projects/{id}/runtimes/{runtime_id}/detach-live-release",
                         web::post()
-                            .to(project::handle_detach_stage_runtime_live_release)
+                            .to(project::handle_detach_runtime_live_release)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
