@@ -2,7 +2,7 @@ use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
-use crate::models::projects::ProjectReleaseResponse;
+use crate::models::projects::ProjectReleaseWithBaseline;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,7 @@ pub struct ToolFetchLatestReleasesArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolFetchLatestReleasesPayload {
     pub args: ToolFetchLatestReleasesArgs,
-    pub releases: Vec<ProjectReleaseResponse>,
+    pub releases: Vec<ProjectReleaseWithBaseline>,
     /// LLM tool call id; used when building message history so tool results attach to the correct tool_use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -36,6 +36,7 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::db::load_latest_releases;
+use crate::services::releases::attach_base_production_releases;
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
 use serde_json::{Value, json};
@@ -125,7 +126,8 @@ pub async fn handler(
     let limit = args.limit;
 
     let releases = block_on_db_tokio(&pool, move |conn| {
-        load_latest_releases(conn, project_id, limit)
+        let rows = load_latest_releases(conn, project_id, limit)?;
+        attach_base_production_releases(conn, project_id, rows)
     })
     .await
     .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::models::projects::{ProjectReleaseResponse, ProjectUnitResponse};
+use crate::models::projects::{ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectUnitResponse};
 use crate::services::chat_worker::llm::tools::{
     ToolAnalyzeArchitecturePayload, ToolAnalyzeSolutionPayload, ToolCreateUnitPayload,
     ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
@@ -115,13 +115,13 @@ impl TextPayload {
     }
 }
 
-/// Release row shape for [`ReleaseControllerBoxPayload`] (API name: `ReleaseType`).
+/// Single release row (DB / tools); embedded controller payloads use [`ProjectReleaseWithBaseline`].
 pub type ReleaseType = ProjectReleaseResponse;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReleaseControllerBoxPayload {
-    pub stage_release: Option<ReleaseType>,
-    pub prod_release: Option<ReleaseType>,
+    pub stage_release: Option<ProjectReleaseWithBaseline>,
+    pub prod_release: Option<ProjectReleaseWithBaseline>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DbEnum, Serialize, Deserialize)]

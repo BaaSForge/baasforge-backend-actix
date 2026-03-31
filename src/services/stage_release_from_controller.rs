@@ -5,7 +5,7 @@
 use crate::database::PooledConn;
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageRow, ChatMessageType};
 use crate::models::projects::{
-    PlatformEnvironmentType, ProjectReleaseResponse, ProjectRuntimeResponse,
+    PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectRuntimeResponse,
 };
 use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
@@ -15,8 +15,8 @@ use crate::schema::projects;
 use crate::services::chat_worker::db::load_chat_session_draft_units_before_message_cutoff;
 use crate::services::releases::{
     chat_session_is_read_only_for_releases, combined_units_from_release_metadata, compute_new_units,
-    load_latest_production_release_for_project, merge_combined_units, revision_for_chat_release_controller,
-    project_unit_refs_from_responses, ReleaseUnitsMetadata,
+    load_baseline_production_release_for_chat_session, merge_combined_units,
+    project_unit_refs_from_responses, revision_for_chat_release_controller, ReleaseUnitsMetadata,
 };
 use diesel::prelude::*;
 use uuid::Uuid;
@@ -118,7 +118,12 @@ pub fn transaction_create_stage_release_from_controller(
 
         let previous_stage_release_id = stage_rt.live_release_id;
 
-        let prev_release = load_latest_production_release_for_project(conn, project_id)?;
+        let (session_base_prod_id, prev_release) =
+            load_baseline_production_release_for_chat_session(conn, project_id, session_id)?;
+        let base_for_row = match (&session_base_prod_id, &prev_release) {
+            (Some(id), Some(_)) => Some(*id),
+            _ => None,
+        };
         let previous_combined = match prev_release
             .as_ref()
             .and_then(|r| r.units_metadata.as_ref())
@@ -157,6 +162,7 @@ pub fn transaction_create_stage_release_from_controller(
                 project_releases::notes.eq(None::<String>),
                 project_releases::chat_session_id.eq(Some(session_id)),
                 project_releases::is_stage.eq(true),
+                project_releases::base_production_release_id.eq(base_for_row),
             ))
             .returning(ProjectReleaseResponse::as_select())
             .get_result(conn)?;
@@ -169,7 +175,10 @@ pub fn transaction_create_stage_release_from_controller(
         .set(project_runtimes::live_release_id.eq(Some(inserted.id)))
         .execute(conn)?;
 
-        box_payload.stage_release = Some(inserted.clone());
+        box_payload.stage_release = Some(ProjectReleaseWithBaseline {
+            release: inserted.clone(),
+            base_production_release: prev_release.clone(),
+        });
         let payload_json = match serde_json::to_value(&box_payload) {
             Ok(v) => v,
             Err(e) => return Ok(Err(StageReleaseFromControllerError::Metadata(e.to_string()))),

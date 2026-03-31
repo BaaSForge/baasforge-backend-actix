@@ -5,8 +5,10 @@ use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
     FrameworkType, LanguageType, PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse,
     ProjectResponse, ProjectRuntimeInsert, ProjectRuntimeResponse,
+    ProjectReleaseWithBaseline, ProjectRuntimeWithLiveReleaseApi,
     ProjectRuntimeWithLiveReleaseResponse, ProjectUnitRow,
 };
+use crate::services::releases::attach_base_production_releases;
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
@@ -33,6 +35,7 @@ use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use diesel::prelude::*;
 use diesel::result::Error;
 use serde::Deserialize;
+use std::collections::HashMap;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -569,8 +572,33 @@ pub async fn handle_list_project_runtimes(
         if let Some(env) = env_filter {
             q = q.filter(project_runtimes::environment.eq(env));
         }
-        q.select(ProjectRuntimeWithLiveReleaseResponse::as_select())
-            .load::<ProjectRuntimeWithLiveReleaseResponse>(conn)
+        let rows: Vec<ProjectRuntimeWithLiveReleaseResponse> = q
+            .select(ProjectRuntimeWithLiveReleaseResponse::as_select())
+            .load::<ProjectRuntimeWithLiveReleaseResponse>(conn)?;
+        let to_enrich: Vec<ProjectReleaseResponse> =
+            rows.iter().filter_map(|r| r.live_release.clone()).collect();
+        let by_id: HashMap<Uuid, ProjectReleaseWithBaseline> =
+            if to_enrich.is_empty() {
+                HashMap::new()
+            } else {
+                attach_base_production_releases(conn, project_id, to_enrich)?
+                    .into_iter()
+                    .map(|e| (e.release.id, e))
+                    .collect()
+            };
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                let live_release = r
+                    .live_release
+                    .as_ref()
+                    .and_then(|lr| by_id.get(&lr.id).cloned());
+                ProjectRuntimeWithLiveReleaseApi {
+                    runtime: r.runtime,
+                    live_release,
+                }
+            })
+            .collect::<Vec<_>>())
     })
     .await
     {
@@ -689,20 +717,35 @@ pub async fn handle_detach_stage_runtime_live_release(
 
             match outcome {
                 Ok((release, row, previous_stage_release_id)) => {
+                    let release_for_broadcast = release.clone();
+                    let release_with_base = match database::block_on_db(&context.pool, move |conn| {
+                        attach_base_production_releases(conn, project_id, vec![release])
+                    })
+                    .await
+                    {
+                        Ok(mut v) => v.pop().expect("one release"),
+                        Err(_) => {
+                            log::error!(
+                                "[handle_detach_stage_runtime_live_release] DB/block error (attach baseline)"
+                            );
+                            return HttpResponse::ServiceUnavailable()
+                                .json(api_error("Database temporarily unavailable", json!({})));
+                        }
+                    };
                     broadcast_stage_release_create_effects(
                         &context,
                         project_id,
                         chat_session_id,
                         user_id,
                         runtime_id,
-                        &release,
+                        &release_for_broadcast,
                         row,
                         previous_stage_release_id,
                     )
                     .await;
                     HttpResponse::Ok().json(api_success(
                         "Stage release created successfully",
-                        json!({ "release": release }),
+                        json!({ "release": release_with_base }),
                     ))
                 }
                 Err(e) => http_response_for_stage_release_from_controller_error(e),
@@ -782,13 +825,14 @@ pub async fn handle_list_project_releases(
     let user_id = access_payload.user_id;
 
     let releases = match database::block_on_db(&context.pool, move |conn| {
-        project_releases::table
+        let rows: Vec<ProjectReleaseResponse> = project_releases::table
             .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(project_releases::project_id.eq(project_id))
             .order(project_releases::created_at.desc())
             .select(ProjectReleaseResponse::as_select())
-            .load::<ProjectReleaseResponse>(conn)
+            .load::<ProjectReleaseResponse>(conn)?;
+        attach_base_production_releases(conn, project_id, rows)
     })
     .await
     {

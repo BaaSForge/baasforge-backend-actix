@@ -13,7 +13,9 @@ use crate::models::chat_sessions::{
     ChatSessionDetailResponse, ChatSessionInsert, ChatSessionResponse,
     ChatSessionWithLastMessageResponse,
 };
-use crate::models::projects::{PlatformEnvironmentType, ProjectReleaseResponse, ProjectUnitResponse};
+use crate::models::projects::{
+    PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectUnitResponse,
+};
 use crate::routes::AppContext;
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{
@@ -38,10 +40,11 @@ use crate::services::chat_worker::db::{
     DraftUnitsAsOfReleaseControllerError,
 };
 use crate::services::releases::{
-    chat_session_is_read_only_for_releases, chat_session_read_only_from_baseline,
-    insert_production_release_from_stage_row, live_release_id_from_production_runtime,
-    prod_live_release_source_chat_session, production_release_id_for_live_runtimes,
-    CHAT_SESSION_READ_ONLY_MESSAGE,
+    attach_base_production_releases, chat_session_is_read_only_for_releases,
+    chat_session_read_only_from_baseline, enrich_chat_message_response_releases,
+    enrich_owned_releases_by_session_map, insert_production_release_from_stage_row,
+    live_release_id_from_production_runtime, prod_live_release_source_chat_session,
+    production_release_id_for_live_runtimes, CHAT_SESSION_READ_ONLY_MESSAGE,
 };
 use crate::services::stage_release_from_controller::{
     transaction_create_stage_release_from_controller, StageReleaseFromControllerError,
@@ -113,6 +116,8 @@ pub async fn handle_list_project_chat_sessions(
 
         let owned_releases_by_session =
             load_owned_releases_by_chat_session(conn, project_id, &session_ids)?;
+        let owned_releases_by_session =
+            enrich_owned_releases_by_session_map(conn, project_id, owned_releases_by_session)?;
         let owned_units_by_session =
             load_owned_unit_tips_for_chat_sessions(conn, project_id, &session_ids)?;
 
@@ -261,10 +266,12 @@ pub async fn handle_list_chat_session_messages(
             .select(ChatMessageRow::as_select())
             .order(chat_messages::id.desc())
             .limit(limit)
-            .load::<ChatMessageRow>(conn)
-            .unwrap_or_default();
-        let messages: Vec<ChatMessageResponse> =
-            rows.into_iter().map(ChatMessageResponse::from).collect();
+            .load::<ChatMessageRow>(conn)?;
+        let messages: Vec<ChatMessageResponse> = rows
+            .into_iter()
+            .map(ChatMessageResponse::from)
+            .map(|m| enrich_chat_message_response_releases(conn, project_id, m))
+            .collect::<Result<Vec<_>, _>>()?;
 
         // UUID doesn't support min() in Diesel; get oldest by created_at
         let oldest_id: Option<Uuid> = chat_messages::table
@@ -1135,9 +1142,8 @@ pub struct CreateStageReleaseBody {
     pub stage_project_runtime_id: Uuid,
 }
 
-/// Body for POST `.../production-release`. `stage_release_id` must identify a **stage** row with
-/// `project_releases.chat_session_id` equal to the `{session_id}` in the URL (same id as on the
-/// release controller message after staging).
+/// Body for POST `.../production-release`. `stage_release_id` must match the stage release on the
+/// release controller message for `{message_id}`.
 #[derive(Debug, Deserialize)]
 pub struct CreateProductionReleaseBody {
     pub stage_release_id: Uuid,
@@ -1330,20 +1336,33 @@ pub async fn handle_create_stage_release(
 
     match outcome {
         Ok((release, row, previous_stage_release_id)) => {
+            let release_for_broadcast = release.clone();
+            let release_with_base = match database::block_on_db(&context.pool, move |conn| {
+                attach_base_production_releases(conn, project_id, vec![release])
+            })
+            .await
+            {
+                Ok(mut v) => v.pop().expect("one release"),
+                Err(_) => {
+                    tracing::error!("[handle_create_stage_release] DB/block error (attach baseline)");
+                    return HttpResponse::ServiceUnavailable()
+                        .json(api_error("Database temporarily unavailable", json!({})));
+                }
+            };
             broadcast_stage_release_create_effects(
                 &context,
                 project_id,
                 session_id,
                 user_id,
                 stage_runtime_id,
-                &release,
+                &release_for_broadcast,
                 row,
                 previous_stage_release_id,
             )
             .await;
             HttpResponse::Ok().json(api_success(
                 "Stage release created successfully",
-                json!({ "release": release }),
+                json!({ "release": release_with_base }),
             ))
         }
         Err(e) => http_response_for_stage_release_from_controller_error(e),
@@ -1426,10 +1445,10 @@ pub async fn handle_create_production_release(
             let Some(stage_on_controller) = box_payload.stage_release.as_ref() else {
                 return Ok(ProdReleaseOutcome::NoStageRelease);
             };
-            if stage_on_controller.id != stage_release_id {
+            if stage_release_id != stage_on_controller.release.id {
                 return Ok(ProdReleaseOutcome::StageReleaseIdMismatch);
             }
-            if let Some(cid) = stage_on_controller.chat_session_id {
+            if let Some(cid) = stage_on_controller.release.chat_session_id {
                 if cid != session_id {
                     return Ok(ProdReleaseOutcome::StageReleaseNotFoundForSession);
                 }
@@ -1469,7 +1488,20 @@ pub async fn handle_create_production_release(
                 return Ok(ProdReleaseOutcome::ProdRuntimeNotFound);
             }
 
-            box_payload.prod_release = Some(inserted.clone());
+            let base_prod: Option<ProjectReleaseResponse> =
+                match inserted.base_production_release_id {
+                    Some(bid) => project_releases::table
+                        .filter(project_releases::id.eq(bid))
+                        .filter(project_releases::project_id.eq(project_id))
+                        .select(ProjectReleaseResponse::as_select())
+                        .first(conn)
+                        .optional()?,
+                    None => None,
+                };
+            box_payload.prod_release = Some(ProjectReleaseWithBaseline {
+                release: inserted.clone(),
+                base_production_release: base_prod,
+            });
             let payload_json = match serde_json::to_value(&box_payload) {
                 Ok(v) => v,
                 Err(e) => return Ok(ProdReleaseOutcome::Metadata(e.to_string())),
@@ -1501,6 +1533,21 @@ pub async fn handle_create_production_release(
 
     match outcome {
         ProdReleaseOutcome::Success(release, row, previous_prod_release_id) => {
+            let release_for_attach = release.clone();
+            let release_for_response = match database::block_on_db(&context.pool, move |conn| {
+                attach_base_production_releases(conn, project_id, vec![release_for_attach])
+            })
+            .await
+            {
+                Ok(mut v) => v.pop().expect("one release"),
+                Err(_) => {
+                    tracing::error!(
+                        "[handle_create_production_release] DB/block error (attach baseline)"
+                    );
+                    return HttpResponse::ServiceUnavailable()
+                        .json(api_error("Database temporarily unavailable", json!({})));
+                }
+            };
             if let Some(ref redis_conn) = context.redis_conn {
                 let message: ChatMessageResponse = row.into();
                 let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
@@ -1538,7 +1585,7 @@ pub async fn handle_create_production_release(
             }
             HttpResponse::Ok().json(api_success(
                 "Production release created successfully",
-                json!({ "release": release }),
+                json!({ "release": release_for_response }),
             ))
         }
         ProdReleaseOutcome::SessionNotFound => HttpResponse::NotFound()

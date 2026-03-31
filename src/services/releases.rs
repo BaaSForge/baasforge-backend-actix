@@ -4,16 +4,17 @@
 //! copies `units_metadata` (and session linkage) from that row. Unit diffs and merges run only when
 //! the stage release is created—not again at production time.
 use crate::database::PooledConn;
-use crate::models::chat_messages::ChatMessageType;
+use crate::models::chat_messages::{ChatMessagePayload, ChatMessageResponse, ChatMessageType};
 use crate::models::projects::{
-    PlatformEnvironmentType, ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitType,
+    PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectUnitResponse,
+    ProjectUnitType,
 };
 use crate::schema::{chat_messages, chat_sessions, project_releases, project_runtimes};
 use crate::services::chat_worker::db::load_project_units_by_keys;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::Integer;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 /// Two `int4` keys for [`pg_advisory_xact_lock`](https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS).
@@ -250,6 +251,152 @@ pub fn production_release_id_for_live_runtimes(
     Ok(ids.into_iter().flatten().next())
 }
 
+/// Session baseline: `chat_sessions.live_production_release_id` and the loaded **production** row, if it still exists.
+/// All stage and production releases created in that session share this base for revision major and stage unit merges.
+///
+/// Returns `(None, None)` when the session has no baseline. If the session references an id that no longer exists,
+/// returns `(None, None)` for safe FK handling; revision major falls back as if there were no prior prod release.
+pub fn load_baseline_production_release_for_chat_session(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> Result<(Option<Uuid>, Option<ProjectReleaseResponse>), diesel::result::Error> {
+    let baseline_id: Option<Uuid> = chat_sessions::table
+        .filter(chat_sessions::id.eq(session_id))
+        .filter(chat_sessions::project_id.eq(project_id))
+        .select(chat_sessions::live_production_release_id)
+        .first::<Option<Uuid>>(conn)?;
+    let Some(id) = baseline_id else {
+        return Ok((None, None));
+    };
+    let row = project_releases::table
+        .filter(project_releases::id.eq(id))
+        .filter(project_releases::project_id.eq(project_id))
+        .filter(project_releases::is_stage.eq(false))
+        .select(ProjectReleaseResponse::as_select())
+        .first(conn)
+        .optional()?;
+    if row.is_none() {
+        return Ok((None, None));
+    }
+    Ok((Some(id), row))
+}
+
+/// Resolve `base_production_release` for each release (from `base_production_release_id`) for JSON APIs.
+pub fn attach_base_production_releases(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    releases: Vec<ProjectReleaseResponse>,
+) -> Result<Vec<ProjectReleaseWithBaseline>, diesel::result::Error> {
+    let ids: Vec<Uuid> = releases
+        .iter()
+        .filter_map(|r| r.base_production_release_id)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    if ids.is_empty() {
+        return Ok(releases
+            .into_iter()
+            .map(|release| ProjectReleaseWithBaseline {
+                release,
+                base_production_release: None,
+            })
+            .collect());
+    }
+    let base_rows: Vec<ProjectReleaseResponse> = project_releases::table
+        .filter(project_releases::project_id.eq(project_id))
+        .filter(project_releases::id.eq_any(&ids))
+        .select(ProjectReleaseResponse::as_select())
+        .load(conn)?;
+    let map: HashMap<Uuid, ProjectReleaseResponse> =
+        base_rows.into_iter().map(|r| (r.id, r)).collect();
+    Ok(releases
+        .into_iter()
+        .map(|release| {
+            let base = release
+                .base_production_release_id
+                .and_then(|id| map.get(&id).cloned());
+            ProjectReleaseWithBaseline {
+                release,
+                base_production_release: base,
+            }
+        })
+        .collect())
+}
+
+/// [`HashMap`] from [`attach_base_production_releases`] for [`crate::services::chat_worker::db::load_owned_releases_by_chat_session`].
+pub fn enrich_owned_releases_by_session_map(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    map: HashMap<Uuid, Vec<ProjectReleaseResponse>>,
+) -> Result<HashMap<Uuid, Vec<ProjectReleaseWithBaseline>>, diesel::result::Error> {
+    let flat: Vec<ProjectReleaseResponse> = map.values().flatten().cloned().collect();
+    if flat.is_empty() {
+        return Ok(map
+            .into_iter()
+            .map(|(k, _)| (k, Vec::new()))
+            .collect());
+    }
+    let enriched = attach_base_production_releases(conn, project_id, flat)?;
+    let by_id: HashMap<Uuid, ProjectReleaseWithBaseline> =
+        enriched.into_iter().map(|e| (e.release.id, e)).collect();
+    Ok(map
+        .into_iter()
+        .map(|(sid, vec)| {
+            let v = vec
+                .into_iter()
+                .map(|r| {
+                    by_id
+                        .get(&r.id)
+                        .cloned()
+                        .unwrap_or_else(|| ProjectReleaseWithBaseline {
+                            release: r,
+                            base_production_release: None,
+                        })
+                })
+                .collect();
+            (sid, v)
+        })
+        .collect())
+}
+
+/// Fills `base_production_release` on release-controller message payloads for clients.
+pub fn enrich_chat_message_response_releases(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    mut msg: ChatMessageResponse,
+) -> Result<ChatMessageResponse, diesel::result::Error> {
+    let Some(payload) = msg.payload.take() else {
+        return Ok(msg);
+    };
+    let payload = match payload {
+        ChatMessagePayload::ReleaseControllerBox(mut p) => {
+            let mut batch = Vec::new();
+            if let Some(ref s) = p.stage_release {
+                batch.push(s.release.clone());
+            }
+            if let Some(ref pr) = p.prod_release {
+                batch.push(pr.release.clone());
+            }
+            if !batch.is_empty() {
+                let enriched = attach_base_production_releases(conn, project_id, batch)?;
+                let by_id: HashMap<Uuid, ProjectReleaseWithBaseline> =
+                    enriched.into_iter().map(|e| (e.release.id, e)).collect();
+                if let Some(s) = p.stage_release.as_ref() {
+                    p.stage_release = by_id.get(&s.release.id).cloned();
+                }
+                if let Some(pr) = p.prod_release.as_ref() {
+                    p.prod_release = by_id.get(&pr.release.id).cloned();
+                }
+            }
+            ChatMessagePayload::ReleaseControllerBox(p)
+        }
+        other => other,
+    };
+    msg.payload = Some(payload);
+    Ok(msg)
+}
+
 /// Resolve the baseline production release: prod runtimes’ `live_release_id` points at a
 /// **production** row (`is_stage = false`), or fall back to the latest prod release by `created_at`.
 pub fn load_latest_production_release_for_project(
@@ -316,11 +463,11 @@ fn compose_chat_release_revision(major: i64, ordinal: i64) -> f64 {
 }
 
 /// Revision for a release created from a release-controller message: `major + ordinal/10`, with
-/// `major = floor(latest prod revision) + 1` (or `1` if none), and `ordinal` the 1-based index among
+/// `major = floor(session baseline prod revision) + 1` (or `1` if none), and `ordinal` the 1-based index among
 /// [`ChatMessageType::ReleaseControllerBox`] rows in the session (same rule for stage and production).
 ///
-/// Uses the latest **production** release as the baseline (see [`load_latest_production_release_for_project`]),
-/// matching `docs/releases.md`.
+/// Uses the chat session’s baseline production release (see [`load_baseline_production_release_for_chat_session`]),
+/// i.e. the live production release when the session was created—so multiple controller rows in the same chat share one major.
 ///
 /// Call only inside an **outer** database transaction. Takes the same lane advisory lock as the old
 /// `MAX(revision)+1` path so concurrent in-chat creates serialize per project and lane.
@@ -337,8 +484,9 @@ pub fn revision_for_chat_release_controller(
         .bind::<Integer, _>(k2)
         .execute(conn)?;
 
-    let prev = load_latest_production_release_for_project(conn, project_id)?;
-    let base_floor = prev.map(|r| r.revision.floor()).unwrap_or(0.0);
+    let (_baseline_id, baseline_row) =
+        load_baseline_production_release_for_chat_session(conn, project_id, session_id)?;
+    let base_floor = baseline_row.map(|r| r.revision.floor()).unwrap_or(0.0);
     let major = (base_floor as i64).saturating_add(1);
 
     let ordinal = release_controller_ordinal_in_session(conn, session_id, message_id)?;
@@ -383,6 +531,7 @@ pub fn insert_production_release_from_stage_row(
             project_releases::notes.eq(None::<String>),
             project_releases::chat_session_id.eq(stage.chat_session_id),
             project_releases::is_stage.eq(false),
+            project_releases::base_production_release_id.eq(stage.base_production_release_id),
         ))
         .returning(ProjectReleaseResponse::as_select())
         .get_result(conn)

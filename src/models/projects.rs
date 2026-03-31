@@ -260,6 +260,14 @@ pub struct ProjectRuntimeWithLiveReleaseResponse {
     pub live_release: Option<ProjectReleaseResponse>,
 }
 
+/// API output for [`ProjectRuntimeWithLiveReleaseResponse`]: `live_release` includes `base_production_release`.
+#[derive(Serialize)]
+pub struct ProjectRuntimeWithLiveReleaseApi {
+    #[serde(flatten)]
+    pub runtime: ProjectRuntimeResponse,
+    pub live_release: Option<ProjectReleaseWithBaseline>,
+}
+
 /// One unit pointer in [`ReleaseUnitsMetadata`]: `unit_id` is the full stored id (path + revision).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -310,4 +318,26 @@ pub struct ProjectReleaseResponse {
     pub chat_session_id: Option<Uuid>,
     pub is_stage: bool,
     pub revision: f64,
+    /// Production release that was live when this chat session was created; all stage/prod rows
+    /// created in-session share this baseline.
+    pub base_production_release_id: Option<Uuid>,
+}
+
+/// Release row as returned to clients: same fields as [`ProjectReleaseResponse`] plus the resolved
+/// baseline production row when `base_production_release_id` is set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectReleaseWithBaseline {
+    #[serde(flatten)]
+    pub release: ProjectReleaseResponse,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_production_release: Option<ProjectReleaseResponse>,
+}
+
+impl From<ProjectReleaseResponse> for ProjectReleaseWithBaseline {
+    fn from(release: ProjectReleaseResponse) -> Self {
+        Self {
+            release,
+            base_production_release: None,
+        }
+    }
 }
