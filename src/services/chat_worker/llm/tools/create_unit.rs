@@ -10,6 +10,7 @@ use crate::routes::ws::events::{
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
+use crate::services::chat_worker::db::load_units_from_latest_production_metadata;
 use crate::services::chat_worker::units_definitions;
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::dsl::exists;
@@ -41,7 +42,7 @@ pub const ARG_UNIT_NAME_SLUG_DESCRIPTION: &str =
 
 const INITIAL_REVISION: i32 = 1;
 
-fn duplicate_unit_path_error_message(
+fn duplicate_unit_session_error_message(
     context_slug: &str,
     module_slug: &str,
     unit_type_slug: &str,
@@ -49,6 +50,18 @@ fn duplicate_unit_path_error_message(
 ) -> String {
     format!(
         "create_unit: a unit already exists in this chat session with the same path ({}.{}.{}.{}). Use modify_unit with the existing unit id from list or tool results instead of create_unit.",
+        context_slug, module_slug, unit_type_slug, unit_name_slug
+    )
+}
+
+fn duplicate_unit_production_error_message(
+    context_slug: &str,
+    module_slug: &str,
+    unit_type_slug: &str,
+    unit_name_slug: &str,
+) -> String {
+    format!(
+        "create_unit: a unit with the same path ({}.{}.{}.{}) already exists in the live production release. Use modify_unit with the existing unit id instead of create_unit.",
         context_slug, module_slug, unit_type_slug, unit_name_slug
     )
 }
@@ -249,33 +262,56 @@ pub async fn handler(
     let (created_unit, error) = if let Some(msg) = slug_error {
         (None, Some(msg))
     } else {
-        let dup_msg = duplicate_unit_path_error_message(
+        let dup_session_msg = duplicate_unit_session_error_message(
+            &args.context_slug,
+            &args.module_slug,
+            args.unit_type.as_slug(),
+            &args.unit_name_slug,
+        );
+        let dup_prod_msg = duplicate_unit_production_error_message(
             &args.context_slug,
             &args.module_slug,
             args.unit_type.as_slug(),
             &args.unit_name_slug,
         );
         let pid = project_id;
-        let _sid = session_id;
+        let sid = session_id;
         let ctx = args.context_slug.clone();
         let mod_slug = args.module_slug.clone();
         let ut = args.unit_type;
         let un = args.unit_name_slug.clone();
         match block_on_db_tokio(&pool, move |conn| {
-            select(exists(
+            let exists_in_session: bool = select(exists(
                 project_units::table
                     .filter(project_units::project_id.eq(pid))
+                    .filter(project_units::chat_session_id.eq(sid))
                     .filter(project_units::context_slug.eq(&ctx))
                     .filter(project_units::module_slug.eq(&mod_slug))
                     .filter(project_units::unit_type.eq(ut))
                     .filter(project_units::unit_name_slug.eq(&un)),
             ))
-            .get_result::<bool>(conn)
+            .get_result(conn)?;
+            if exists_in_session {
+                return Ok(Err(true));
+            }
+
+            let prod_units = load_units_from_latest_production_metadata(conn, pid)?;
+            let exists_in_prod = prod_units.iter().any(|u| {
+                u.context_slug == ctx
+                    && u.module_slug == mod_slug
+                    && u.unit_type == ut
+                    && u.unit_name_slug == un
+                    && !u.is_deleted
+            });
+            if exists_in_prod {
+                return Ok(Err(false));
+            }
+
+            Ok(Ok(()))
         })
         .await
         {
-            Ok(true) => (None, Some(dup_msg)),
-            Ok(false) => {
+            Ok(Ok(())) => {
                 match block_on_db_tokio(&pool, move |conn| {
                     diesel::insert_into(project_units::table)
                         .values(&insert)
@@ -291,13 +327,15 @@ pub async fn handler(
                     Err(BlockingDbError::Query(diesel::result::Error::DatabaseError(
                         DatabaseErrorKind::UniqueViolation,
                         _,
-                    ))) => (None, Some(dup_msg)),
+                    ))) => (None, Some(dup_session_msg)),
                     Err(e) => {
                         tracing::error!(%message_id, "create_unit insert: {}", e);
                         (None, Some(e.to_string()))
                     }
                 }
             }
+            Ok(Err(true)) => (None, Some(dup_session_msg)),
+            Ok(Err(false)) => (None, Some(dup_prod_msg)),
             Err(e) => {
                 tracing::error!(%message_id, "create_unit duplicate check: {}", e);
                 (None, Some(e.to_string()))

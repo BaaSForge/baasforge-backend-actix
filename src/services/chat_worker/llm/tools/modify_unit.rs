@@ -13,6 +13,7 @@ use crate::routes::ws::events::{
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
+use crate::services::chat_worker::db::load_units_from_latest_production_metadata;
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
 use gemini_rust::tools::model::FunctionDeclaration;
@@ -158,21 +159,33 @@ pub async fn handler(
             .select(ProjectUnitRow::as_select())
             .first(conn)
             .optional()?;
-        let Some(parent) = parent else {
-            return Ok(Err("modify_unit: unit not found for this project".to_string()));
+
+        let parent = match parent {
+            Some(p) => p,
+            None => {
+                let prod_units = load_units_from_latest_production_metadata(conn, project_id)?;
+                match prod_units.into_iter().find(|u| u.id == parent_key && !u.is_deleted) {
+                    Some(prod_unit) => prod_unit.row,
+                    None => return Ok(Err(
+                        "modify_unit: unit not found in this chat session or the live production release".to_string(),
+                    )),
+                }
+            }
         };
+
+        let new_rev = parent.revision + 1;
         let new_id = compose_unit_id(
             &parent.context_slug,
             &parent.module_slug,
             parent.unit_type.as_slug(),
             &parent.unit_name_slug,
-            parent.revision + 1,
+            new_rev,
         );
         let insert = ProjectUnitInsert {
             project_id,
-            chat_session_id: parent.chat_session_id,
+            chat_session_id: session_id,
             id: new_id,
-            revision: parent.revision + 1,
+            revision: new_rev,
             code: Some(code),
             explanation: Some(explanation),
             unit_type: parent.unit_type,
