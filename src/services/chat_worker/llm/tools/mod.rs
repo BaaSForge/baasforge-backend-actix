@@ -742,7 +742,134 @@ pub async fn maybe_complete_invoking_message(
                 "Published message to queue so LLM continues after tool calls"
             );
         }
+    }
+}
+
+/// When an LLM pass for a nested sub-agent fails (retries exhausted, dead letter, etc.) before the
+/// corresponding `finish_*` tool runs, the Planner-facing async tool row (the sub-agent thread’s
+/// parent row) stays `Generating`. That prevents [`maybe_complete_invoking_message`] on the Planner
+/// from ever running, so the chat stays in a generating state. This marks that parent tool row
+/// failed (same shape as handler failures) and completes the Planner invoker with a queue
+/// continuation so the Planner can react.
+/// Returns `true` when a Planner queue continuation was requested (parent tool marked failed and
+/// [`maybe_complete_invoking_message`] ran with `publish_queue_continuation: true`). Caller should
+/// treat that like `will_schedule_continuation` and avoid broadcasting session generation ended.
+pub async fn cascade_sub_agent_ai_text_failure_to_planner(
+    pool: &DbPool,
+    redis_conn: &RedisConn,
+    rabbit_publisher: Option<&Arc<SharedRabbitPublisher>>,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
+    failed_ai_text_message_id: Uuid,
+    agent: ChatAgentType,
+    error: String,
+) -> bool {
+    if matches!(agent, ChatAgentType::Planner) {
+        return false;
+    }
+
+    let Some(parent_tool_id) = (match block_on_db_tokio(pool, move |conn| {
+        let row = chat_messages::table
+            .filter(chat_messages::id.eq(failed_ai_text_message_id))
+            .filter(chat_messages::chat_session_id.eq(session_id))
+            .select((chat_messages::invoking_message_id, chat_messages::type_))
+            .first::<(Option<Uuid>, ChatMessageType)>(conn)
+            .optional()?;
+        Ok::<_, diesel::result::Error>(row)
+    })
+    .await
+    {
+        Ok(Some((Some(tid), ChatMessageType::Text))) => Some(tid),
+        Ok(Some((None, ChatMessageType::Text))) | Ok(None) => None,
+        Ok(Some((_, t))) => {
+            tracing::warn!(
+                %failed_ai_text_message_id,
+                ?t,
+                "cascade_sub_agent_ai_text_failure: expected Text row; skipping"
+            );
+            None
         }
+        Err(e) => {
+            tracing::error!(
+                %failed_ai_text_message_id,
+                "cascade_sub_agent_ai_text_failure: load AI row: {}",
+                e
+            );
+            None
+        }
+    }) else {
+        return false;
+    };
+
+    let Some(planner_invoker_id) = (match block_on_db_tokio(pool, move |conn| {
+        let tool_row = chat_messages::table
+            .filter(chat_messages::id.eq(parent_tool_id))
+            .filter(chat_messages::chat_session_id.eq(session_id))
+            .select((chat_messages::type_, chat_messages::invoking_message_id))
+            .first::<(ChatMessageType, Option<Uuid>)>(conn)
+            .optional()?;
+        Ok::<_, diesel::result::Error>(tool_row)
+    })
+    .await
+    {
+        Ok(Some((ChatMessageType::Text, _))) => {
+            tracing::warn!(
+                %parent_tool_id,
+                "cascade_sub_agent_ai_text_failure: expected async tool row as parent; skipping"
+            );
+            None
+        }
+        Ok(Some((_, Some(pid)))) => Some(pid),
+        Ok(Some((_, None))) => {
+            tracing::warn!(
+                %parent_tool_id,
+                "cascade_sub_agent_ai_text_failure: parent tool row has no planner invoker; skipping"
+            );
+            None
+        }
+        Ok(None) => {
+            tracing::warn!(
+                %parent_tool_id,
+                "cascade_sub_agent_ai_text_failure: parent tool row missing; skipping"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::error!(
+                %parent_tool_id,
+                "cascade_sub_agent_ai_text_failure: load tool row: {}",
+                e
+            );
+            None
+        }
+    }) else {
+        return false;
+    };
+
+    set_tool_message_failed(
+        pool,
+        redis_conn,
+        parent_tool_id,
+        user_id,
+        project_id,
+        session_id,
+        error,
+    )
+    .await;
+
+    maybe_complete_invoking_message(
+        pool,
+        redis_conn,
+        rabbit_publisher,
+        planner_invoker_id,
+        user_id,
+        project_id,
+        session_id,
+        true,
+    )
+    .await;
+    true
 }
 
 /// Spawns the appropriate tool handler for the given message type. Does nothing if the type

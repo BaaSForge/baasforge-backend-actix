@@ -17,7 +17,10 @@ use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::generation_lifecycle;
-use crate::services::chat_worker::llm::tools::{ToolMessageContext, spawn_tool_message_handler};
+use crate::services::chat_worker::llm::tools::{
+    ToolMessageContext, cascade_sub_agent_ai_text_failure_to_planner, spawn_tool_message_handler,
+};
+use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::chat_worker::llm::{GenerateOutcome, build_llm_client};
 use crate::services::chat_worker::processor::process_one;
 use crate::services::chat_worker::release_controller_box;
@@ -45,15 +48,17 @@ use redis::aio::MultiplexedConnection;
 async fn set_message_failed_and_notify(
     pool: &DbPool,
     redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    rabbit_publisher: &Arc<SharedRabbitPublisher>,
     user_id: Uuid,
     project_id: Uuid,
     session_id: Uuid,
     response_message_id: Uuid,
     agent: ChatAgentType,
+    failure_reason: &str,
 ) {
     let message_id = response_message_id;
     let session_id_db = session_id;
-    let agent_db = agent;
+    let agent_db = agent.clone();
     let db_ok = block_on_db_tokio(pool, move |conn| {
         // Update if row exists; otherwise insert (LLM may have failed before first chunk, so no row yet).
         diesel::insert_into(chat_messages::table)
@@ -75,8 +80,24 @@ async fn set_message_failed_and_notify(
     .is_ok();
 
     if db_ok {
+        let cascaded_planner_continuation = cascade_sub_agent_ai_text_failure_to_planner(
+            pool,
+            redis_conn,
+            Some(rabbit_publisher),
+            user_id,
+            project_id,
+            session_id,
+            response_message_id,
+            agent,
+            failure_reason.to_string(),
+        )
+        .await;
         generation_lifecycle::notify_if_generation_loop_finished(
-            redis_conn, user_id, project_id, session_id, false,
+            redis_conn,
+            user_id,
+            project_id,
+            session_id,
+            cascaded_planner_continuation,
         )
         .await;
         let channel = user_channel(user_id);
@@ -367,11 +388,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         set_message_failed_and_notify(
                             &pool,
                             &redis_conn,
+                            &rabbit_publisher,
                             user_id,
                             project_id,
                             session_id,
                             response_message_id,
                             agent.clone(),
+                            &e.to_string(),
                         )
                         .await;
                         if let Err(dl_e) = publish_to_dead_letter(
@@ -404,11 +427,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                     set_message_failed_and_notify(
                                         &pool,
                                         &redis_conn,
+                                        &rabbit_publisher,
                                         user_id,
                                         project_id,
                                         session_id,
                                         response_message_id,
                                         agent.clone(),
+                                        "failed to parse message for retry",
                                     )
                                     .await;
                                     if let Err(dl_e) = publish_to_dead_letter(
@@ -442,11 +467,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 set_message_failed_and_notify(
                                     &pool,
                                     &redis_conn,
+                                    &rabbit_publisher,
                                     user_id,
                                     project_id,
                                     session_id,
                                     response_message_id,
                                     agent.clone(),
+                                    &ser_e.to_string(),
                                 )
                                 .await;
                                 if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {
@@ -469,11 +496,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             set_message_failed_and_notify(
                                 &pool,
                                 &redis_conn,
+                                &rabbit_publisher,
                                 user_id,
                                 project_id,
                                 session_id,
                                 response_message_id,
                                 agent.clone(),
+                                &retry_e.to_string(),
                             )
                             .await;
                         }
