@@ -1290,7 +1290,8 @@ pub async fn broadcast_stage_release_create_effects(
             target: "runtime_nats",
             project_id = %project_id,
             stage_runtime_id = %stage_runtime_id,
-            revision = release.revision,
+            deployed_release_id = %release.id,
+            ?previous_stage_release_id,
             "runtime NATS publisher not configured; stage release not announced to runtimes"
         );
     }
@@ -1579,7 +1580,8 @@ pub async fn handle_create_production_release(
                 tracing::warn!(
                     target: "runtime_nats",
                     project_id = %project_id,
-                    revision = release.revision,
+                    deployed_release_id = %release.id,
+                    ?previous_prod_release_id,
                     "runtime NATS publisher not configured; production release not announced to runtimes"
                 );
             }

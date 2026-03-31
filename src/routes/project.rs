@@ -1130,7 +1130,8 @@ pub async fn handle_deploy_production_release(
                 tracing::warn!(
                     target: "runtime_nats",
                     project_id = %project_id,
-                    revision,
+                    deployed_release_id = %deployed_release_id,
+                    ?previous_release_id,
                     "runtime NATS publisher not configured; production deploy not announced to runtimes"
                 );
             }

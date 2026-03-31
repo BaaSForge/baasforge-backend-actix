@@ -12,13 +12,18 @@ pub enum ReleaseDeployEnvironment {
 }
 
 /// Payload published when a runtime’s live release changes (upgrade, rollback, first deploy, or detach).
+///
+/// **Identity:** Consumers must resolve the release using `deployed_release_id` / `previous_release_id`
+/// (both are `project_releases.id` UUIDs). Release **revision** (`project_releases.revision`, a float)
+/// is **not** included and must **not** be used to pick a row: the same revision can exist on multiple
+/// rows (e.g. different chat sessions).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReleaseDeployEvent {
     pub project_id: Uuid,
     pub environment: ReleaseDeployEnvironment,
     #[serde(default)]
     pub runtime_id: Option<Uuid>,
-    /// `project_releases.id` now live (`null` when detached / no deploy).
+    /// `project_releases.id` for the release now live (`null` when detached / no deploy).
     #[serde(default)]
     pub deployed_release_id: Option<Uuid>,
     /// `project_releases.id` that was live immediately before this event. `null` when there was
@@ -122,7 +127,7 @@ impl RuntimeNatsPublisher {
         .await
     }
 
-    /// Stage runtime no longer has a live release revision (detach). Same subject as deploy events.
+    /// Stage runtime no longer has a live release (`deployed_release_id` null). Same subject as deploy events.
     pub async fn publish_stage_release_cleared(
         &self,
         subject: &str,
