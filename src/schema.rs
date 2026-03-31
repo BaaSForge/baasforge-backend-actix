@@ -18,14 +18,6 @@ pub mod sql_types {
     pub struct ChatSessionRoleType;
 
     #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
-    #[diesel(postgres_type(name = "framework_type"))]
-    pub struct FrameworkType;
-
-    #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
-    #[diesel(postgres_type(name = "language_type"))]
-    pub struct LanguageType;
-
-    #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "platform_environment_type"))]
     pub struct PlatformEnvironmentType;
 
@@ -172,19 +164,13 @@ diesel::table! {
 }
 
 diesel::table! {
-    use diesel::sql_types::*;
-    use super::sql_types::FrameworkType;
-    use super::sql_types::LanguageType;
-
     projects (id) {
         id -> Uuid,
-        framework -> FrameworkType,
         owner_user_id -> Uuid,
         #[max_length = 255]
         name -> Varchar,
         #[max_length = 255]
         slug -> Varchar,
-        language -> LanguageType,
     }
 }
 

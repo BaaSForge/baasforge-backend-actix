@@ -12,22 +12,6 @@ use std::io::Write;
 use std::ops::Deref;
 use uuid::Uuid;
 
-#[derive(Debug, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
-#[ExistingTypePath = "crate::schema::sql_types::FrameworkType"]
-#[DbValueStyle = "snake_case"]
-#[serde(rename_all = "snake_case")]
-pub enum FrameworkType {
-    Mvc,
-}
-
-#[derive(Debug, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
-#[ExistingTypePath = "crate::schema::sql_types::LanguageType"]
-#[DbValueStyle = "snake_case"]
-#[serde(rename_all = "snake_case")]
-pub enum LanguageType {
-    Rust,
-}
-
 #[derive(Debug, PartialEq, Eq, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::PlatformEnvironmentType"]
 #[DbValueStyle = "snake_case"]
@@ -114,11 +98,9 @@ pub struct ProjectUnitInsert {
 #[diesel(table_name = crate::schema::projects)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectInsert {
-    pub framework: FrameworkType,
     pub owner_user_id: Uuid,
     pub name: String,
     pub slug: String,
-    pub language: LanguageType,
 }
 
 #[derive(Insertable)]
@@ -136,10 +118,8 @@ pub struct ProjectRuntimeInsert {
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectResponse {
     pub id: Uuid,
-    pub framework: FrameworkType,
     pub name: String,
     pub slug: String,
-    pub language: LanguageType,
 }
 
 /// Row mapped 1:1 to `project_units` (Diesel query/returning). Shared as the inner payload of

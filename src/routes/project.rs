@@ -3,10 +3,9 @@ use crate::libs::api_response::api_error;
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
-    FrameworkType, LanguageType, PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse,
-    ProjectResponse, ProjectRuntimeInsert, ProjectRuntimeResponse,
-    ProjectReleaseWithBaseline, ProjectRuntimeWithLiveReleaseApi,
-    ProjectRuntimeWithLiveReleaseResponse, ProjectUnitRow,
+    PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse, ProjectResponse,
+    ProjectRuntimeInsert, ProjectRuntimeResponse, ProjectReleaseWithBaseline,
+    ProjectRuntimeWithLiveReleaseApi, ProjectRuntimeWithLiveReleaseResponse, ProjectUnitRow,
 };
 use crate::services::releases::attach_base_production_releases;
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
@@ -41,10 +40,8 @@ use uuid::Uuid;
 
 #[derive(Clone, Deserialize)]
 pub struct ProjectRequest {
-    pub framework: FrameworkType,
     pub name: String,
     pub slug: String,
-    pub language: LanguageType,
 }
 
 #[derive(Deserialize)]
@@ -200,10 +197,8 @@ pub async fn handle_create_project(
     }
 
     let new_project = ProjectInsert {
-        framework: body.framework.clone(),
         owner_user_id: user_id,
         slug: body.slug.clone(),
-        language: body.language.clone(),
         name: body.name.clone(),
     };
 
