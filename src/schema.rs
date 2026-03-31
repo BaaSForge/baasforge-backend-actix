@@ -121,6 +121,7 @@ diesel::table! {
         is_stage -> Bool,
         revision -> Float8,
         base_production_release_id -> Nullable<Uuid>,
+        brief_note -> Nullable<Text>,
     }
 }
 

@@ -16,7 +16,8 @@ use crate::services::chat_worker::db::load_chat_session_draft_units_before_messa
 use crate::services::releases::{
     combined_units_from_release_metadata, compute_new_units,
     load_baseline_production_release_for_chat_session, load_latest_production_release_for_project,
-    merge_combined_units, project_unit_refs_from_responses, release_notes_markdown,
+    merge_combined_units, project_unit_refs_from_responses, release_brief_note_markdown,
+    release_notes_markdown,
     revision_for_chat_release_controller, ReleaseUnitsMetadata,
 };
 use diesel::prelude::*;
@@ -151,6 +152,7 @@ pub fn transaction_create_stage_release_from_controller(
         };
 
         let notes = release_notes_markdown(&previous_combined, &combined_units);
+        let brief_note = release_brief_note_markdown(&previous_combined, &combined_units);
         let revision = revision_for_chat_release_controller(conn, project_id, session_id, message_id, true)?;
         let inserted: ProjectReleaseResponse = diesel::insert_into(project_releases::table)
             .values((
@@ -158,6 +160,7 @@ pub fn transaction_create_stage_release_from_controller(
                 project_releases::revision.eq(revision),
                 project_releases::units_metadata.eq(Some(meta)),
                 project_releases::notes.eq(Some(notes)),
+                project_releases::brief_note.eq(Some(brief_note)),
                 project_releases::chat_session_id.eq(Some(session_id)),
                 project_releases::is_stage.eq(true),
                 project_releases::base_production_release_id.eq(base_for_row),

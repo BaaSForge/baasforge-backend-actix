@@ -282,6 +282,8 @@ pub struct ProjectReleaseResponse {
     pub units_metadata: Option<ReleaseUnitsMetadata>,
     pub created_at: DateTime<Utc>,
     pub notes: Option<String>,
+    /// Short Markdown summary (~3 lines) of the same diff as `notes`, for list UI and tooltips.
+    pub brief_note: Option<String>,
     pub chat_session_id: Option<Uuid>,
     pub is_stage: bool,
     pub revision: f64,

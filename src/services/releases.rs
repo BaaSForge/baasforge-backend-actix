@@ -135,13 +135,19 @@ pub fn project_unit_refs_from_responses(units: &[ProjectUnitResponse]) -> Vec<Re
         .collect()
 }
 
-/// Markdown release notes comparing the previous combined snapshot to this release’s combined snapshot.
-/// Counts **active** units only (`is_deleted == false`). Baseline size is the number of active units
-/// before this release; total changes is new + deleted + modified.
-pub fn release_notes_markdown(
+struct ReleaseUnitDiff {
+    prev_count: usize,
+    comb_count: usize,
+    new_keys: Vec<LogicalUnitKey>,
+    deleted_keys: Vec<LogicalUnitKey>,
+    /// Current rows for logically modified units, sorted by path.
+    modified_current: Vec<ProjectUnitResponse>,
+}
+
+fn release_unit_diff(
     previous_combined: &[ProjectUnitResponse],
     combined_units: &[ProjectUnitResponse],
-) -> String {
+) -> ReleaseUnitDiff {
     fn active_map(units: &[ProjectUnitResponse]) -> HashMap<LogicalUnitKey, &ProjectUnitResponse> {
         units
             .iter()
@@ -154,35 +160,96 @@ pub fn release_notes_markdown(
     let comb = active_map(combined_units);
 
     let prev_count = prev.len();
-    let mut new_keys: Vec<&LogicalUnitKey> = comb.keys().filter(|k| !prev.contains_key(*k)).collect();
-    let mut deleted_keys: Vec<&LogicalUnitKey> =
-        prev.keys().filter(|k| !comb.contains_key(*k)).collect();
-    let mut modified: Vec<(&LogicalUnitKey, &ProjectUnitResponse, &ProjectUnitResponse)> = Vec::new();
+    let comb_count = comb.len();
+    let mut new_keys: Vec<LogicalUnitKey> = comb
+        .keys()
+        .filter(|k| !prev.contains_key(*k))
+        .cloned()
+        .collect();
+    let mut deleted_keys: Vec<LogicalUnitKey> = prev
+        .keys()
+        .filter(|k| !comb.contains_key(*k))
+        .cloned()
+        .collect();
+    let mut modified_current: Vec<ProjectUnitResponse> = Vec::new();
     for k in comb.keys() {
         if let (Some(pb), Some(cb)) = (prev.get(k), comb.get(k)) {
             if pb.id != cb.id {
-                modified.push((k, pb, cb));
+                modified_current.push((*cb).clone());
             }
         }
     }
 
     new_keys.sort_by(|a, b| logical_unit_sort_tuple(a).cmp(&logical_unit_sort_tuple(b)));
     deleted_keys.sort_by(|a, b| logical_unit_sort_tuple(a).cmp(&logical_unit_sort_tuple(b)));
-    modified.sort_by(|a, b| {
-        logical_unit_sort_tuple(a.0)
-            .cmp(&logical_unit_sort_tuple(b.0))
+    modified_current.sort_by(|a, b| {
+        logical_unit_sort_tuple(&logical_unit_key(a)).cmp(&logical_unit_sort_tuple(&logical_unit_key(b)))
     });
 
-    let n_new = new_keys.len();
-    let n_deleted = deleted_keys.len();
-    let n_modified = modified.len();
+    ReleaseUnitDiff {
+        prev_count,
+        comb_count,
+        new_keys,
+        deleted_keys,
+        modified_current,
+    }
+}
+
+/// Ultra-short Markdown (about three lines, ~20 words) summarizing the same diff as [`release_notes_markdown`].
+#[must_use]
+pub fn release_brief_note_markdown(
+    previous_combined: &[ProjectUnitResponse],
+    combined_units: &[ProjectUnitResponse],
+) -> String {
+    let d = release_unit_diff(previous_combined, combined_units);
+    let n_new = d.new_keys.len();
+    let n_deleted = d.deleted_keys.len();
+    let n_modified = d.modified_current.len();
+    let total_changes = n_new + n_deleted + n_modified;
+    let tail = if total_changes == 0 {
+        "**No** unit changes.".to_string()
+    } else {
+        format!("**{}** total changes.", total_changes)
+    };
+    format!(
+        "Previously **{}** active units → **{}** now.\n**+{}** new · **{}** modified · **{}** removed.\n{}",
+        d.prev_count,
+        d.comb_count,
+        n_new,
+        n_modified,
+        n_deleted,
+        tail
+    )
+}
+
+/// Markdown release notes comparing the previous combined snapshot to this release’s combined snapshot.
+/// Counts **active** units only (`is_deleted == false`). Baseline size is the number of active units
+/// before this release; total changes is new + deleted + modified.
+pub fn release_notes_markdown(
+    previous_combined: &[ProjectUnitResponse],
+    combined_units: &[ProjectUnitResponse],
+) -> String {
+    let d = release_unit_diff(previous_combined, combined_units);
+    fn active_map(units: &[ProjectUnitResponse]) -> HashMap<LogicalUnitKey, &ProjectUnitResponse> {
+        units
+            .iter()
+            .filter(|u| !u.is_deleted)
+            .map(|u| (logical_unit_key(u), u))
+            .collect()
+    }
+    let prev = active_map(previous_combined);
+    let comb = active_map(combined_units);
+
+    let n_new = d.new_keys.len();
+    let n_deleted = d.deleted_keys.len();
+    let n_modified = d.modified_current.len();
     let total_changes = n_new + n_deleted + n_modified;
 
     let mut out = String::new();
     out.push_str("## Summary\n\n");
     out.push_str(&format!(
         "- Active units in the previous snapshot (baseline): **{}**\n",
-        prev_count
+        d.prev_count
     ));
     out.push_str(&format!("- New units: **{}**\n", n_new));
     out.push_str(&format!("- Deleted units: **{}**\n", n_deleted));
@@ -190,10 +257,10 @@ pub fn release_notes_markdown(
     out.push_str(&format!("- Total changes: **{}**\n\n", total_changes));
 
     out.push_str("## New\n\n");
-    if new_keys.is_empty() {
+    if d.new_keys.is_empty() {
         out.push_str("_None._\n\n");
     } else {
-        for k in new_keys {
+        for k in &d.new_keys {
             let u = comb[k];
             out.push_str(&format!(
                 "- `{}` ({}) — created\n",
@@ -205,10 +272,10 @@ pub fn release_notes_markdown(
     }
 
     out.push_str("## Deleted\n\n");
-    if deleted_keys.is_empty() {
+    if d.deleted_keys.is_empty() {
         out.push_str("_None._\n\n");
     } else {
-        for k in deleted_keys {
+        for k in &d.deleted_keys {
             let u = prev[k];
             out.push_str(&format!(
                 "- `{}` ({}) — removed\n",
@@ -220,10 +287,10 @@ pub fn release_notes_markdown(
     }
 
     out.push_str("## Modified\n\n");
-    if modified.is_empty() {
+    if d.modified_current.is_empty() {
         out.push_str("_None._\n");
     } else {
-        for (_k, _prev_u, cur) in modified {
+        for cur in &d.modified_current {
             out.push_str(&format!(
                 "- `{}` ({}) — new revision **{}**\n",
                 cur.id,
@@ -681,6 +748,7 @@ pub fn insert_production_release_from_stage_row(
             project_releases::revision.eq(revision),
             project_releases::units_metadata.eq(stage.units_metadata.clone()),
             project_releases::notes.eq(stage.notes.clone()),
+            project_releases::brief_note.eq(stage.brief_note.clone()),
             project_releases::chat_session_id.eq(stage.chat_session_id),
             project_releases::is_stage.eq(false),
             project_releases::base_production_release_id.eq(stage.base_production_release_id),
