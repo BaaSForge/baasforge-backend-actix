@@ -195,8 +195,8 @@ fn build_request_body(
 
 /// Build tools array for Claude Messages API. Each tool: name, description, input_schema (JSON Schema).
 /// Matches Anthropic format: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use
-fn to_tools_json(agent: &ChatAgentType, session_read_only: bool) -> Vec<Value> {
-    let names = tools::tool_names_for_llm_session(agent, session_read_only);
+fn to_tools_json(agent: &ChatAgentType) -> Vec<Value> {
+    let names = tools::tool_names_for_llm_session(agent);
     tools::all_tool_specs()
         .into_iter()
         .filter(|t| names.iter().any(|&n| n == t.name))
@@ -417,10 +417,10 @@ pub async fn call_claude_stream(
     session_id: Uuid,
     agent: ChatAgentType,
     queue_invoking_message_id: Option<Uuid>,
-    session_read_only: bool,
+    stale_base_release: bool,
 ) -> Result<GenerateOutcome, BoxError> {
-    let system_prompt = system_prompt_for_agent(&agent, session_read_only);
-    let tools_list = to_tools_json(&agent, session_read_only);
+    let system_prompt = system_prompt_for_agent(&agent, stale_base_release);
+    let tools_list = to_tools_json(&agent);
     let tool_count = tools_list.len();
 
     let entries = session_messages_to_upstream_entries(session_messages, user_text);

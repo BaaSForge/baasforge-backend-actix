@@ -14,7 +14,7 @@ use crate::schema::project_runtimes;
 use crate::schema::projects;
 use crate::services::chat_worker::db::load_chat_session_draft_units_before_message_cutoff;
 use crate::services::releases::{
-    chat_session_is_read_only_for_releases, combined_units_from_release_metadata, compute_new_units,
+    combined_units_from_release_metadata, compute_new_units,
     load_baseline_production_release_for_chat_session, load_latest_production_release_for_project,
     merge_combined_units, project_unit_refs_from_responses, revision_for_chat_release_controller,
     ReleaseUnitsMetadata,
@@ -25,7 +25,6 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StageReleaseFromControllerError {
     SessionNotFound,
-    SessionReadOnly,
     MessageNotFound,
     NotReleaseController,
     ReleaseControllerPayloadMissing,
@@ -59,10 +58,6 @@ pub fn transaction_create_stage_release_from_controller(
             .optional()?;
         if session_ok.is_none() {
             return Ok(Err(StageReleaseFromControllerError::SessionNotFound));
-        }
-
-        if chat_session_is_read_only_for_releases(conn, project_id, session_id)? {
-            return Ok(Err(StageReleaseFromControllerError::SessionReadOnly));
         }
 
         let msg_row: Option<ChatMessageRow> = chat_messages::table

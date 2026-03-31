@@ -19,23 +19,23 @@ pub struct ChatSessionResponse {
     pub live_production_release_id: Option<Uuid>,
 }
 
-/// Single session fetch: same row shape as list items’ session fields plus `read_only`.
+/// Single session fetch: same row shape as list items’ session fields plus `stale_base_release`.
 #[derive(Serialize)]
 pub struct ChatSessionDetailResponse {
     #[serde(flatten)]
     pub session: ChatSessionResponse,
-    /// True when production’s live release no longer matches this session’s baseline and the live
-    /// release was not created from this session—releases and unit edits are blocked.
-    pub read_only: bool,
+    /// True when production’s live release no longer matches this session’s baseline snapshot and
+    /// the live release was not created from this session—warn before shipping; unit edits stay allowed.
+    pub stale_base_release: bool,
 }
 
 #[derive(Serialize)]
 pub struct ChatSessionWithLastMessageResponse {
     #[serde(flatten)]
     pub session: ChatSessionResponse,
-    /// True when production’s live release no longer matches this session’s baseline and the live
-    /// release was not created from this session—releases and unit edits are blocked.
-    pub read_only: bool,
+    /// True when production’s live release no longer matches this session’s baseline snapshot and
+    /// the live release was not created from this session—warn before shipping; unit edits stay allowed.
+    pub stale_base_release: bool,
     pub last_message: Option<ChatMessageResponse>,
     pub owned_units: Vec<ProjectUnitResponse>,
     pub owned_releases: Vec<ProjectReleaseWithBaseline>,

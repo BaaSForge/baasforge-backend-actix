@@ -39,12 +39,11 @@ use crate::services::chat_worker::db::{
     DraftUnitsAsOfReleaseControllerError,
 };
 use crate::services::releases::{
-    attach_base_production_releases, chat_session_is_read_only_for_releases,
-    chat_session_read_only_from_baseline, enrich_chat_message_response_releases,
+    attach_base_production_releases, enrich_chat_message_response_releases,
     enrich_owned_releases_by_session_map, insert_production_release_from_stage_row,
     live_release_id_from_production_runtime, load_chat_session_units_merged_with_latest_production,
     prod_live_release_source_chat_session, production_release_id_for_live_runtimes,
-    CHAT_SESSION_READ_ONLY_MESSAGE,
+    stale_base_release_from_baseline,
 };
 use crate::services::stage_release_from_controller::{
     transaction_create_stage_release_from_controller, StageReleaseFromControllerError,
@@ -125,14 +124,14 @@ pub async fn handle_list_project_chat_sessions(
             sessions
                 .into_iter()
                 .map(|session| {
-                    let read_only = chat_session_read_only_from_baseline(
+                    let stale_base_release = stale_base_release_from_baseline(
                         session.live_production_release_id,
                         current_live,
                         live_source_session,
                         session.id,
                     );
                     ChatSessionWithLastMessageResponse {
-                        read_only,
+                        stale_base_release,
                         last_message: latest_by_session_id.remove(&session.id),
                         owned_units: owned_units_by_session
                             .get(&session.id)
@@ -189,14 +188,17 @@ pub async fn handle_get_project_chat_session(
 
         let (current_live, live_source_session) =
             prod_live_release_source_chat_session(conn, project_id)?;
-        let read_only = chat_session_read_only_from_baseline(
+        let stale_base_release = stale_base_release_from_baseline(
             session.live_production_release_id,
             current_live,
             live_source_session,
             session.id,
         );
 
-        Ok::<_, diesel::result::Error>(ChatSessionDetailResponse { session, read_only })
+        Ok::<_, diesel::result::Error>(ChatSessionDetailResponse {
+            session,
+            stale_base_release,
+        })
     })
     .await
     {
@@ -1126,7 +1128,7 @@ pub async fn handle_create_project_chat_session(
         "Project chat session created successfully",
         json!(ChatSessionDetailResponse {
             session: chat_session,
-            read_only: false,
+            stale_base_release: false,
         }),
     ))
 }
@@ -1152,7 +1154,6 @@ pub struct CreateProductionReleaseBody {
 enum ProdReleaseOutcome {
     Success(ProjectReleaseResponse, ChatMessageRow, Option<Uuid>),
     SessionNotFound,
-    SessionReadOnly,
     MessageNotFound,
     NotReleaseController,
     ReleaseControllerPayloadMissing,
@@ -1170,8 +1171,6 @@ pub fn http_response_for_stage_release_from_controller_error(
     use StageReleaseFromControllerError::*;
     match e {
         SessionNotFound => HttpResponse::NotFound().json(api_error("Chat session not found", json!({}))),
-        SessionReadOnly => HttpResponse::Forbidden()
-            .json(api_error(CHAT_SESSION_READ_ONLY_MESSAGE, json!({}))),
         MessageNotFound => HttpResponse::NotFound()
             .json(api_error("Release controller message not found", json!({}))),
         NotReleaseController => HttpResponse::BadRequest().json(api_error(
@@ -1402,10 +1401,6 @@ pub async fn handle_create_production_release(
                 return Ok(ProdReleaseOutcome::SessionNotFound);
             }
 
-            if chat_session_is_read_only_for_releases(conn, project_id, session_id)? {
-                return Ok(ProdReleaseOutcome::SessionReadOnly);
-            }
-
             let msg_row: Option<ChatMessageRow> = chat_messages::table
                 .filter(chat_messages::id.eq(message_id))
                 .filter(chat_messages::chat_session_id.eq(session_id))
@@ -1592,8 +1587,6 @@ pub async fn handle_create_production_release(
         }
         ProdReleaseOutcome::SessionNotFound => HttpResponse::NotFound()
             .json(api_error("Chat session not found", json!({}))),
-        ProdReleaseOutcome::SessionReadOnly => HttpResponse::Forbidden()
-            .json(api_error(CHAT_SESSION_READ_ONLY_MESSAGE, json!({}))),
         ProdReleaseOutcome::MessageNotFound => HttpResponse::NotFound()
             .json(api_error("Release controller message not found", json!({}))),
         ProdReleaseOutcome::NotReleaseController => HttpResponse::BadRequest().json(

@@ -7,7 +7,7 @@ use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::load_history_for_agent;
 use crate::services::chat_worker::llm::tools::{tool_context_for_chat_session, with_tool_context};
-use crate::services::releases::chat_session_is_read_only_for_releases;
+use crate::services::releases::chat_session_stale_base_release;
 use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient};
 use diesel::prelude::*;
 use redis::aio::MultiplexedConnection;
@@ -49,8 +49,8 @@ pub async fn process_one(
     .await
     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
-    let session_read_only = block_on_db_tokio(pool, move |conn| {
-        chat_session_is_read_only_for_releases(conn, project_id, session_id)
+    let stale_base_release = block_on_db_tokio(pool, move |conn| {
+        chat_session_stale_base_release(conn, project_id, session_id)
     })
     .await
     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
@@ -66,7 +66,6 @@ pub async fn process_one(
         session_id,
         placeholder_ai_message_id,
         agent.clone(),
-        session_read_only,
     );
     let outcome = with_tool_context(
         tool_ctx,
@@ -82,7 +81,7 @@ pub async fn process_one(
             session_id,
             agent,
             queue_invoking_message_id,
-            session_read_only,
+            stale_base_release,
         ),
     )
     .await?;

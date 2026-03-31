@@ -2,10 +2,10 @@ mod architecture_analyzer;
 mod developer;
 mod nested_branch_history;
 mod planner;
-mod session_read_only;
+mod session_stale_base_release;
 mod solution_analyzer;
 
-pub use session_read_only::{system_prompt_for_agent, tool_names_for_llm_session};
+pub use session_stale_base_release::{system_prompt_for_agent, tool_names_for_llm_session};
 
 use crate::database::PooledConn;
 use crate::models::chat_messages::{ChatAgentType, ChatMessageType, ChatSessionRoleType};

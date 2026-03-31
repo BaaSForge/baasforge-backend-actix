@@ -11,9 +11,6 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
 use crate::services::message_queue::SharedRabbitPublisher;
-use crate::services::releases::{
-    chat_session_is_read_only_for_releases, chat_session_read_only_tool_error,
-};
 use diesel::prelude::*;
 use gemini_rust::tools::model::FunctionDeclaration;
 use schemars::JsonSchema;
@@ -117,20 +114,7 @@ pub async fn handler(
 
     let parent_key = args.unit_id.clone();
 
-    // Read-only: same as other precheck failures — Completed tool row with `error` set (full payload JSON to the LLM).
-    let read_only_block: Option<String> = match block_on_db_tokio(&pool, move |conn| {
-        chat_session_is_read_only_for_releases(conn, project_id, session_id)
-    })
-    .await
-    {
-        Ok(true) => Some(chat_session_read_only_tool_error(TOOL_NAME)),
-        Ok(false) => None,
-        Err(e) => Some(format!("remove_unit: {}", e)),
-    };
-
-    let precheck: Option<String> = if let Some(msg) = read_only_block {
-        Some(msg)
-    } else if parent_key.is_empty() {
+    let precheck: Option<String> = if parent_key.is_empty() {
         Some("remove_unit: unit_id must not be empty".to_string())
     } else {
         validate_full_unit_id_for_tool(&parent_key)

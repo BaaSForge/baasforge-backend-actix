@@ -96,9 +96,8 @@ fn gemini_declaration_fns_by_name() -> &'static [(
 /// Gemini declarations for the given agent only (subset of all tools).
 fn to_gemini_declarations_for_agent(
     agent: &ChatAgentType,
-    session_read_only: bool,
 ) -> Vec<gemini_rust::tools::model::FunctionDeclaration> {
-    let names = super::tools::tool_names_for_llm_session(agent, session_read_only);
+    let names = super::tools::tool_names_for_llm_session(agent);
     gemini_declaration_fns_by_name()
         .iter()
         .filter(|(name, _)| names.iter().any(|&n| n == *name))
@@ -191,13 +190,13 @@ pub async fn call_gemini_stream(
     session_id: Uuid,
     agent: ChatAgentType,
     queue_invoking_message_id: Option<Uuid>,
-    session_read_only: bool,
+    stale_base_release: bool,
 ) -> Result<GenerateOutcome, BoxError> {
     let client = Gemini::with_model(api_key, gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
 
-    let system_prompt = system_prompt_for_agent(&agent, session_read_only);
-    let declarations: Vec<FunctionDeclaration> = to_gemini_declarations_for_agent(&agent, session_read_only)
+    let system_prompt = system_prompt_for_agent(&agent, stale_base_release);
+    let declarations: Vec<FunctionDeclaration> = to_gemini_declarations_for_agent(&agent)
         .into_iter()
         .map(sanitize_gemini_function_declaration)
         .collect::<Result<Vec<_>, _>>()?;

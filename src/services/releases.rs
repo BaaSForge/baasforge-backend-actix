@@ -185,20 +185,8 @@ pub fn session_unit_tip_replaces_previous(
     prev.chat_session_id != tip.chat_session_id
 }
 
-/// User-facing reason when stage/production release or unit mutations are blocked.
-pub const CHAT_SESSION_READ_ONLY_MESSAGE: &str = "This chat is read-only: production’s live release no longer matches this session’s baseline (another conversation promoted a different release, or production drifted). Open a new chat or use a session tied to the current production line to stage, publish, or edit units.";
-
-/// Message for unit tools’ payload **`error`** field when the session is read-only. The tool row is still stored as **Completed** so the model gets a normal tool result (JSON includes `error`, `args`, and null result fields)—same pattern as validation failures.
-#[inline]
-pub fn chat_session_read_only_tool_error(tool_name: &str) -> String {
-    format!(
-        "{tool_name}: {} No changes were applied.",
-        CHAT_SESSION_READ_ONLY_MESSAGE
-    )
-}
-
 /// Production runtime’s current live release id and the `chat_session_id` stored on that release row
-/// (if any). Used to decide whether a chat session may still create releases or mutate units.
+/// (if any). Used with the session’s baseline snapshot to detect a stale base for UI / LLM hints.
 pub fn prod_live_release_source_chat_session(
     conn: &mut PooledConn,
     project_id: Uuid,
@@ -216,10 +204,10 @@ pub fn prod_live_release_source_chat_session(
     Ok((current, source_session))
 }
 
-/// Whether this session is read-only for releases and unit edits: live production moved away from
-/// the snapshot taken at session creation **and** the current live production release was not
-/// produced from this session.
-pub fn chat_session_read_only_from_baseline(
+/// True when live production moved away from the snapshot taken at session creation **and** the
+/// current live production release was not produced from this session—used for UI and LLM warnings
+/// (staging/deploy and unit edits are still allowed; releases from this chat may revert newer prod).
+pub fn stale_base_release_from_baseline(
     session_baseline_live_release_id: Option<Uuid>,
     current_live_release_id: Option<Uuid>,
     current_live_release_chat_session_id: Option<Uuid>,
@@ -234,7 +222,7 @@ pub fn chat_session_read_only_from_baseline(
     current_live_release_chat_session_id != Some(this_session_id)
 }
 
-pub fn chat_session_is_read_only_for_releases(
+pub fn chat_session_stale_base_release(
     conn: &mut PooledConn,
     project_id: Uuid,
     session_id: Uuid,
@@ -250,7 +238,7 @@ pub fn chat_session_is_read_only_for_releases(
         None => return Ok(false),
     };
     let (current, source) = prod_live_release_source_chat_session(conn, project_id)?;
-    Ok(chat_session_read_only_from_baseline(
+    Ok(stale_base_release_from_baseline(
         snapshot,
         current,
         source,

@@ -185,9 +185,8 @@ pub use crate::services::chat_worker::agent::tool_names_for_llm_session;
 
 fn tool_queue_registry_for_agent(
     agent: &ChatAgentType,
-    session_read_only: bool,
 ) -> Vec<(&'static str, ChatMessageType, PayloadFromArgsFn)> {
-    let names = tool_names_for_llm_session(agent, session_read_only);
+    let names = tool_names_for_llm_session(agent);
     tool_queue_registry()
         .iter()
         .filter(|(name, _, _)| names.contains(name))
@@ -216,11 +215,9 @@ pub fn tool_context_for_chat_session(
     session_id: Uuid,
     invoking_message_id: Uuid,
     agent: ChatAgentType,
-    session_read_only: bool,
 ) -> ToolContext {
     let mut callbacks = HashMap::new();
-    for (name, message_type, payload_from_args) in
-        tool_queue_registry_for_agent(&agent, session_read_only)
+    for (name, message_type, payload_from_args) in tool_queue_registry_for_agent(&agent)
     {
         let publisher = publisher.clone();
         let message_type = message_type.clone();
