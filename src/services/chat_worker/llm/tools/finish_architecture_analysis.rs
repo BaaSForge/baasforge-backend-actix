@@ -9,7 +9,8 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::libs::unit_slug::{
-    validate_full_unit_id_for_tool, LLM_FULL_UNIT_ID_ITEM_DESCRIPTION, LLM_RELEVANT_UNIT_IDS_DESCRIPTION,
+    normalize_full_unit_id_arg, validate_full_unit_id_for_tool, LLM_FULL_UNIT_ID_ITEM_DESCRIPTION,
+    LLM_RELEVANT_UNIT_IDS_DESCRIPTION,
 };
 use crate::services::chat_worker::db::load_project_units_by_keys;
 use super::analyze_architecture_tool;
@@ -91,7 +92,12 @@ pub fn payload_from_args(
     tool_call_id: Option<String>,
     tool_name: &str,
 ) -> Result<ChatMessagePayload, BoxError> {
-    let args = serde_json::from_value::<ToolFinishArchitectureAnalysisArgs>(args).unwrap_or_default();
+    let mut args = serde_json::from_value::<ToolFinishArchitectureAnalysisArgs>(args).unwrap_or_default();
+    args.relevant_unit_ids = args
+        .relevant_unit_ids
+        .into_iter()
+        .map(|id| normalize_full_unit_id_arg(&id))
+        .collect();
     Ok(ChatMessagePayload::ToolFinishArchitectureAnalysis(
         ToolFinishArchitectureAnalysisPayload {
             args,

@@ -11,6 +11,18 @@ pub fn is_valid_slug(s: &str) -> bool {
     !s.is_empty() && SLUG_RE.is_match(s)
 }
 
+/// Trims whitespace and lowercases ASCII letters for LLM-supplied slug segments
+/// (`context_slug`, `module_slug`, `unit_name_slug`, `context_slugs[]`, etc.).
+pub fn normalize_llm_slug_arg(s: &str) -> String {
+    s.trim().to_ascii_lowercase()
+}
+
+/// Trims and lowercases a full `unit_id` (or path) from the LLM. Digits, dots, and hyphens are unchanged
+/// aside from letter casing in slug segments.
+pub fn normalize_full_unit_id_arg(s: &str) -> String {
+    s.trim().to_ascii_lowercase()
+}
+
 pub fn compose_unit_id(
     context_slug: &str,
     module_slug: &str,
@@ -37,6 +49,7 @@ pub const LLM_UNIT_ID_REVISION_RULE: &str = "The last segment is the revision as
 /// Tool parameter description for `unit_id` arguments: copy verbatim from list/tool results.
 pub const LLM_UNIT_ID_TOOL_DESCRIPTION: &str = concat!(
     "Exact `id` from list or tool results: context.module.unit_kind.unit_name.revision (dot-separated)—copy the whole string verbatim. ",
+    "Slug segments use ASCII lowercase;",
     "The last segment is only the revision number (decimal digits), with no prefix such as `v` or `rev` ",
     "(e.g. `demo.greeter.api.greeter-api.1`; not `...v1` or `...rev1`).",
 );
@@ -45,6 +58,7 @@ pub const LLM_UNIT_ID_TOOL_DESCRIPTION: &str = concat!(
 pub const LLM_RELEVANT_UNIT_IDS_DESCRIPTION: &str = concat!(
     "Most relevant unit IDs for this analysis: each array element is one full unit id string ",
     "(dot-separated: context.module.kind.name.revision), as returned by tools or list payloads. ",
+    "Slug segments are lowercase; prefer copying tool output exactly. ",
     "The last segment is only the revision number (decimal digits), with no `v`, `rev`, or other prefix ",
     "(e.g. `demo.greeter.api.greeter-api.1`; not `...v1` or `...rev1`). ",
     "Use an empty array when there are no related units.",
@@ -53,6 +67,7 @@ pub const LLM_RELEVANT_UNIT_IDS_DESCRIPTION: &str = concat!(
 /// Per-item schema description for a single full unit id in an array.
 pub const LLM_FULL_UNIT_ID_ITEM_DESCRIPTION: &str = concat!(
     "Full unit id (dot-separated: context.module.kind.name.revision). ",
+    "Slug segments are ASCII lowercase. ",
     "Revision is decimal digits only, no `v`/`rev` prefix (see `demo.greeter.api.greeter-api.1`).",
 );
 

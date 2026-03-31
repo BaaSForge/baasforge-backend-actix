@@ -28,12 +28,12 @@ pub const UNIT_KIND_SLUGS: &[&str] = &[
 
 /// For `#[schemars(description = ...)]` on create_unit’s `unit_type` field (Gemini JSON schema).
 pub const UNIT_TYPE_ARG_DESCRIPTION: &str =
-    "Snake_case unit kind; must be one of the values in (bootstrap, action, api, command, flow, gateway, projection, query, runtime, schema, timer).";
+    "Unit kind (enum): pass the lowercase slug string exactly as in the schema—e.g. api, command, projection—not Title Case (Api) or SCREAMING_SNAKE (API). Must be one of: bootstrap, action, api, command, flow, gateway, projection, query, runtime, schema, timer.";
 
-/// Prose for LLM tool parameters (`unit_type` on create_unit, modify_unit, etc.).
+/// Prose for LLM tool parameters (`unit_type` on `create_unit` JSON schema `description`).
 pub fn unit_type_description_for_tools() -> String {
     format!(
-        "Unit kind: one of {}.",
+        "Unit kind (enum). Use the lowercase slug from this exact set: {}.",
         UNIT_KIND_SLUGS.join(", ")
     )
 }

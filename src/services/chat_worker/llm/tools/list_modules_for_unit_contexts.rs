@@ -6,6 +6,7 @@ use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent}
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
+use crate::libs::unit_slug::normalize_llm_slug_arg;
 use crate::services::chat_worker::db::modules_by_context_slugs_visible_tip_units;
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
@@ -20,7 +21,7 @@ use uuid::Uuid;
 use super::{BoxError, ToolSpec};
 
 pub const ARG_CONTEXT_SLUGS_DESCRIPTION: &str =
-    "Bounded context slugs to inspect (e.g. inventory-stocks, billing). Pass only contexts you care about; the tool returns distinct module slugs per context in the project. Must be a non-empty array.";
+    "Bounded context slugs to inspect (e.g. inventory-stocks, billing): ASCII lowercase letters and hyphens, matching list_unit_contexts output. Pass only contexts you care about; the tool returns distinct module slugs per context in the project. Must be a non-empty array.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct ToolListModulesForUnitContextsArgs {
@@ -59,8 +60,13 @@ pub fn payload_from_args(
     tool_call_id: Option<String>,
     tool_name: &str,
 ) -> Result<ChatMessagePayload, BoxError> {
-    let args: ToolListModulesForUnitContextsArgs = serde_json::from_value(args)
+    let mut args: ToolListModulesForUnitContextsArgs = serde_json::from_value(args)
         .map_err(|e| -> BoxError { format!("list_modules_for_unit_contexts: invalid args: {}", e).into() })?;
+    args.context_slugs = args
+        .context_slugs
+        .into_iter()
+        .map(|s| normalize_llm_slug_arg(&s))
+        .collect();
     Ok(ChatMessagePayload::ToolListModulesForUnitContexts(
         ToolListModulesForUnitContextsPayload {
             args,

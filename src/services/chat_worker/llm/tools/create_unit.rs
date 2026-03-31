@@ -1,5 +1,5 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
-use crate::libs::unit_slug::{compose_unit_id, is_valid_slug};
+use crate::libs::unit_slug::{compose_unit_id, is_valid_slug, normalize_llm_slug_arg};
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
@@ -106,11 +106,18 @@ pub fn payload_from_args(
 ) -> Result<ChatMessagePayload, BoxError> {
     let raw = serde_json::from_value::<CreateUnitLlmArgs>(args)
         .map_err(|e| -> BoxError { format!("create_unit args: {}", e).into() })?;
-    let unit_type: ProjectUnitType = serde_json::from_value(json!(raw.unit_type.trim()))
-        .map_err(|e| -> BoxError { format!("create_unit unit_type: {}", e).into() })?;
-    let context_slug = raw.context_slug.trim().to_string();
-    let module_slug = raw.module_slug.trim().to_string();
-    let unit_name_slug = raw.unit_name_slug.trim().to_string();
+    let unit_type_raw = normalize_llm_slug_arg(&raw.unit_type);
+    let unit_type = ProjectUnitType::from_slug(&unit_type_raw).ok_or_else(|| -> BoxError {
+        format!(
+            "create_unit unit_type: must be one of {}; got {:?}",
+            units_definitions::UNIT_KIND_SLUGS.join(", "),
+            raw.unit_type.trim()
+        )
+        .into()
+    })?;
+    let context_slug = normalize_llm_slug_arg(&raw.context_slug);
+    let module_slug = normalize_llm_slug_arg(&raw.module_slug);
+    let unit_name_slug = normalize_llm_slug_arg(&raw.unit_name_slug);
     let args = ToolCreateUnitArgs {
         context_slug,
         module_slug,
@@ -152,7 +159,7 @@ pub const TOOL_NAME: &str = "create_unit";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Create a new unit row for this project (in-session work until released). Provide context_slug, module_slug, and unit_name_slug (English lowercase and hyphens only). The row `id` is those parts and unit kind, dot-separated, with the revision as the last segment: the digit `1` for a new unit (not `v1` or `rev1`). The `code` argument must be JavaScript.",
+        description: "Create a new unit row for this project (in-session work until released). Provide context_slug, module_slug, and unit_name_slug (English lowercase letters and hyphens only). `unit_type` is an enum: use the lowercase slug from the parameter schema (e.g. api, projection), not capitalized forms. The row `id` combines those parts and unit kind, dot-separated, with the revision as the last segment: the digit `1` for a new unit (not `v1` or `rev1`). The `code` argument must be JavaScript.",
         parameters: params_schema(),
     }
 }

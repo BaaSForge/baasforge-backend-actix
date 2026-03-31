@@ -59,7 +59,8 @@ pub fn payload_from_args(
     tool_call_id: Option<String>,
     tool_name: &str,
 ) -> Result<ChatMessagePayload, BoxError> {
-    let args = serde_json::from_value::<ToolFetchRelevantUnitsArgs>(args).unwrap_or_default();
+    let mut args = serde_json::from_value::<ToolFetchRelevantUnitsArgs>(args).unwrap_or_default();
+    args.query = args.query.trim().to_string();
     Ok(ChatMessagePayload::ToolFetchRelevantUnits(
         ToolFetchRelevantUnitsPayload {
             args,

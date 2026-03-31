@@ -1,5 +1,8 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
-use crate::libs::unit_slug::{compose_unit_id, validate_full_unit_id_for_tool, LLM_UNIT_ID_TOOL_DESCRIPTION};
+use crate::libs::unit_slug::{
+    compose_unit_id, normalize_full_unit_id_arg, validate_full_unit_id_for_tool,
+    LLM_UNIT_ID_TOOL_DESCRIPTION,
+};
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
@@ -74,7 +77,7 @@ pub fn payload_from_args(
 ) -> Result<ChatMessagePayload, BoxError> {
     let raw = serde_json::from_value::<ModifyUnitLlmArgs>(args)
         .map_err(|e| -> BoxError { format!("modify_unit args: {}", e).into() })?;
-    let unit_id = raw.unit_id.trim().to_string();
+    let unit_id = normalize_full_unit_id_arg(&raw.unit_id);
     let args = ToolModifyUnitArgs {
         unit_id,
         explanation: raw.explanation,
