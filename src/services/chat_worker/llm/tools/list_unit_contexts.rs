@@ -27,7 +27,8 @@ pub struct ToolListUnitContextsArgs {}
 pub struct ToolListUnitContextsPayload {
     #[serde(default)]
     pub args: ToolListUnitContextsArgs,
-    /// Distinct bounded-context slugs (`context_slug`) in use by visible tip units for this project.
+    /// Distinct bounded-context slugs (`context_slug`) from units visible to this chat session
+    /// (base release + session drafts).
     #[serde(default)]
     pub context_slugs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -73,7 +74,7 @@ pub const TOOL_NAME: &str = "list_unit_contexts";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "List every distinct bounded-context slug (`context_slug`) already used by units in this project. Call this to see which domains/contexts exist before proposing new units or overlapping names.",
+        description: "List every distinct bounded-context slug (`context_slug`) from units visible to this chat session — the production release that was live when this chat was created, plus any units created or modified in this session. Call this to see which domains/contexts exist before proposing new units or overlapping names.",
         parameters: params_schema(),
     }
 }
@@ -99,7 +100,7 @@ pub async fn handler(
     let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
     let tool_name = Some(TOOL_NAME.to_string());
     let context_slugs = block_on_db_tokio(&pool, move |conn| {
-        list_distinct_context_slugs_visible_tip_units(conn, project_id)
+        list_distinct_context_slugs_visible_tip_units(conn, project_id, session_id)
     })
     .await
     .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;

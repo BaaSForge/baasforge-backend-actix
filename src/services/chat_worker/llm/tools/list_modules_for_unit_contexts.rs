@@ -97,7 +97,7 @@ pub const TOOL_NAME: &str = "list_modules_for_unit_contexts";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "For each bounded context slug you pass, list the distinct module slugs (`module_slug`) used by units in that context. Use after you know which contexts matter (e.g. from list_unit_contexts) to place new units next to existing modules or avoid redundant module names.",
+        description: "For each bounded context slug you pass, list the distinct module slugs (`module_slug`) from units visible to this chat session — the production release that was live when this chat was created, plus any units created or modified in this session. Use after you know which contexts matter (e.g. from list_unit_contexts) to place new units next to existing modules or avoid redundant module names.",
         parameters: params_schema(),
     }
 }
@@ -136,7 +136,7 @@ pub async fn handler(
         (vec![], Some(msg))
     } else {
         let rows = block_on_db_tokio(&pool, move |conn| {
-            modules_by_context_slugs_visible_tip_units(conn, project_id, &context_slugs)
+            modules_by_context_slugs_visible_tip_units(conn, project_id, session_id, &context_slugs)
         })
         .await
         .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;

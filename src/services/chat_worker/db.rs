@@ -5,7 +5,7 @@ use crate::models::projects::{
     PlatformEnvironmentType, ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitRow,
     ProjectUnitType,
 };
-use crate::schema::{chat_messages, project_releases, project_runtimes, project_units};
+use crate::schema::{chat_messages, chat_sessions, project_releases, project_runtimes, project_units};
 use chrono::{DateTime, Utc};
 use diesel::dsl::{exists, max, min, not};
 use diesel::prelude::*;
@@ -193,37 +193,114 @@ pub fn load_units_from_latest_production_metadata(
     load_project_units_by_keys(conn, project_id, &keys)
 }
 
-/// Load units from the latest production release metadata, filtered by a case-insensitive substring
-/// match on id, slugs, code, or explanation. `chat_session_id` is unused (kept for tool/API stability).
+/// Load unit rows referenced by a specific release's `combinedUnitIDs` metadata.
+pub fn load_units_from_release_metadata(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    release_id: Uuid,
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    let release: Option<ProjectReleaseResponse> = project_releases::table
+        .filter(project_releases::id.eq(release_id))
+        .filter(project_releases::project_id.eq(project_id))
+        .select(ProjectReleaseResponse::as_select())
+        .first(conn)
+        .optional()?;
+    let keys: Vec<(Uuid, String)> = release
+        .and_then(|r| r.units_metadata)
+        .map(|m| {
+            m.combined_unit_refs
+                .into_iter()
+                .map(|r| (r.chat_session_id, r.unit_id))
+                .collect()
+        })
+        .unwrap_or_default();
+    load_project_units_by_keys(conn, project_id, &keys)
+}
+
+/// Resolve the chat session's base production release id (`live_production_release_id` stored at
+/// session creation time) and load units from that release, then merge in draft unit tips from the
+/// session itself. This gives the "effective unit set" visible to tools inside a chat session:
+/// base release units overlaid with any creates/modifies/removes made in the session.
+pub fn load_effective_units_for_chat_session(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    let base_release_id: Option<Uuid> = chat_sessions::table
+        .filter(chat_sessions::id.eq(session_id))
+        .select(chat_sessions::live_production_release_id)
+        .first::<Option<Uuid>>(conn)
+        .optional()?
+        .flatten();
+
+    let base_units = if let Some(rid) = base_release_id {
+        load_units_from_release_metadata(conn, project_id, rid)?
+    } else {
+        vec![]
+    };
+
+    let draft_tips = load_chat_session_unit_tips_for_merge(conn, project_id, session_id)?;
+    Ok(merge_base_with_draft_units(base_units, draft_tips))
+}
+
+/// Overlay session draft unit tips on top of base release units. Draft tips replace base units with
+/// the same logical key `(context_slug, module_slug, unit_type, unit_name_slug)`, and new drafts
+/// (no matching base unit) are appended. Units marked `is_deleted` in the draft are removed.
+fn merge_base_with_draft_units(
+    base_units: Vec<ProjectUnitResponse>,
+    draft_tips: Vec<ProjectUnitResponse>,
+) -> Vec<ProjectUnitResponse> {
+    if draft_tips.is_empty() {
+        return base_units;
+    }
+    let draft_map: HashMap<LogicalUnitKey, &ProjectUnitResponse> = draft_tips
+        .iter()
+        .map(|u| (logical_unit_key_from_row(&u.row), u))
+        .collect();
+
+    let mut merged: Vec<ProjectUnitResponse> = Vec::with_capacity(base_units.len() + draft_tips.len());
+    let mut seen_keys: HashSet<LogicalUnitKey> = HashSet::new();
+
+    for base in base_units {
+        let key = logical_unit_key_from_row(&base.row);
+        if let Some(draft) = draft_map.get(&key) {
+            seen_keys.insert(key);
+            if !draft.row.is_deleted {
+                merged.push((*draft).clone());
+            }
+        } else {
+            merged.push(base);
+        }
+    }
+
+    for draft in &draft_tips {
+        let key = logical_unit_key_from_row(&draft.row);
+        if !seen_keys.contains(&key) && !draft.row.is_deleted {
+            merged.push(draft.clone());
+        }
+    }
+
+    merged
+}
+
+// TODO: replace with embedding-based semantic search; for now returns all units unfiltered.
 pub fn load_units_for_latest_production_release(
     conn: &mut PooledConn,
     project_id: Uuid,
-    _chat_session_id: Uuid,
-    query: &str,
+    chat_session_id: Uuid,
+    _query: &str,
 ) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
-    tracing::debug!(query = %query, "load_units_for_latest_production_release");
-    let mut units = load_units_from_latest_production_metadata(conn, project_id)?;
-    let q = query.trim().to_lowercase();
-    if q.is_empty() {
-        return Ok(units);
-    }
-    units.retain(|u| {
-        u.id.to_lowercase().contains(&q)
-            || u.context_slug.to_lowercase().contains(&q)
-            || u.module_slug.to_lowercase().contains(&q)
-            || u.unit_name_slug.to_lowercase().contains(&q)
-            || u.code.as_deref().unwrap_or("").to_lowercase().contains(&q)
-            || u.explanation.as_deref().unwrap_or("").to_lowercase().contains(&q)
-    });
-    Ok(units)
+    load_effective_units_for_chat_session(conn, project_id, chat_session_id)
 }
 
-/// Distinct `context_slug` values from the latest production release snapshot.
+/// Distinct `context_slug` values from the effective unit set for a chat session (base release +
+/// session drafts).
 pub fn list_distinct_context_slugs_visible_tip_units(
     conn: &mut PooledConn,
     project_id: Uuid,
+    session_id: Uuid,
 ) -> Result<Vec<String>, diesel::result::Error> {
-    let units = load_units_from_latest_production_metadata(conn, project_id)?;
+    let units = load_effective_units_for_chat_session(conn, project_id, session_id)?;
     let mut seen = HashSet::new();
     let mut out: Vec<String> = units
         .into_iter()
@@ -246,17 +323,15 @@ pub fn list_distinct_context_slugs_from_units(units: &[ProjectUnitResponse]) -> 
     out
 }
 
-/// Distinct `(context_slug, module_slug)` pairs from the latest production snapshot, limited to `context_slugs`.
-pub fn list_distinct_context_module_pairs_visible_tip_units(
-    conn: &mut PooledConn,
-    project_id: Uuid,
+/// Distinct `(context_slug, module_slug)` pairs from a unit set, limited to `context_slugs`.
+fn context_module_pairs_from_units(
+    units: &[ProjectUnitResponse],
     context_slugs: &[String],
-) -> Result<Vec<(String, String)>, diesel::result::Error> {
+) -> Vec<(String, String)> {
     if context_slugs.is_empty() {
-        return Ok(vec![]);
+        return vec![];
     }
     let allow: HashSet<&str> = context_slugs.iter().map(|s| s.as_str()).collect();
-    let units = load_units_from_latest_production_metadata(conn, project_id)?;
     let mut pairs: HashSet<(String, String)> = HashSet::new();
     for u in units {
         if allow.contains(u.context_slug.as_str()) {
@@ -265,15 +340,32 @@ pub fn list_distinct_context_module_pairs_visible_tip_units(
     }
     let mut out: Vec<_> = pairs.into_iter().collect();
     out.sort();
-    Ok(out)
+    out
 }
 
-/// Builds ordered module lists per context (one entry per `contexts` element, stable order, deduped request).
-pub fn modules_by_context_slugs_visible_tip_units(
-    conn: &mut PooledConn,
-    project_id: Uuid,
-    context_slugs: &[String],
-) -> Result<Vec<(String, Vec<String>)>, diesel::result::Error> {
+/// Builds ordered module lists per context from a set of `(context_slug, module_slug)` pairs.
+fn modules_by_context_from_pairs(
+    ordered: Vec<String>,
+    pairs: Vec<(String, String)>,
+) -> Vec<(String, Vec<String>)> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for (ctx, module) in pairs {
+        map.entry(ctx).or_default().push(module);
+    }
+    for mods in map.values_mut() {
+        mods.sort();
+        mods.dedup();
+    }
+    ordered
+        .into_iter()
+        .map(|c| {
+            let modules = map.remove(&c).unwrap_or_default();
+            (c, modules)
+        })
+        .collect()
+}
+
+fn dedup_ordered_context_slugs(context_slugs: &[String]) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut ordered: Vec<String> = Vec::new();
     for s in context_slugs {
@@ -285,25 +377,50 @@ pub fn modules_by_context_slugs_visible_tip_units(
             ordered.push(t.to_string());
         }
     }
+    ordered
+}
+
+/// Distinct `(context_slug, module_slug)` pairs from the effective unit set for a chat session,
+/// limited to `context_slugs`.
+pub fn list_distinct_context_module_pairs_visible_tip_units(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    context_slugs: &[String],
+) -> Result<Vec<(String, String)>, diesel::result::Error> {
+    let units = load_effective_units_for_chat_session(conn, project_id, session_id)?;
+    Ok(context_module_pairs_from_units(&units, context_slugs))
+}
+
+/// Builds ordered module lists per context for a chat session (base release + session drafts).
+pub fn modules_by_context_slugs_visible_tip_units(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    context_slugs: &[String],
+) -> Result<Vec<(String, Vec<String>)>, diesel::result::Error> {
+    let ordered = dedup_ordered_context_slugs(context_slugs);
     if ordered.is_empty() {
         return Ok(vec![]);
     }
-    let pairs = list_distinct_context_module_pairs_visible_tip_units(conn, project_id, &ordered)?;
-    let mut map: HashMap<String, Vec<String>> = HashMap::new();
-    for (ctx, module) in pairs {
-        map.entry(ctx).or_default().push(module);
+    let pairs = list_distinct_context_module_pairs_visible_tip_units(conn, project_id, session_id, &ordered)?;
+    Ok(modules_by_context_from_pairs(ordered, pairs))
+}
+
+/// Project-level variant: builds ordered module lists from the current live production release
+/// (not scoped to a chat session). Used by REST APIs that operate outside a session context.
+pub fn modules_by_context_slugs_latest_production(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    context_slugs: &[String],
+) -> Result<Vec<(String, Vec<String>)>, diesel::result::Error> {
+    let ordered = dedup_ordered_context_slugs(context_slugs);
+    if ordered.is_empty() {
+        return Ok(vec![]);
     }
-    for mods in map.values_mut() {
-        mods.sort();
-        mods.dedup();
-    }
-    Ok(ordered
-        .into_iter()
-        .map(|c| {
-            let modules = map.remove(&c).unwrap_or_default();
-            (c, modules)
-        })
-        .collect())
+    let units = load_units_from_latest_production_metadata(conn, project_id)?;
+    let pairs = context_module_pairs_from_units(&units, &ordered);
+    Ok(modules_by_context_from_pairs(ordered, pairs))
 }
 
 /// Latest tip row per logical unit in `session_id` (no newer revision in that session for the same slugs).

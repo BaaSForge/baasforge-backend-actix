@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Description for the `query` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
-pub const ARG_QUERY_DESCRIPTION: &str = "Search query to filter or find relevant units in the current live production release (e.g. user's question, keywords, or a short phrase). Must not be empty.";
+pub const ARG_QUERY_DESCRIPTION: &str = "Required. Semantic search query to find relevant units visible to this chat session — the production release that was live when this chat was created, plus any units created or modified in this session. Pass a natural-language sentence or keywords describing intent (e.g. 'authentication and authorization logic', 'unit and module for inventory'). Must not be empty. Must not be '*' alone — large projects cannot return unbounded unit sets; always supply a substantive description of what to retrieve (even when the user wants a broad overview).";
 
 /// Args for load_latest_production_release_units. Schema from this struct is used for Gemini; GPT and Claude use params_schema() in spec().
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
@@ -93,7 +93,7 @@ pub const TOOL_NAME: &str = "load_latest_production_release_units";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Load units from the current live production snapshot for this project, filtered by a search query. You MUST always pass the 'query' parameter: set it to the user's exact question or a short phrase summarizing their intent (e.g. 'auth controller', 'payment flow'). Never call this with an empty or missing query. Use this to inspect what is already live before proposing creates or edits.",
+        description: "Search units visible to this chat session — the production release that was live when this chat was created, plus any units created or modified in this session. The query is matched semantically against unit content (required). You MUST pass a non-empty `query` every time: describe what you need in natural language (e.g. 'authentication and authorization logic', 'everything related to billing'). Do not omit `query`, do not pass an empty string, and do not pass '*' alone — large projects cannot afford unbounded listing without a stated intent. If the user wants a broad overview, call this tool multiple times with different queries. Use this to discover existing units before proposing creates or edits.",
         parameters: params_schema(),
     }
 }
@@ -122,13 +122,14 @@ pub async fn handler(
     let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
     let tool_name = Some(TOOL_NAME.to_string());
     let query_owned = args.query.clone();
-    let query_empty = query_owned.trim().is_empty();
+    let query_trimmed = query_owned.trim();
+    let query_invalid = query_trimmed.is_empty() || query_trimmed == "*";
 
-    let (units, error) = if query_empty {
+    let (units, error) = if query_invalid {
         (
             vec![],
             Some(
-                "load_latest_production_release_units: query must not be empty; pass the user's question or keywords."
+                "load_latest_production_release_units: `query` is required and must be non-empty; must not be '*' alone. Pass a natural-language description of what units to find (e.g. the user's question or topic)."
                     .to_string(),
             ),
         )

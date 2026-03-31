@@ -14,7 +14,7 @@ use crate::services::releases::{
 };
 use crate::services::chat_worker::db::{
     list_distinct_context_slugs_from_units, load_project_units_by_keys,
-    load_units_from_latest_production_metadata, modules_by_context_slugs_visible_tip_units,
+    load_units_from_latest_production_metadata, modules_by_context_slugs_latest_production,
 };
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
@@ -1270,7 +1270,7 @@ pub async fn handle_list_project_modules_by_contexts(
             return Ok::<_, diesel::result::Error>(None);
         }
 
-        let rows = modules_by_context_slugs_visible_tip_units(conn, project_id, &slugs)?;
+        let rows = modules_by_context_slugs_latest_production(conn, project_id, &slugs)?;
         let by_context: Vec<ContextModulesApiRow> = rows
             .into_iter()
             .map(|(context_slug, module_slugs)| ContextModulesApiRow {
