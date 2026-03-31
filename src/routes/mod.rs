@@ -307,6 +307,27 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
+                        "/projects/{id}/releases/{release_id}/units/all",
+                        web::post()
+                            .to(project::handle_list_project_release_units_all)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/releases/{release_id}/contexts",
+                        web::get()
+                            .to(project::handle_list_project_release_contexts)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/modules-by-contexts",
+                        web::post()
+                            .to(project::handle_list_project_modules_by_contexts)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
                         "/projects/{id}/non-draft-units",
                         web::get()
                             .to(project::handle_list_project_non_draft_units)

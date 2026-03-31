@@ -130,7 +130,7 @@ pub async fn handler(
         (vec![], Some(msg))
     } else {
         let rows = block_on_db_tokio(&pool, move |conn| {
-            modules_by_context_slugs_visible_tip_units(conn, project_id, session_id, &context_slugs)
+            modules_by_context_slugs_visible_tip_units(conn, project_id, &context_slugs)
         })
         .await
         .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;

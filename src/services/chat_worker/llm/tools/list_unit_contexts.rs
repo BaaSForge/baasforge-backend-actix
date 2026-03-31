@@ -99,7 +99,7 @@ pub async fn handler(
     let tool_call_id = existing.as_ref().and_then(|p| p.tool_call_id.clone());
     let tool_name = Some(TOOL_NAME.to_string());
     let context_slugs = block_on_db_tokio(&pool, move |conn| {
-        list_distinct_context_slugs_visible_tip_units(conn, project_id, session_id)
+        list_distinct_context_slugs_visible_tip_units(conn, project_id)
     })
     .await
     .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;

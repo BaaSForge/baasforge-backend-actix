@@ -222,7 +222,6 @@ pub fn load_units_for_latest_production_release(
 pub fn list_distinct_context_slugs_visible_tip_units(
     conn: &mut PooledConn,
     project_id: Uuid,
-    _chat_session_id: Uuid,
 ) -> Result<Vec<String>, diesel::result::Error> {
     let units = load_units_from_latest_production_metadata(conn, project_id)?;
     let mut seen = HashSet::new();
@@ -235,11 +234,22 @@ pub fn list_distinct_context_slugs_visible_tip_units(
     Ok(out)
 }
 
+/// Distinct `context_slug` values from arbitrary unit rows (e.g. a release snapshot), sorted.
+pub fn list_distinct_context_slugs_from_units(units: &[ProjectUnitResponse]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out: Vec<String> = units
+        .iter()
+        .map(|u| u.context_slug.clone())
+        .filter(|c| seen.insert(c.clone()))
+        .collect();
+    out.sort();
+    out
+}
+
 /// Distinct `(context_slug, module_slug)` pairs from the latest production snapshot, limited to `context_slugs`.
 pub fn list_distinct_context_module_pairs_visible_tip_units(
     conn: &mut PooledConn,
     project_id: Uuid,
-    _chat_session_id: Uuid,
     context_slugs: &[String],
 ) -> Result<Vec<(String, String)>, diesel::result::Error> {
     if context_slugs.is_empty() {
@@ -262,7 +272,6 @@ pub fn list_distinct_context_module_pairs_visible_tip_units(
 pub fn modules_by_context_slugs_visible_tip_units(
     conn: &mut PooledConn,
     project_id: Uuid,
-    chat_session_id: Uuid,
     context_slugs: &[String],
 ) -> Result<Vec<(String, Vec<String>)>, diesel::result::Error> {
     let mut seen: HashSet<String> = HashSet::new();
@@ -279,12 +288,7 @@ pub fn modules_by_context_slugs_visible_tip_units(
     if ordered.is_empty() {
         return Ok(vec![]);
     }
-    let pairs = list_distinct_context_module_pairs_visible_tip_units(
-        conn,
-        project_id,
-        chat_session_id,
-        &ordered,
-    )?;
+    let pairs = list_distinct_context_module_pairs_visible_tip_units(conn, project_id, &ordered)?;
     let mut map: HashMap<String, Vec<String>> = HashMap::new();
     for (ctx, module) in pairs {
         map.entry(ctx).or_default().push(module);

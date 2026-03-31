@@ -5,13 +5,17 @@ use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
     PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse, ProjectResponse,
     ProjectRuntimeInsert, ProjectRuntimeResponse, ProjectReleaseWithBaseline,
-    ProjectRuntimeWithLiveReleaseApi, ProjectRuntimeWithLiveReleaseResponse,
+    ProjectRuntimeWithLiveReleaseApi, ProjectRuntimeWithLiveReleaseResponse, ProjectUnitResponse,
+    ProjectUnitType,
 };
 use crate::services::releases::{
     attach_base_production_releases, attach_is_draft_flags_from_latest_production,
     project_release_id_for_revision_lane, ProjectReleaseRevisionLookup,
 };
-use crate::services::chat_worker::db::load_units_from_latest_production_metadata;
+use crate::services::chat_worker::db::{
+    list_distinct_context_slugs_from_units, load_project_units_by_keys,
+    load_units_from_latest_production_metadata, modules_by_context_slugs_visible_tip_units,
+};
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
@@ -36,8 +40,8 @@ use crate::{libs::api_response::api_success, routes::AppContext};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use diesel::prelude::*;
 use diesel::result::Error;
-use serde::Deserialize;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -845,7 +849,8 @@ pub async fn handle_list_project_releases(
             .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(project_releases::project_id.eq(project_id))
-            .order(project_releases::created_at.desc())
+            .order(project_releases::revision.desc())
+            .then_order_by(project_releases::created_at.desc())
             .select(ProjectReleaseResponse::as_select())
             .load::<ProjectReleaseResponse>(conn)?;
         attach_base_production_releases(conn, project_id, rows)
@@ -898,7 +903,7 @@ pub async fn handle_list_project_release_units(
             .units_metadata
             .as_ref()
             .map(|m| {
-                m.combined_unit_refs
+                m.new_unit_refs
                     .iter()
                     .map(|r| (r.chat_session_id, r.unit_id.clone()))
                     .collect()
@@ -909,8 +914,7 @@ pub async fn handle_list_project_release_units(
             return Ok(Some(vec![]));
         }
 
-        let units =
-            crate::services::chat_worker::db::load_project_units_by_keys(conn, project_id, &keys)?;
+        let units = load_project_units_by_keys(conn, project_id, &keys)?;
         let units = attach_is_draft_flags_from_latest_production(conn, project_id, units)?;
         Ok(Some(units))
     })
@@ -939,6 +943,377 @@ pub async fn handle_list_project_release_units(
         "Project release units fetched successfully",
         json!(units),
     ))
+}
+
+fn default_page() -> u32 {
+    1
+}
+
+fn default_page_size() -> u32 {
+    20
+}
+
+/// `(context_slug, module_slug)` sent together; used to filter release units (see [`handle_list_project_release_units_all`]).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ContextModulePair {
+    pub context_slug: String,
+    pub module_slug: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListReleaseUnitsAllBody {
+    #[serde(default = "default_page")]
+    pub page: u32,
+    #[serde(default = "default_page_size")]
+    pub page_size: u32,
+    /// When non-empty, only these unit types are included.
+    #[serde(default)]
+    pub unit_types: Vec<ProjectUnitType>,
+    /// When non-empty, only rows whose `context_slug` is in this list.
+    #[serde(default)]
+    pub context_slugs: Vec<String>,
+    /// When non-empty, only rows whose `(context_slug, module_slug)` matches one of these pairs.
+    #[serde(default)]
+    pub context_module_pairs: Vec<ContextModulePair>,
+}
+
+/// Filters, sorts, and paginates in-memory. Non-empty filter dimensions are combined with AND.
+fn filter_sort_paginate_release_units(
+    mut units: Vec<ProjectUnitResponse>,
+    unit_types: &[ProjectUnitType],
+    context_slugs: &[String],
+    context_module_pairs: &[ContextModulePair],
+    page: u32,
+    page_size: u32,
+) -> (Vec<ProjectUnitResponse>, u64, u32, u32) {
+    let type_set: Option<HashSet<ProjectUnitType>> = if unit_types.is_empty() {
+        None
+    } else {
+        Some(unit_types.iter().copied().collect())
+    };
+
+    let ctx_set: Option<HashSet<String>> = {
+        let v: Vec<String> = context_slugs
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if v.is_empty() {
+            None
+        } else {
+            Some(v.into_iter().collect())
+        }
+    };
+
+    let pair_set: Option<HashSet<(String, String)>> = {
+        let v: Vec<(String, String)> = context_module_pairs
+            .iter()
+            .map(|p| (p.context_slug.trim().to_string(), p.module_slug.trim().to_string()))
+            .filter(|(c, m)| !c.is_empty() && !m.is_empty())
+            .collect();
+        if v.is_empty() {
+            None
+        } else {
+            Some(v.into_iter().collect())
+        }
+    };
+
+    units.retain(|u| {
+        if let Some(ref ts) = type_set {
+            if !ts.contains(&u.unit_type) {
+                return false;
+            }
+        }
+        if let Some(ref cs) = ctx_set {
+            if !cs.contains(u.context_slug.as_str()) {
+                return false;
+            }
+        }
+        if let Some(ref ps) = pair_set {
+            if !ps.contains(&(u.context_slug.clone(), u.module_slug.clone())) {
+                return false;
+            }
+        }
+        true
+    });
+
+    units.sort_by(|a, b| {
+        a.context_slug
+            .cmp(&b.context_slug)
+            .then_with(|| a.module_slug.cmp(&b.module_slug))
+            .then_with(|| a.unit_name_slug.cmp(&b.unit_name_slug))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    let total = units.len() as u64;
+    let page = page.max(1);
+    let page_size = page_size.clamp(1, 100);
+    let offset = (page.saturating_sub(1) as usize).saturating_mul(page_size as usize);
+    let page_units: Vec<_> = units.into_iter().skip(offset).take(page_size as usize).collect();
+    (page_units, total, page, page_size)
+}
+
+/// All units in the release snapshot (`combinedUnitIDs`), with optional filters and pagination.
+/// [`ListReleaseUnitsAllBody::context_module_pairs`] must send `context_slug` and `module_slug` together per row.
+pub async fn handle_list_project_release_units_all(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<ListReleaseUnitsAllBody>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to list project release units (all)");
+
+    let (project_id, release_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+
+    let page_req = body.page.max(1);
+    let page_size_req = body.page_size.clamp(1, 100);
+    let unit_types = body.unit_types.clone();
+    let context_slugs = body.context_slugs.clone();
+    let context_module_pairs = body.context_module_pairs.clone();
+
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        let release: Option<ProjectReleaseResponse> = project_releases::table
+            .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(project_releases::project_id.eq(project_id))
+            .filter(project_releases::id.eq(release_id))
+            .select(ProjectReleaseResponse::as_select())
+            .first(conn)
+            .optional()?;
+
+        let Some(release) = release else {
+            return Ok::<_, diesel::result::Error>(None);
+        };
+
+        let keys: Vec<(Uuid, String)> = release
+            .units_metadata
+            .as_ref()
+            .map(|m| {
+                m.combined_unit_refs
+                    .iter()
+                    .map(|r| (r.chat_session_id, r.unit_id.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if keys.is_empty() {
+            let empty: Vec<ProjectUnitResponse> = vec![];
+            return Ok(Some((empty, 0u64, page_req, page_size_req)));
+        }
+
+        let units = load_project_units_by_keys(conn, project_id, &keys)?;
+        let units = attach_is_draft_flags_from_latest_production(conn, project_id, units)?;
+        let (page_units, total, page, page_size) = filter_sort_paginate_release_units(
+            units,
+            &unit_types,
+            &context_slugs,
+            &context_module_pairs,
+            page_req,
+            page_size_req,
+        );
+        Ok(Some((page_units, total, page, page_size)))
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(database::BlockingDbError::Query(e)) => {
+            log::error!(
+                "[handle_list_project_release_units_all] Failed to load: {:?}",
+                e
+            );
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            log::error!("[handle_list_project_release_units_all] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    let Some((units, total, page, page_size)) = outcome else {
+        return HttpResponse::NotFound().json(api_error("Project release not found", json!({})));
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Project release units (all) fetched successfully",
+        json!({
+            "units": units,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }),
+    ))
+}
+
+/// Distinct bounded-context slugs (`context_slug`) used by this release’s **new** units (`newUnitIDs`
+/// metadata), same scope as [`handle_list_project_release_units`].
+pub async fn handle_list_project_release_contexts(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid)>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to list project release contexts");
+
+    let (project_id, release_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        let release: Option<ProjectReleaseResponse> = project_releases::table
+            .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(project_releases::project_id.eq(project_id))
+            .filter(project_releases::id.eq(release_id))
+            .select(ProjectReleaseResponse::as_select())
+            .first(conn)
+            .optional()?;
+
+        let Some(release) = release else {
+            return Ok::<_, diesel::result::Error>(None);
+        };
+
+        let keys: Vec<(Uuid, String)> = release
+            .units_metadata
+            .as_ref()
+            .map(|m| {
+                m.new_unit_refs
+                    .iter()
+                    .map(|r| (r.chat_session_id, r.unit_id.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if keys.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+
+        let units = load_project_units_by_keys(conn, project_id, &keys)?;
+        Ok(Some(list_distinct_context_slugs_from_units(&units)))
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(database::BlockingDbError::Query(e)) => {
+            log::error!(
+                "[handle_list_project_release_contexts] Failed to load: {:?}",
+                e
+            );
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            log::error!("[handle_list_project_release_contexts] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    let Some(context_slugs) = outcome else {
+        return HttpResponse::NotFound().json(api_error("Project release not found", json!({})));
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Project release contexts fetched successfully",
+        json!({ "context_slugs": context_slugs }),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct ModulesByContextsBody {
+    pub context_slugs: Vec<String>,
+}
+
+/// For each requested bounded-context slug, distinct `module_slug` values used by units in the
+/// **latest production release** snapshot (same rules as the `list_modules_for_unit_contexts` tool).
+pub async fn handle_list_project_modules_by_contexts(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<Uuid>,
+    body: web::Json<ModulesByContextsBody>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to list modules by contexts");
+
+    let project_id = path.into_inner();
+    let user_id = access_payload.user_id;
+
+    let has_slugs = body
+        .context_slugs
+        .iter()
+        .any(|s| !s.trim().is_empty());
+    if !has_slugs {
+        return HttpResponse::BadRequest().json(api_error(
+            "context_slugs must contain at least one non-empty context slug",
+            json!({}),
+        ));
+    }
+
+    let slugs = body.context_slugs.clone();
+
+    let by_context = match database::block_on_db(&context.pool, move |conn| {
+        let project_ok: bool = projects::table
+            .filter(projects::id.eq(project_id))
+            .filter(projects::owner_user_id.eq(user_id))
+            .select(projects::id)
+            .first::<Uuid>(conn)
+            .optional()?
+            .is_some();
+
+        if !project_ok {
+            return Ok::<_, diesel::result::Error>(None);
+        }
+
+        let rows = modules_by_context_slugs_visible_tip_units(conn, project_id, &slugs)?;
+        let by_context: Vec<ContextModulesApiRow> = rows
+            .into_iter()
+            .map(|(context_slug, module_slugs)| ContextModulesApiRow {
+                context_slug,
+                module_slugs,
+            })
+            .collect();
+        Ok(Some(by_context))
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(database::BlockingDbError::Query(e)) => {
+            log::error!(
+                "[handle_list_project_modules_by_contexts] Failed to load: {:?}",
+                e
+            );
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            log::error!("[handle_list_project_modules_by_contexts] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    let Some(by_context) = by_context else {
+        return HttpResponse::NotFound().json(api_error("Project not found", json!({})));
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Modules by contexts fetched successfully",
+        json!({ "by_context": by_context }),
+    ))
+}
+
+#[derive(Serialize)]
+struct ContextModulesApiRow {
+    context_slug: String,
+    module_slugs: Vec<String>,
 }
 
 /// Points a stage runtime at an existing stage release revision (no new `project_releases` row).
