@@ -8,7 +8,6 @@ use diesel::Queryable;
 use diesel::Selectable;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
 use std::io::Write;
 use std::ops::Deref;
 use uuid::Uuid;
@@ -27,18 +26,6 @@ pub enum FrameworkType {
 #[serde(rename_all = "snake_case")]
 pub enum LanguageType {
     Rust,
-}
-
-#[derive(Debug, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
-#[ExistingTypePath = "crate::schema::sql_types::DeploymentStatusType"]
-#[DbValueStyle = "snake_case"]
-#[serde(rename_all = "snake_case")]
-pub enum DeploymentStatusType {
-    Deploying,
-    Stopped,
-    Pruned,
-    Up,
-    Failed,
 }
 
 #[derive(Debug, PartialEq, Eq, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
@@ -235,16 +222,6 @@ pub struct ProjectRuntimeResponse {
     pub name: Option<String>,
     pub slug: Option<String>,
     pub environment: PlatformEnvironmentType,
-    pub db_cluster_id: Option<Uuid>,
-    pub db_cluster_deployment_metadata: Option<Value>,
-    pub db_cluster_deployment_status: Option<DeploymentStatusType>,
-    pub db_cluster_deployment_is_healthy: Option<bool>,
-    pub db_cluster_deployment_last_health: Option<DateTime<Utc>>,
-    pub server_cluster_id: Option<Uuid>,
-    pub server_cluster_deployment_metadata: Option<Value>,
-    pub server_cluster_deployment_status: Option<DeploymentStatusType>,
-    pub server_cluster_deployment_is_healthy: Option<bool>,
-    pub server_cluster_deployment_last_health: Option<DateTime<Utc>>,
     /// [`crate::schema::project_releases::id`] when this runtime has a live release.
     pub live_release_id: Option<Uuid>,
 }

@@ -18,14 +18,6 @@ pub mod sql_types {
     pub struct ChatSessionRoleType;
 
     #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
-    #[diesel(postgres_type(name = "db_cluster_type"))]
-    pub struct DbClusterType;
-
-    #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
-    #[diesel(postgres_type(name = "deployment_status_type"))]
-    pub struct DeploymentStatusType;
-
-    #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "framework_type"))]
     pub struct FrameworkType;
 
@@ -44,10 +36,6 @@ pub mod sql_types {
     #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "project_unit_type"))]
     pub struct ProjectUnitType;
-
-    #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
-    #[diesel(postgres_type(name = "server_cluster_type"))]
-    pub struct ServerClusterType;
 
     #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "user_token_type"))]
@@ -91,20 +79,6 @@ diesel::table! {
         title -> Varchar,
         created_at -> Timestamptz,
         live_production_release_id -> Nullable<Uuid>,
-    }
-}
-
-diesel::table! {
-    use diesel::sql_types::*;
-    use super::sql_types::PlatformEnvironmentType;
-    use super::sql_types::DbClusterType;
-
-    db_clusters (id) {
-        id -> Uuid,
-        environment -> PlatformEnvironmentType,
-        db_type -> DbClusterType,
-        max_capacity -> Int4,
-        metadata -> Nullable<Jsonb>,
     }
 }
 
@@ -161,22 +135,11 @@ diesel::table! {
 diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::PlatformEnvironmentType;
-    use super::sql_types::DeploymentStatusType;
 
     project_runtimes (id) {
         id -> Uuid,
         project_id -> Uuid,
         environment -> PlatformEnvironmentType,
-        db_cluster_id -> Nullable<Uuid>,
-        db_cluster_deployment_metadata -> Nullable<Jsonb>,
-        db_cluster_deployment_status -> Nullable<DeploymentStatusType>,
-        db_cluster_deployment_is_healthy -> Nullable<Bool>,
-        db_cluster_deployment_last_health -> Nullable<Timestamptz>,
-        server_cluster_id -> Nullable<Uuid>,
-        server_cluster_deployment_metadata -> Nullable<Jsonb>,
-        server_cluster_deployment_status -> Nullable<DeploymentStatusType>,
-        server_cluster_deployment_is_healthy -> Nullable<Bool>,
-        server_cluster_deployment_last_health -> Nullable<Timestamptz>,
         #[max_length = 255]
         name -> Nullable<Varchar>,
         #[max_length = 100]
@@ -227,20 +190,6 @@ diesel::table! {
 
 diesel::table! {
     use diesel::sql_types::*;
-    use super::sql_types::PlatformEnvironmentType;
-    use super::sql_types::ServerClusterType;
-
-    server_clusters (id) {
-        id -> Uuid,
-        environment -> PlatformEnvironmentType,
-        server_type -> ServerClusterType,
-        max_capacity -> Int4,
-        metadata -> Nullable<Jsonb>,
-    }
-}
-
-diesel::table! {
-    use diesel::sql_types::*;
     use super::sql_types::UserTokenType;
 
     user_tokens (id) {
@@ -278,10 +227,8 @@ diesel::joinable!(chat_sessions -> users (user_id));
 diesel::joinable!(payments -> packages (package_id));
 diesel::joinable!(payments -> users (user_id));
 diesel::joinable!(project_releases -> projects (project_id));
-diesel::joinable!(project_runtimes -> db_clusters (db_cluster_id));
 diesel::joinable!(project_runtimes -> project_releases (live_release_id));
 diesel::joinable!(project_runtimes -> projects (project_id));
-diesel::joinable!(project_runtimes -> server_clusters (server_cluster_id));
 diesel::joinable!(project_units -> chat_sessions (chat_session_id));
 diesel::joinable!(project_units -> projects (project_id));
 diesel::joinable!(projects -> users (owner_user_id));
@@ -291,14 +238,12 @@ diesel::allow_tables_to_appear_in_same_query!(
     app_settings,
     chat_messages,
     chat_sessions,
-    db_clusters,
     packages,
     payments,
     project_releases,
     project_runtimes,
     project_units,
     projects,
-    server_clusters,
     user_tokens,
     users,
 );
