@@ -3,7 +3,7 @@
 use crate::database::PooledConn;
 use crate::models::projects::{PlatformEnvironmentType, ProjectRuntimeResponse};
 use crate::schema::{project_runtimes, projects};
-use crate::services::releases::project_release_id_for_revision_lane;
+use crate::services::releases::{project_release_id_for_revision_lane, ProjectReleaseRevisionLookup};
 use diesel::prelude::*;
 use uuid::Uuid;
 
@@ -12,6 +12,8 @@ pub enum StageRuntimeDeployDenied {
     NotFound,
     NotStage,
     NoSuchRelease,
+    /// More than one stage release row matches this project, session, and revision.
+    AmbiguousRevision,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +38,7 @@ pub fn apply_stage_release_deploy_to_runtime(
     project_id: Uuid,
     runtime_id: Uuid,
     revision: f64,
+    chat_session_id: Uuid,
 ) -> Result<Result<(ProjectRuntimeResponse, StageDeployNatsMeta), StageRuntimeDeployDenied>, diesel::result::Error> {
     let rt: Option<ProjectRuntimeResponse> = project_runtimes::table
         .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
@@ -60,9 +63,15 @@ pub fn apply_stage_release_deploy_to_runtime(
         project_id,
         revision,
         true,
+        chat_session_id,
     )? {
-        Some(id) => id,
-        None => return Ok(Err(StageRuntimeDeployDenied::NoSuchRelease)),
+        ProjectReleaseRevisionLookup::One(id) => id,
+        ProjectReleaseRevisionLookup::NoRow => {
+            return Ok(Err(StageRuntimeDeployDenied::NoSuchRelease));
+        }
+        ProjectReleaseRevisionLookup::Ambiguous => {
+            return Ok(Err(StageRuntimeDeployDenied::AmbiguousRevision));
+        }
     };
 
     let previous_release_id = rt.live_release_id;

@@ -7,7 +7,9 @@ use crate::models::projects::{
     ProjectRuntimeInsert, ProjectRuntimeResponse, ProjectReleaseWithBaseline,
     ProjectRuntimeWithLiveReleaseApi, ProjectRuntimeWithLiveReleaseResponse, ProjectUnitRow,
 };
-use crate::services::releases::attach_base_production_releases;
+use crate::services::releases::{
+    attach_base_production_releases, project_release_id_for_revision_lane, ProjectReleaseRevisionLookup,
+};
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
@@ -47,6 +49,8 @@ pub struct ProjectRequest {
 #[derive(Deserialize)]
 pub struct DeployReleaseBody {
     pub revision: f64,
+    /// Chat session that owns the `project_releases` row (required: revision is not unique per project).
+    pub chat_session_id: Uuid,
 }
 
 /// Body for [`handle_detach_stage_runtime_live_release`]: matches frontend union (revision | controller | detach-only).
@@ -54,7 +58,10 @@ pub struct DeployReleaseBody {
 #[serde(untagged)]
 pub enum DetachLiveReleaseBody {
     /// Variant A: deploy an existing stage release revision after clearing the previous live release.
-    ByRevision { revision: f64 },
+    ByRevision {
+        revision: f64,
+        chat_session_id: Uuid,
+    },
     /// Variant B: create/attach stage release from release-controller message scope (same as
     /// `POST .../release-controller-messages/{id}/stage-release`), bound to path `runtime_id`.
     ByController {
@@ -629,7 +636,10 @@ pub async fn handle_detach_stage_runtime_live_release(
     let user_id = access_payload.user_id;
 
     match body.into_inner() {
-        DetachLiveReleaseBody::ByRevision { revision } => {
+        DetachLiveReleaseBody::ByRevision {
+            revision,
+            chat_session_id,
+        } => {
             let outcome = match database::block_on_db(&context.pool, move |conn| {
                 apply_stage_release_deploy_to_runtime(
                     conn,
@@ -637,6 +647,7 @@ pub async fn handle_detach_stage_runtime_live_release(
                     project_id,
                     runtime_id,
                     revision,
+                    chat_session_id,
                 )
             })
             .await
@@ -678,10 +689,15 @@ pub async fn handle_detach_stage_runtime_live_release(
                 ),
                 Err(StageRuntimeDeployDenied::NoSuchRelease) => HttpResponse::BadRequest().json(
                     api_error(
-                        "No stage release with this revision exists for the project",
+                        "No stage release with this revision exists for this project and chat session",
                         json!({}),
                     ),
                 ),
+                Err(StageRuntimeDeployDenied::AmbiguousRevision) => HttpResponse::BadRequest()
+                    .json(api_error(
+                        "Multiple stage release rows match this project, chat session, and revision",
+                        json!({}),
+                    )),
             }
         }
         DetachLiveReleaseBody::ByController {
@@ -848,7 +864,7 @@ pub async fn handle_list_project_releases(
 pub async fn handle_list_project_release_units(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<(Uuid, f64)>,
+    path: web::Path<(Uuid, Uuid)>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -856,33 +872,45 @@ pub async fn handle_list_project_release_units(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to list project release units");
 
-    #[allow(unused)]
-    let (project_id, _release_revision) = path.into_inner();
+    let (project_id, release_id) = path.into_inner();
     let user_id = access_payload.user_id;
 
-    // TODO: retrieve (chat_session_id, unit id string) pairs from release metadata (id includes revision)
-    let units_keys_from_release_metadata: Vec<(Uuid, String)> = vec![];
-
-    let units = match database::block_on_db(&context.pool, move |conn| {
-        let keys = units_keys_from_release_metadata;
-        let project_owned = projects::table
-            .filter(projects::id.eq(project_id))
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        let release: Option<ProjectReleaseResponse> = project_releases::table
+            .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
-            .select(projects::id)
-            .first::<Uuid>(conn)
-            .optional()?
-            .is_some();
-        if !project_owned {
-            return Ok::<_, diesel::result::Error>(vec![]);
-        }
+            .filter(project_releases::project_id.eq(project_id))
+            .filter(project_releases::id.eq(release_id))
+            .select(ProjectReleaseResponse::as_select())
+            .first(conn)
+            .optional()?;
+
+        let Some(release) = release else {
+            return Ok::<_, diesel::result::Error>(None);
+        };
+
+        let keys: Vec<(Uuid, String)> = release
+            .units_metadata
+            .as_ref()
+            .map(|m| {
+                m.combined_unit_refs
+                    .iter()
+                    .map(|r| (r.chat_session_id, r.unit_id.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         if keys.is_empty() {
-            return Ok(vec![]);
+            return Ok(Some(vec![]));
         }
-        crate::services::chat_worker::db::load_project_units_by_keys(conn, project_id, &keys)
+
+        let units =
+            crate::services::chat_worker::db::load_project_units_by_keys(conn, project_id, &keys)?;
+        Ok(Some(units))
     })
     .await
     {
-        Ok(u) => u,
+        Ok(o) => o,
         Err(database::BlockingDbError::Query(e)) => {
             log::error!(
                 "[handle_list_project_release_units] Failed to load: {:?}",
@@ -895,6 +923,10 @@ pub async fn handle_list_project_release_units(
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }
+    };
+
+    let Some(units) = outcome else {
+        return HttpResponse::NotFound().json(api_error("Project release not found", json!({})));
     };
 
     HttpResponse::Ok().json(api_success(
@@ -919,9 +951,17 @@ pub async fn handle_deploy_stage_release(
     let (project_id, runtime_id) = path.into_inner();
     let user_id = access_payload.user_id;
     let revision = body.revision;
+    let chat_session_id = body.chat_session_id;
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
-        apply_stage_release_deploy_to_runtime(conn, user_id, project_id, runtime_id, revision)
+        apply_stage_release_deploy_to_runtime(
+            conn,
+            user_id,
+            project_id,
+            runtime_id,
+            revision,
+            chat_session_id,
+        )
     })
     .await
     {
@@ -958,9 +998,15 @@ pub async fn handle_deploy_stage_release(
             json!({}),
         )),
         Err(StageRuntimeDeployDenied::NoSuchRelease) => HttpResponse::BadRequest().json(api_error(
-            "No stage release with this revision exists for the project",
+            "No stage release with this revision exists for this project and chat session",
             json!({}),
         )),
+        Err(StageRuntimeDeployDenied::AmbiguousRevision) => HttpResponse::BadRequest().json(
+            api_error(
+                "Multiple stage release rows match this project, chat session, and revision",
+                json!({}),
+            ),
+        ),
     }
 }
 
@@ -980,11 +1026,13 @@ pub async fn handle_deploy_production_release(
     let (project_id, runtime_id) = path.into_inner();
     let user_id = access_payload.user_id;
     let revision = body.revision;
+    let chat_session_id = body.chat_session_id;
 
     enum Out {
         NotFound,
         NotProd,
         NoSuchRelease,
+        AmbiguousRevision,
         Ok(ProjectRuntimeResponse, Uuid, Option<Uuid>),
     }
 
@@ -1007,16 +1055,16 @@ pub async fn handle_deploy_production_release(
             return Ok(Out::NotProd);
         }
 
-        let deployed_release_id = project_releases::table
-            .filter(project_releases::project_id.eq(project_id))
-            .filter(project_releases::revision.eq(revision))
-            .filter(project_releases::is_stage.eq(false))
-            .select(project_releases::id)
-            .first::<Uuid>(conn)
-            .optional()?;
-
-        let Some(deployed_release_id) = deployed_release_id else {
-            return Ok(Out::NoSuchRelease);
+        let deployed_release_id = match project_release_id_for_revision_lane(
+            conn,
+            project_id,
+            revision,
+            false,
+            chat_session_id,
+        )? {
+            ProjectReleaseRevisionLookup::One(id) => id,
+            ProjectReleaseRevisionLookup::NoRow => return Ok(Out::NoSuchRelease),
+            ProjectReleaseRevisionLookup::Ambiguous => return Ok(Out::AmbiguousRevision),
         };
 
         let previous_release_id = rt.live_release_id;
@@ -1051,7 +1099,11 @@ pub async fn handle_deploy_production_release(
             json!({}),
         )),
         Out::NoSuchRelease => HttpResponse::BadRequest().json(api_error(
-            "No production release with this revision exists for the project",
+            "No production release with this revision exists for this project and chat session",
+            json!({}),
+        )),
+        Out::AmbiguousRevision => HttpResponse::BadRequest().json(api_error(
+            "Multiple production release rows match this project, chat session, and revision",
             json!({}),
         )),
         Out::Ok(rt, deployed_release_id, previous_release_id) => {

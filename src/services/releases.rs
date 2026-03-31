@@ -44,7 +44,8 @@ pub fn logical_unit_key(u: &ProjectUnitResponse) -> LogicalUnitKey {
 }
 
 /// Overlay session tips onto the previous production snapshot: per logical unit, keep the row with the
-/// larger `revision` (session wins when it introduces a newer revision).
+/// larger `revision`, or on a tie prefer the tip when it comes from a different chat session than
+/// the baseline row ([`session_unit_tip_replaces_previous`]).
 pub fn merge_combined_units(
     previous_combined: &[ProjectUnitResponse],
     session_tips: &[ProjectUnitResponse],
@@ -60,7 +61,7 @@ pub fn merge_combined_units(
                 map.insert(k, u.clone());
             }
             Some(prev) => {
-                if u.revision > prev.revision {
+                if session_unit_tip_replaces_previous(prev, u) {
                     map.insert(k, u.clone());
                 }
             }
@@ -91,7 +92,7 @@ pub fn compute_new_units(
         .filter(|u| {
             match prev_map.get(&logical_unit_key(u)) {
                 None => true,
-                Some(p) => u.revision > p.revision,
+                Some(p) => session_unit_tip_replaces_previous(p, u),
             }
         })
         .cloned()
@@ -132,21 +133,54 @@ pub fn project_unit_refs_from_responses(units: &[ProjectUnitResponse]) -> Vec<Re
         .collect()
 }
 
-/// Looks up `project_releases.id` for this project, revision, and stage vs production lane
-/// (used when the API still selects a release by revision).
+/// Result of resolving `project_releases.id` by `(project_id, chat_session_id, revision, lane)` — see
+/// [`project_release_id_for_revision_lane`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectReleaseRevisionLookup {
+    NoRow,
+    One(Uuid),
+    /// More than one row matches (should not happen for a normal DB; indicates inconsistent data).
+    Ambiguous,
+}
+
+/// Looks up `project_releases.id` for this project, revision, stage vs production lane, **and**
+/// chat session. Revision floats are not unique per project; callers must always pass the session
+/// that owns the release row.
 pub fn project_release_id_for_revision_lane(
     conn: &mut PooledConn,
     project_id: Uuid,
     revision: f64,
     is_stage: bool,
-) -> Result<Option<Uuid>, diesel::result::Error> {
-    project_releases::table
+    chat_session_id: Uuid,
+) -> Result<ProjectReleaseRevisionLookup, diesel::result::Error> {
+    let ids: Vec<Uuid> = project_releases::table
         .filter(project_releases::project_id.eq(project_id))
         .filter(project_releases::revision.eq(revision))
         .filter(project_releases::is_stage.eq(is_stage))
+        .filter(project_releases::chat_session_id.eq(Some(chat_session_id)))
         .select(project_releases::id)
-        .first::<Uuid>(conn)
-        .optional()
+        .load(conn)?;
+    Ok(match ids.len() {
+        0 => ProjectReleaseRevisionLookup::NoRow,
+        1 => ProjectReleaseRevisionLookup::One(ids[0]),
+        _ => ProjectReleaseRevisionLookup::Ambiguous,
+    })
+}
+
+/// When `prev` and `tip` share the same [`LogicalUnitKey`] and revision number, prefer `tip` if it
+/// belongs to a different chat session (reused revision across sessions).
+#[must_use]
+pub fn session_unit_tip_replaces_previous(
+    prev: &ProjectUnitResponse,
+    tip: &ProjectUnitResponse,
+) -> bool {
+    if tip.revision > prev.revision {
+        return true;
+    }
+    if tip.revision < prev.revision {
+        return false;
+    }
+    prev.chat_session_id != tip.chat_session_id
 }
 
 /// User-facing reason when stage/production release or unit mutations are blocked.
