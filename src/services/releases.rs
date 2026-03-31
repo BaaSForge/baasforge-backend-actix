@@ -1,11 +1,12 @@
 //! Stage and production release creation: metadata shape and merge helpers.
 use crate::database::PooledConn;
+use crate::models::chat_messages::ChatMessageType;
 use crate::models::projects::{
     PlatformEnvironmentType, ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitType,
 };
-use crate::schema::{chat_sessions, project_releases, project_runtimes};
+use crate::schema::{chat_messages, chat_sessions, project_releases, project_runtimes};
 use crate::services::chat_worker::db::load_project_units_by_keys;
-use diesel::dsl::max;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::Integer;
 use std::collections::HashMap;
@@ -279,13 +280,51 @@ pub fn load_latest_production_release_for_project(
         .optional()
 }
 
-/// Next `revision` for a new row with this `is_stage` flag (`MAX(revision) + 1` within project + stage/prod lane).
+/// 1-based index of this message among `ReleaseControllerBox` rows in the session (order: `created_at`, `id`).
+pub fn release_controller_ordinal_in_session(
+    conn: &mut PooledConn,
+    session_id: Uuid,
+    message_id: Uuid,
+) -> Result<i64, diesel::result::Error> {
+    let target = chat_messages::table
+        .filter(chat_messages::id.eq(message_id))
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .select((chat_messages::created_at, chat_messages::id))
+        .first::<(DateTime<Utc>, Uuid)>(conn)?;
+
+    chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
+        .filter(
+            chat_messages::created_at.lt(target.0).or(
+                chat_messages::created_at
+                    .eq(target.0)
+                    .and(chat_messages::id.le(message_id)),
+            ),
+        )
+        .count()
+        .get_result(conn)
+}
+
+#[inline]
+fn compose_chat_release_revision(major: i64, ordinal: i64) -> f64 {
+    major as f64 + ordinal as f64 / 10.0
+}
+
+/// Revision for a release created from a release-controller message: `major + ordinal/10`, with
+/// `major = floor(latest prod revision) + 1` (or `1` if none), and `ordinal` the 1-based index among
+/// [`ChatMessageType::ReleaseControllerBox`] rows in the session (same rule for stage and production).
 ///
-/// Call only inside an **outer** database transaction. Takes a transaction-scoped advisory lock so
-/// concurrent callers (e.g. multiple chat sessions) cannot read the same `MAX` and insert duplicate revisions.
-pub fn next_project_release_revision(
+/// Uses the latest **production** release as the baseline (see [`load_latest_production_release_for_project`]),
+/// matching `docs/releases.md`.
+///
+/// Call only inside an **outer** database transaction. Takes the same lane advisory lock as the old
+/// `MAX(revision)+1` path so concurrent in-chat creates serialize per project and lane.
+pub fn revision_for_chat_release_controller(
     conn: &mut PooledConn,
     project_id: Uuid,
+    session_id: Uuid,
+    message_id: Uuid,
     is_stage: bool,
 ) -> Result<f64, diesel::result::Error> {
     let (k1, k2) = project_release_lane_advisory_lock_keys(project_id, is_stage);
@@ -293,10 +332,11 @@ pub fn next_project_release_revision(
         .bind::<Integer, _>(k1)
         .bind::<Integer, _>(k2)
         .execute(conn)?;
-    let m: Option<f64> = project_releases::table
-        .filter(project_releases::project_id.eq(project_id))
-        .filter(project_releases::is_stage.eq(is_stage))
-        .select(max(project_releases::revision))
-        .first(conn)?;
-    Ok(m.unwrap_or(0.0) + 1.0)
+
+    let prev = load_latest_production_release_for_project(conn, project_id)?;
+    let base_floor = prev.map(|r| r.revision.floor()).unwrap_or(0.0);
+    let major = (base_floor as i64).saturating_add(1);
+
+    let ordinal = release_controller_ordinal_in_session(conn, session_id, message_id)?;
+    Ok(compose_chat_release_revision(major, ordinal))
 }

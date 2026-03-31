@@ -39,7 +39,7 @@ use crate::services::chat_worker::db::{
 };
 use crate::services::releases::{
     chat_session_is_read_only_for_releases, chat_session_read_only_from_baseline,
-    live_release_id_from_production_runtime, next_project_release_revision,
+    live_release_id_from_production_runtime, revision_for_chat_release_controller,
     prod_live_release_source_chat_session, production_release_id_for_live_runtimes,
     CHAT_SESSION_READ_ONLY_MESSAGE,
 };
@@ -1416,7 +1416,13 @@ pub async fn handle_create_production_release(
 
             let previous_prod_release_id = production_release_id_for_live_runtimes(conn, project_id)?;
 
-            let revision = next_project_release_revision(conn, project_id, false)?;
+            let revision = revision_for_chat_release_controller(
+                conn,
+                project_id,
+                session_id,
+                message_id,
+                false,
+            )?;
             let inserted: ProjectReleaseResponse = diesel::insert_into(project_releases::table)
                 .values((
                     project_releases::project_id.eq(project_id),

@@ -15,7 +15,7 @@ use crate::schema::projects;
 use crate::services::chat_worker::db::load_chat_session_draft_units_before_message_cutoff;
 use crate::services::releases::{
     chat_session_is_read_only_for_releases, combined_units_from_release_metadata, compute_new_units,
-    load_latest_production_release_for_project, merge_combined_units, next_project_release_revision,
+    load_latest_production_release_for_project, merge_combined_units, revision_for_chat_release_controller,
     project_unit_refs_from_responses, ReleaseUnitsMetadata,
 };
 use diesel::prelude::*;
@@ -148,7 +148,7 @@ pub fn transaction_create_stage_release_from_controller(
             combined_unit_refs: project_unit_refs_from_responses(&combined_units),
         };
 
-        let revision = next_project_release_revision(conn, project_id, true)?;
+        let revision = revision_for_chat_release_controller(conn, project_id, session_id, message_id, true)?;
         let inserted: ProjectReleaseResponse = diesel::insert_into(project_releases::table)
             .values((
                 project_releases::project_id.eq(project_id),
