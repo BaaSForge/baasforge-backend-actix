@@ -115,150 +115,35 @@ and how each endpoint connects to the bus (command publish or NATS query request
 
 {
   "unit_type": "api",
-  "endpoints": [
-    {
-      "id":            "<unique endpoint slug, e.g. place_order>",
-      "method":        "<HTTP method: GET | POST | PUT | PATCH | DELETE>",
-      "path":          "<URL path with colon params, e.g. /api/v1/orders/:order_id>",
-      "auth_required": <bool>,
-      "description":   "<what this endpoint does>",
 
-      "path_params": [
-        { "name": "<param name from path>", "type": "<string | number>", "description": "<purpose>" }
-      ],
-      "query_params": [
-        { "name": "<param name>", "type": "<type>", "required": <bool>, "description": "<purpose>" }
-      ],
+  "query_params": [
+    { "name": "<param name>", "type": "<type>", "required": <bool>, "description": "<purpose>" }
+  ],
 
-      "request_body_type":  "<Schema type name for HTTP request body, or null if no body>",
-      "response_body_type": "<Schema type name for HTTP response body>",
+  "request_body_type":  "<Schema type name for HTTP request body, or null if no body>",
+  "response_body_type": "<Schema type name for HTTP response body>",
 
-      // For write endpoints (POST/PUT/PATCH/DELETE that publish commands):
-      "command": {
-        "subject":         "<NATS command subject, e.g. cmd.shop.orders.place-order>",
-        "payload_type":    "<Schema type name for command body, e.g. PlaceOrderPayload>",
-        "correlated_wait": <bool — true if handler blocks for event reply>,
-        "expected_event":  "<event subject to wait for, e.g. evt.shop.orders.place-order, or null if fire-and-forget>",
-        "timeout_ms":      <number — max wait time for correlated reply, e.g. 10000>
-      },
+  // For write endpoints (POST/PUT/PATCH/DELETE that publish commands):
+  "command": {
+    "subject":         "<NATS command subject, e.g. cmd.shop.orders.place-order>",
+    "payload_type":    "<Schema type name for command body, e.g. PlaceOrderPayload>",
+    "correlated_wait": <bool — true if handler blocks for event reply>,
+    "expected_event":  "<event subject to wait for, e.g. evt.shop.orders.place-order, or null if fire-and-forget>",
+    "timeout_ms":      <number — max wait time for correlated reply, e.g. 10000>
+  },
 
-      // For read endpoints (GET or any that dispatch queries):
-      "query": {
-        "subject":     "<NATS query subject, e.g. qry.shop.orders.get-by-id>",
-        "input_type":  "<Schema type name for query input>",
-        "output_type": "<Schema type name for query output>"
-      },
-
-      "success_status":   <HTTP status code on success, e.g. 200, 201, 202>,
-      "error_responses": [
-        { "status": <number>, "code": "<machine-readable>", "description": "<when this happens>" }
-      ]
-    }
-  ]
+  // For read endpoints (GET or any that dispatch queries):
+  "query": {
+    "subject":     "<NATS query subject, e.g. qry.shop.orders.get-by-id>",
+    "input_type":  "<Schema type name for query input>",
+    "output_type": "<Schema type name for query output>"
+  },
 }
 
 NOTE: An endpoint has EITHER a "command" block OR a "query" block, not both.
-Endpoints that do both (rare: e.g. read-then-write) should be split or use "command" with
-correlated_wait=true where the event reply carries the read data.
-
-### Example
-
-{
-  "unit_type": "api",
-  "endpoints": [
-    {
-      "id": "place_order",
-      "method": "POST",
-      "path": "/api/v1/orders",
-      "auth_required": true,
-      "description": "Place a new order for the authenticated customer",
-      "path_params": [],
-      "query_params": [],
-      "request_body_type": "PlaceOrderRequest",
-      "response_body_type": "PlaceOrderResponse",
-      "command": {
-        "subject": "cmd.shop.orders.place-order",
-        "payload_type": "PlaceOrderPayload",
-        "correlated_wait": true,
-        "expected_event": "evt.shop.orders.place-order",
-        "timeout_ms": 10000
-      },
-      "success_status": 201,
-      "error_responses": [
-        { "status": 400, "code": "validation_error", "description": "Invalid request body" },
-        { "status": 401, "code": "unauthorized",     "description": "Missing or invalid Bearer token" },
-        { "status": 504, "code": "timeout",           "description": "Command processing timed out" }
-      ]
-    },
-    {
-      "id": "get_order",
-      "method": "GET",
-      "path": "/api/v1/orders/:order_id",
-      "auth_required": true,
-      "description": "Fetch a single order by ID",
-      "path_params": [
-        { "name": "order_id", "type": "string", "description": "UUID of the order" }
-      ],
-      "query_params": [],
-      "request_body_type": null,
-      "response_body_type": "GetOrderByIdOutput",
-      "query": {
-        "subject": "qry.shop.orders.get-by-id",
-        "input_type": "GetOrderByIdInput",
-        "output_type": "GetOrderByIdOutput"
-      },
-      "success_status": 200,
-      "error_responses": [
-        { "status": 404, "code": "not_found", "description": "Order does not exist" },
-        { "status": 403, "code": "forbidden", "description": "Order belongs to another customer" }
-      ]
-    },
-    {
-      "id": "list_orders",
-      "method": "GET",
-      "path": "/api/v1/orders",
-      "auth_required": true,
-      "description": "List orders for the authenticated customer with pagination",
-      "path_params": [],
-      "query_params": [
-        { "name": "page",      "type": "number",  "required": false, "description": "Page number (default 1)" },
-        { "name": "per_page",  "type": "number",  "required": false, "description": "Items per page (default 20, max 100)" },
-        { "name": "status",    "type": "string",  "required": false, "description": "Filter by status" }
-      ],
-      "request_body_type": null,
-      "response_body_type": "ListOrdersOutput",
-      "query": {
-        "subject": "qry.shop.orders.list",
-        "input_type": "ListOrdersInput",
-        "output_type": "ListOrdersOutput"
-      },
-      "success_status": 200,
-      "error_responses": [
-        { "status": 401, "code": "unauthorized", "description": "Missing or invalid Bearer token" }
-      ]
-    }
-  ]
-}
 
 ### How Other Units Use This Metadata
 
-- Command unit:  reads "command.subject" to know which command subjects API will publish, so it knows
-                 which handlers to implement.
-- Query unit:    reads "query.subject" + "query.input_type" + "query.output_type" to know which
-                 query handlers to implement and what types to use.
-- Schema unit:   reads all type names referenced here ("request_body_type", "response_body_type",
-                 "command.payload_type", "query.input_type", "query.output_type") to know which
-                 types it must define.
-- Gateway unit:  does NOT read API metadata (Gateway handles non-HTTP ingress).
-- Flow unit:     reads "command.expected_event" to understand the event subjects API expects,
-                 which confirms the events Command must emit.
-
 ### Rules
 
-- Every endpoint MUST have a unique "id" slug within the unit.
-- "method" MUST be an uppercase HTTP verb.
-- "path" MUST use colon-prefix for path parameters (e.g. :order_id), matching the path_params list.
-- Type names in "request_body_type", "response_body_type", "command.payload_type", "query.input_type",
-  "query.output_type" MUST match exactly the type names defined in the Schema unit's metadata.
-- If "correlated_wait" is true, "expected_event" MUST be specified.
-- If "correlated_wait" is false, "expected_event" should be null and "success_status" is typically 202."#;
+"#;
