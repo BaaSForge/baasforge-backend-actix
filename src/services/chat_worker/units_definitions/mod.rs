@@ -77,3 +77,43 @@ pub fn all_details() -> String {
         .map(|(title, detail)| format!("### {title}\n\n{detail}\n"))
         .collect()
 }
+
+pub fn all_communications() -> String {
+    const ROWS: &[(&str, &str)] = &[
+        (bootstrap::TITLE, bootstrap::COMMUNICATION),
+        (action::TITLE, action::COMMUNICATION),
+        (api::TITLE, api::COMMUNICATION),
+        (command::TITLE, command::COMMUNICATION),
+        (flow::TITLE, flow::COMMUNICATION),
+        (gateway::TITLE, gateway::COMMUNICATION),
+        (projection::TITLE, projection::COMMUNICATION),
+        (query::TITLE, query::COMMUNICATION),
+        (runtime::TITLE, runtime::COMMUNICATION),
+        (schema::TITLE, schema::COMMUNICATION),
+        (timer::TITLE, timer::COMMUNICATION),
+    ];
+    ROWS
+        .iter()
+        .map(|(title, comm)| format!("### {title}\n\n{comm}\n"))
+        .collect()
+}
+
+pub fn all_metadata() -> String {
+    const ROWS: &[(&str, &str)] = &[
+        (bootstrap::TITLE, bootstrap::METADATA),
+        (action::TITLE, action::METADATA),
+        (api::TITLE, api::METADATA),
+        (command::TITLE, command::METADATA),
+        (flow::TITLE, flow::METADATA),
+        (gateway::TITLE, gateway::METADATA),
+        (projection::TITLE, projection::METADATA),
+        (query::TITLE, query::METADATA),
+        (runtime::TITLE, runtime::METADATA),
+        (schema::TITLE, schema::METADATA),
+        (timer::TITLE, timer::METADATA),
+    ];
+    ROWS
+        .iter()
+        .map(|(title, meta)| format!("### {title}\n\n{meta}\n"))
+        .collect()
+}
