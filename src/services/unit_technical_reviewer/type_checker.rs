@@ -159,7 +159,7 @@ impl TsgoIpcClient {
     }
 
     fn handle_fs_callback(&self, method: &str, params: &Value) -> Value {
-        eprintln!("🔧 FS CALLBACK: method={}, params={}", method, params);
+        // eprintln!("🔧 FS CALLBACK: method={}, params={}", method, params);
     
         // Extract path: string or first element of array
         let requested_path = match params {
@@ -190,7 +190,7 @@ impl TsgoIpcClient {
         let normalized = Path::new(&full_path).components().collect::<PathBuf>();
         let full_path = normalized.to_string_lossy().to_string();
     
-        eprintln!("   → full path: {}", full_path);
+        // eprintln!("   → full path: {}", full_path);
     
         let is_dir = |p: &str| -> bool {
             if p == VIRTUAL_ROOT || p == format!("{}/", VIRTUAL_ROOT) {
