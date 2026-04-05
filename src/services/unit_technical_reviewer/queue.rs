@@ -1,5 +1,5 @@
 use crate::services::message_queue::{
-    publish_with_channel, PublishError, SharedRabbitPublisher,
+    DeadLetterSpec, RetryPolicy, publish_with_channel, PublishError, SharedRabbitPublisher,
 };
 use lapin::{Connection, Consumer};
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,33 @@ pub const UNIT_REVIEWER_EXCHANGE: &str = "unit_reviewer_exchange";
 pub const UNIT_REVIEWER_WORK_QUEUE: &str = "unit_reviewer_work_queue";
 pub const UNIT_REVIEWER_WORK_QUEUE_BINDING: &str = "unit_reviewer.#";
 pub const UNIT_REVIEWER_ROUTING_KEY: &str = "unit_reviewer.check";
+
+/// Retry delay queue name — not referenced at runtime; the broker routes messages here automatically
+/// via the binding on RETRY_DELAY_EXCHANGE. Exists as a code-level reference to the queue declared
+/// in queue_setup_http.sh so the name is searchable and kept in sync.
+pub const UNIT_REVIEWER_RETRY_DELAY_QUEUE: &str = "retry_delay_unit_reviewer_work_queue";
+
+/// Dead letter queue for the unit reviewer: messages that exceeded max retries land here.
+pub const UNIT_REVIEWER_DEAD_LETTER_EXCHANGE: &str = "unit_reviewer_dead_letter_exchange";
+pub const UNIT_REVIEWER_DEAD_LETTER_QUEUE: &str = "unit_reviewer_dead_letter_queue";
+pub const UNIT_REVIEWER_DEAD_LETTER_BINDING: &str = "unit_reviewer.#";
+
+/// Max retries: attempt 0, 1, 2 (3 total). After attempt 2 fails, send to DLQ.
+pub const UNIT_REVIEWER_MAX_RETRIES: u32 = 2;
+
+pub fn reviewer_retry_policy() -> RetryPolicy {
+    RetryPolicy {
+        max_retries: UNIT_REVIEWER_MAX_RETRIES,
+    }
+}
+
+pub fn reviewer_dead_letter_spec() -> DeadLetterSpec {
+    DeadLetterSpec {
+        exchange_name: UNIT_REVIEWER_DEAD_LETTER_EXCHANGE.to_string(),
+        queue_name: UNIT_REVIEWER_DEAD_LETTER_QUEUE.to_string(),
+        binding_key: UNIT_REVIEWER_DEAD_LETTER_BINDING.to_string(),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +69,11 @@ pub struct UnitReviewerQueueMessage {
     pub context_slug: String,
     pub module_slug: String,
     pub unit_name_slug: String,
+    /// Retry attempt count. 0 = first attempt; incremented each time the message is sent
+    /// to the retry delay queue. When this reaches UNIT_REVIEWER_MAX_RETRIES, the message
+    /// is sent to the dead letter queue instead.
+    #[serde(default)]
+    pub retry_num: u32,
 }
 
 pub async fn publish_reviewer_message(

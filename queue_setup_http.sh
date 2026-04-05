@@ -101,4 +101,32 @@ curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
   "$MGMT/api/bindings/$VHOST/e/unit_reviewer_exchange/q/unit_reviewer_work_queue" \
   -d '{"routing_key":"unit_reviewer.#"}'
 
+# Retry delay queue for unit reviewer: per-message TTL, DLX back to unit_reviewer_exchange.
+# Shares the same retry delay exchange as the chat worker (RETRY_DELAY_EXCHANGE env var).
+echo "Declaring retry_delay_unit_reviewer_work_queue (per-message TTL only, DLX to unit_reviewer_exchange)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/queues/$VHOST/retry_delay_unit_reviewer_work_queue" \
+  -d '{"durable":true,"auto_delete":false,"arguments":{"x-dead-letter-exchange":"unit_reviewer_exchange"}}'
+
+echo "Binding retry_delay_unit_reviewer_work_queue to $RETRY_EXCHANGE with routing_key unit_reviewer.#..."
+curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
+  "$MGMT/api/bindings/$VHOST/e/$RETRY_EXCHANGE/q/retry_delay_unit_reviewer_work_queue" \
+  -d '{"routing_key":"unit_reviewer.#"}'
+
+# Dead letter queue for unit reviewer: messages that exceeded max retries (no TTL; inspect/replay later).
+echo "Declaring unit_reviewer_dead_letter_exchange (topic, durable)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/exchanges/$VHOST/unit_reviewer_dead_letter_exchange" \
+  -d '{"type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}}'
+
+echo "Declaring unit_reviewer_dead_letter_queue (durable, no TTL)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/queues/$VHOST/unit_reviewer_dead_letter_queue" \
+  -d '{"durable":true,"auto_delete":false,"arguments":{}}'
+
+echo "Binding unit_reviewer_dead_letter_queue to unit_reviewer_dead_letter_exchange with routing_key unit_reviewer.#..."
+curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
+  "$MGMT/api/bindings/$VHOST/e/unit_reviewer_dead_letter_exchange/q/unit_reviewer_dead_letter_queue" \
+  -d '{"routing_key":"unit_reviewer.#"}'
+
 echo "Queue setup done (HTTP API)."

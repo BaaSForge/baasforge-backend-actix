@@ -1,6 +1,8 @@
 use crate::configs::Settings;
 use crate::database::{establish_pool, DbPool};
-use crate::services::message_queue::{create_shared_publisher, SharedRabbitPublisher};
+use crate::services::message_queue::{
+    create_shared_publisher, publish_to_dead_letter, publish_to_retry_delay, SharedRabbitPublisher,
+};
 use crate::services::unit_technical_reviewer::handlers::{
     process_create_unit_compiler_check, process_create_unit_rule_check,
     process_modify_unit_compiler_check, process_modify_unit_rule_check,
@@ -8,8 +10,9 @@ use crate::services::unit_technical_reviewer::handlers::{
 };
 use crate::services::unit_technical_reviewer::helpers::{BoxError, RedisConn};
 use crate::services::unit_technical_reviewer::queue::{
-    create_reviewer_work_consumer_on_connection, UnitReviewerMessageType, UnitReviewerQueueMessage,
-    UNIT_REVIEWER_EXCHANGE,
+    create_reviewer_work_consumer_on_connection, reviewer_dead_letter_spec, reviewer_retry_policy,
+    UnitReviewerMessageType, UnitReviewerQueueMessage, UNIT_REVIEWER_EXCHANGE,
+    UNIT_REVIEWER_ROUTING_KEY,
 };
 use lapin::options::BasicAckOptions;
 use lapin::ConnectionProperties;
@@ -36,6 +39,7 @@ pub async fn run() -> Result<(), BoxError> {
     );
 
     let rabbit_url = settings.rabbit_url.clone();
+    let retry_delay_exchange = settings.retry_delay_exchange.clone();
     info!("Connecting to RabbitMQ...");
     let connection = lapin::Connection::connect(&rabbit_url, ConnectionProperties::default())
         .await
@@ -44,6 +48,11 @@ pub async fn run() -> Result<(), BoxError> {
         create_reviewer_work_consumer_on_connection(&connection)
             .await
             .map_err(|e| -> BoxError { e.into() })?;
+    // Separate channel for retry/DLQ publishes so failures don't block the consumer channel.
+    let retry_channel = connection
+        .create_channel()
+        .await
+        .map_err(|e| -> BoxError { e.into() })?;
 
     // Single publisher: used both for dispatching back to chat_session_exchange
     // (via maybe_complete_invoking_message → publish_with_publisher which hardcodes CHAT_SESSION_EXCHANGE)
@@ -76,12 +85,99 @@ pub async fn run() -> Result<(), BoxError> {
         tracing::info!(
             tool_message_id = %message.tool_message_id,
             message_type = ?message.message_type,
+            retry_num = message.retry_num,
             "Unit reviewer: processing message"
         );
 
-        let result = process_message(&pool, &redis_conn, &publisher, message).await;
-        if let Err(e) = result {
-            tracing::error!("Unit reviewer message processing failed: {}", e);
+        let retry_num = message.retry_num;
+        let retry_policy = reviewer_retry_policy();
+        let dead_letter_spec = reviewer_dead_letter_spec();
+
+        let result = process_message(&pool, &redis_conn, &publisher, message.clone()).await;
+        if let Err(ref e) = result {
+            if retry_policy.should_dead_letter(retry_num) {
+                tracing::error!(
+                    tool_message_id = %message.tool_message_id,
+                    retry_num,
+                    "Unit reviewer processing failed after max retries, sending to dead letter: {}",
+                    e
+                );
+                if let Err(dl_e) = publish_to_dead_letter(
+                    &retry_channel,
+                    &dead_letter_spec.exchange_name,
+                    UNIT_REVIEWER_ROUTING_KEY,
+                    &delivery.data,
+                )
+                .await
+                {
+                    tracing::error!("Failed to publish reviewer message to dead letter: {}", dl_e);
+                }
+            } else {
+                let next_retry_num = retry_num + 1;
+                tracing::error!(
+                    tool_message_id = %message.tool_message_id,
+                    retry_num,
+                    next_retry_num,
+                    "Unit reviewer processing failed, scheduling retry: {}",
+                    e
+                );
+                let mut message_for_retry = message.clone();
+                message_for_retry.retry_num = next_retry_num;
+                match serde_json::to_vec(&message_for_retry) {
+                    Ok(payload_bytes) => {
+                        if let Err(retry_e) = publish_to_retry_delay(
+                            &retry_channel,
+                            &retry_delay_exchange,
+                            UNIT_REVIEWER_ROUTING_KEY,
+                            &payload_bytes,
+                            retry_num,
+                            &retry_policy,
+                        )
+                        .await
+                        {
+                            tracing::error!(
+                                tool_message_id = %message.tool_message_id,
+                                "Failed to publish reviewer message to retry delay: {}",
+                                retry_e
+                            );
+                            // Fallback: send to DLQ so the message is not silently lost.
+                            if let Err(dl_e) = publish_to_dead_letter(
+                                &retry_channel,
+                                &dead_letter_spec.exchange_name,
+                                UNIT_REVIEWER_ROUTING_KEY,
+                                &delivery.data,
+                            )
+                            .await
+                            {
+                                tracing::error!(
+                                    "Failed to publish reviewer message to dead letter (after retry publish failure): {}",
+                                    dl_e
+                                );
+                            }
+                        }
+                    }
+                    Err(ser_e) => {
+                        tracing::error!(
+                            tool_message_id = %message.tool_message_id,
+                            "Failed to serialize reviewer message for retry, sending to dead letter: {}",
+                            ser_e
+                        );
+                        if let Err(dl_e) = publish_to_dead_letter(
+                            &retry_channel,
+                            &dead_letter_spec.exchange_name,
+                            UNIT_REVIEWER_ROUTING_KEY,
+                            &delivery.data,
+                        )
+                        .await
+                        {
+                            tracing::error!(
+                                "Failed to publish reviewer message to dead letter (after serialize failure): {}",
+                                dl_e
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {

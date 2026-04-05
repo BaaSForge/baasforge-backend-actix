@@ -306,6 +306,7 @@ pub async fn handler(
             context_slug: parent.context_slug.clone(),
             module_slug: parent.module_slug.clone(),
             unit_name_slug: parent.unit_name_slug.clone(),
+            retry_num: 0,
         };
         publish_reviewer_message(&publisher, &reviewer_message)
             .await

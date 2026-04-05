@@ -14,7 +14,9 @@ pub const CHAT_SESSION_EXCHANGE: &str = "chat_session_exchange";
 pub const CHAT_WORK_QUEUE: &str = "chat_session_work_queue";
 pub const CHAT_WORK_QUEUE_BINDING: &str = "chat_session.#";
 
-/// Retry delay queue: failed messages wait (per-message exponential TTL) then are dead-lettered back to the work exchange.
+/// Retry delay queue name — not referenced at runtime; the broker routes messages here automatically
+/// via the binding on RETRY_DELAY_EXCHANGE. Exists as a code-level reference to the queue declared
+/// in queue_setup_http.sh so the name is searchable and kept in sync.
 pub const CHAT_RETRY_DELAY_QUEUE: &str = "retry_delay_chat_session_work_queue";
 
 /// Dead letter queue for chat: messages that exceeded max retries (no TTL; process/log later).
