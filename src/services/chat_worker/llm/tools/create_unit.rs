@@ -13,6 +13,9 @@ use crate::schema::{chat_messages, project_units};
 use crate::services::chat_worker::db::load_units_from_latest_production_metadata;
 use crate::services::chat_worker::units_definitions;
 use crate::services::message_queue::SharedRabbitPublisher;
+use crate::services::unit_technical_reviewer::queue::{
+    publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
+};
 use diesel::dsl::exists;
 use diesel::prelude::*;
 use diesel::result::DatabaseErrorKind;
@@ -194,7 +197,7 @@ pub async fn handler(
     message_id: Uuid,
     user_id: Uuid,
     payload: Option<ChatMessagePayload>,
-    _rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
+    rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
 ) -> Result<(), BoxError> {
     tracing::info!(
         target: "baal_backend_actix::tool_create_unit",
@@ -270,7 +273,7 @@ pub async fn handler(
 
     let mut pre_check_sub_task = UnitSubTaskStatus::Waiting;
 
-    let (created_unit, error) = if let Some(msg) = slug_error {
+    let (created_unit, pre_check_error) = if let Some(msg) = slug_error {
         pre_check_sub_task = UnitSubTaskStatus::Failed;
         (None, Some(msg))
     } else {
@@ -365,37 +368,87 @@ pub async fn handler(
             }
         }
     };
-    let unit_for_ws = created_unit.clone();
 
-    let full_payload = ToolCreateUnitPayload {
-        args,
+    if pre_check_sub_task == UnitSubTaskStatus::Failed {
+        // Pre-check failed: save the message as Completed with failure details and let the LLM
+        // continue immediately (no reviewer checks are dispatched for failed pre-checks).
+        let full_payload = ToolCreateUnitPayload {
+            args,
+            created_unit: None,
+            pre_check_sub_task,
+            compiler_check_sub_task: UnitSubTaskStatus::Waiting,
+            rule_check_sub_task: UnitSubTaskStatus::Waiting,
+            error: pre_check_error,
+            tool_call_id,
+            tool_name,
+        };
+        let payload_value = serde_json::to_value(&full_payload)
+            .map_err(|e| -> BoxError { format!("serialize create_unit pre_check failure: {}", e).into() })?;
+        let updated_row = block_on_db_tokio(&pool, move |conn| {
+            diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+                .set((
+                    chat_messages::payload.eq(Some(payload_value)),
+                    chat_messages::status.eq(ChatMessageStatus::Completed),
+                ))
+                .returning(ChatMessageRow::as_returning())
+                .get_result(conn)
+        })
+        .await
+        .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
+        let channel = user_channel(user_id);
+        let message: ChatMessageResponse = updated_row.into();
+        let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+            project_id,
+            session_id,
+            message,
+        });
+        let mut guard = redis_conn.lock().await;
+        publish_event_to_channel(&mut *guard, &channel, &event)
+            .await
+            .map_err(|e| -> BoxError { e.to_string().into() })?;
+        // on_tool_message_finished → maybe_complete_invoking_message will fire after Ok(()) return,
+        // the tool message is now Completed so the LLM continuation will be triggered.
+        return Ok(());
+    }
+
+    // Pre-check succeeded: the unit row has been inserted. Save the partial state to DB
+    // (pre_check=Succeeded, compiler/rule=Waiting, status stays Generating) and broadcast to WS,
+    // then dispatch create_unit_compiler_check to the unit technical reviewer queue.
+    // The reviewer will update this message and trigger the LLM continuation when all checks pass.
+    let unit_for_ws = created_unit.clone();
+    let partial_payload = ToolCreateUnitPayload {
+        args: args.clone(),
         created_unit,
-        pre_check_sub_task,
+        pre_check_sub_task: UnitSubTaskStatus::Succeeded,
         compiler_check_sub_task: UnitSubTaskStatus::Waiting,
         rule_check_sub_task: UnitSubTaskStatus::Waiting,
-        error,
+        error: None,
         tool_call_id,
         tool_name,
     };
-    let payload_value = serde_json::to_value(&full_payload)
-        .map_err(|e| -> BoxError { format!("serialize create_unit result: {}", e).into() })?;
+    let payload_value = serde_json::to_value(&partial_payload)
+        .map_err(|e| -> BoxError { format!("serialize create_unit partial payload: {}", e).into() })?;
     let updated_row = block_on_db_tokio(&pool, move |conn| {
         diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
             .set((
                 chat_messages::payload.eq(Some(payload_value)),
-                chat_messages::status.eq(ChatMessageStatus::Completed),
+                // Status stays Generating: the reviewer will complete this message when all
+                // checks pass (or fail). maybe_complete_invoking_message will not fire yet
+                // because this tool row is still Generating.
+                chat_messages::status.eq(ChatMessageStatus::Generating),
             ))
             .returning(ChatMessageRow::as_returning())
             .get_result(conn)
     })
     .await
     .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
+
     let channel = user_channel(user_id);
-    let message: ChatMessageResponse = updated_row.into();
+    let updated_message: ChatMessageResponse = updated_row.into();
     let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
         project_id,
         session_id,
-        message,
+        message: updated_message,
     });
     let mut guard = redis_conn.lock().await;
     publish_event_to_channel(&mut *guard, &channel, &event)
@@ -411,5 +464,43 @@ pub async fn handler(
             .await
             .map_err(|e| -> BoxError { e.to_string().into() })?;
     }
+    drop(guard);
+
+    // Dispatch the first reviewer check. The reviewer binary will update the tool message and
+    // call maybe_complete_invoking_message once all checks complete (success or failure).
+    if let Some(publisher) = rabbit_publisher {
+        let reviewer_message = UnitReviewerQueueMessage {
+            message_type: UnitReviewerMessageType::CreateUnitCompilerCheck,
+            tool_message_id: message_id,
+            user_id,
+            project_id,
+            session_id,
+            code: args.code.clone(),
+            unit_type: args.unit_type.as_slug().to_string(),
+            context_slug: args.context_slug.clone(),
+            module_slug: args.module_slug.clone(),
+            unit_name_slug: args.unit_name_slug.clone(),
+        };
+        publish_reviewer_message(&publisher, &reviewer_message)
+            .await
+            .map_err(|e| -> BoxError { e.to_string().into() })?;
+        tracing::info!(
+            target: "baal_backend_actix::tool_create_unit",
+            %message_id,
+            %project_id,
+            %session_id,
+            "create_unit: dispatched create_unit_compiler_check to reviewer queue; tool message stays Generating"
+        );
+    } else {
+        tracing::warn!(
+            target: "baal_backend_actix::tool_create_unit",
+            %message_id,
+            "create_unit: no rabbit_publisher available; cannot dispatch to reviewer queue"
+        );
+    }
+
+    // Return Ok(()) with the tool message in Generating state. on_tool_message_finished will call
+    // maybe_complete_invoking_message, but since this tool message is still Generating, done != total
+    // and the LLM continuation is NOT triggered yet — it waits for the reviewer to complete.
     Ok(())
 }

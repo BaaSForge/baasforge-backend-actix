@@ -9,5 +9,7 @@ trap cleanup SIGINT SIGTERM
 ./dev.sh 1102 &
 ./dev-chat-worker.sh &
 ./dev-chat-worker.sh &
+./dev-unit-technical-reviewer.sh &
+./dev-unit-technical-reviewer.sh &
 
 wait

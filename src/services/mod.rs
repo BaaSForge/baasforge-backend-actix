@@ -6,3 +6,4 @@ pub mod payment;
 pub mod releases;
 pub mod stage_runtime_release;
 pub mod stage_release_from_controller;
+pub mod unit_technical_reviewer;

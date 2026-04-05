@@ -27,8 +27,13 @@ echo "==> Stopping chat_worker processes..."
 pkill -x chat_worker 2>/dev/null && echo "    pkill -x chat_worker" || true
 pkill -f 'run --bin chat_worker' 2>/dev/null && echo "    pkill -f 'run --bin chat_worker'" || true
 
+# Binary name from Cargo.toml: [[bin]] name = "unit_technical_reviewer" (path src/bin/unit_technical_reviewer.rs)
+echo "==> Stopping unit_technical_reviewer processes..."
+pkill -x unit_technical_reviewer 2>/dev/null && echo "    pkill -x unit_technical_reviewer" || true
+pkill -f 'run --bin unit_technical_reviewer' 2>/dev/null && echo "    pkill -f 'run --bin unit_technical_reviewer'" || true
+
 echo "==> Stopping cargo watch..."
-# dev.sh / dev-chat-worker.sh use `cargo watch` (installed binary is often `cargo-watch`)
+# dev.sh / dev-chat-worker.sh / dev-unit-technical-reviewer.sh use `cargo watch` (installed binary is often `cargo-watch`)
 pkill -f "cargo watch" 2>/dev/null && echo "    pkill -f \"cargo watch\"" || true
 pkill -x cargo-watch 2>/dev/null && echo "    pkill -x cargo-watch" || true
 

@@ -10,6 +10,10 @@ default-run = "baal-backend-actix"
 name = "chat_worker"
 path = "src/bin/chat_worker.rs"
 
+[[bin]]
+name = "unit_technical_reviewer"
+path = "src/bin/unit_technical_reviewer.rs"
+
 [dependencies]
 # Web Framework & Core
 actix = "0.13.5"

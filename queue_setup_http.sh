@@ -84,4 +84,21 @@ curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
   "$MGMT/api/bindings/$VHOST/e/chat_session_dead_letter_exchange/q/chat_session_dead_letter_queue" \
   -d '{"routing_key":"chat_session.#"}'
 
+# Unit reviewer exchange and work queue — unit_technical_reviewer binary consumes from this queue.
+# Routing key: unit_reviewer.# (all reviewer checks use unit_reviewer.check)
+echo "Declaring unit_reviewer_exchange (topic, durable)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/exchanges/$VHOST/unit_reviewer_exchange" \
+  -d '{"type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}}'
+
+echo "Declaring unit_reviewer_work_queue (durable)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/queues/$VHOST/unit_reviewer_work_queue" \
+  -d '{"durable":true,"auto_delete":false,"arguments":{}}'
+
+echo "Binding unit_reviewer_work_queue to unit_reviewer_exchange with routing_key unit_reviewer.#..."
+curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
+  "$MGMT/api/bindings/$VHOST/e/unit_reviewer_exchange/q/unit_reviewer_work_queue" \
+  -d '{"routing_key":"unit_reviewer.#"}'
+
 echo "Queue setup done (HTTP API)."
