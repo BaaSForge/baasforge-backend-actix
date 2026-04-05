@@ -1,0 +1,144 @@
+use crate::database::{block_on_db_tokio, DbPool};
+use crate::models::chat_messages::{ChatMessageResponse, ChatMessageRow, ChatMessageStatus};
+use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
+use crate::routes::ws::redis::publish_event_to_channel;
+use crate::routes::ws::user_channel;
+use crate::schema::chat_messages;
+use crate::services::chat_worker::llm::tools::create_unit::ToolCreateUnitPayload;
+use crate::services::chat_worker::llm::tools::modify_unit::ToolModifyUnitPayload;
+use crate::services::chat_worker::llm::tools::remove_unit::ToolRemoveUnitPayload;
+use crate::services::chat_worker::llm::tools::maybe_complete_invoking_message;
+use crate::services::message_queue::SharedRabbitPublisher;
+use diesel::prelude::*;
+use redis::aio::MultiplexedConnection;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use uuid::Uuid;
+
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+pub type RedisConn = Arc<Mutex<MultiplexedConnection>>;
+
+/// Simulates a compiler/syntax check on JavaScript code.
+/// For now always succeeds; real AST/parse checks will replace this.
+pub fn simulate_compiler_check(_code: &str) -> bool {
+    true
+}
+
+/// Simulates a rule/convention check on the unit.
+/// For now always succeeds; real linting rules will replace this.
+pub fn simulate_rule_check(_unit_type: &str, _context_slug: &str) -> bool {
+    true
+}
+
+pub async fn load_tool_message_row(
+    pool: &DbPool,
+    tool_message_id: Uuid,
+) -> Result<ChatMessageRow, BoxError> {
+    block_on_db_tokio(pool, move |conn| {
+        chat_messages::table
+            .filter(chat_messages::id.eq(tool_message_id))
+            .select(ChatMessageRow::as_select())
+            .first::<ChatMessageRow>(conn)
+    })
+    .await
+    .map_err(|e| -> BoxError { e.to_string().into() })
+}
+
+pub fn extract_create_unit_payload(row: &ChatMessageRow) -> Result<ToolCreateUnitPayload, BoxError> {
+    let value = row
+        .payload
+        .clone()
+        .ok_or("create_unit tool message has no payload")?;
+    serde_json::from_value::<ToolCreateUnitPayload>(value)
+        .map_err(|e| -> BoxError { format!("deserialize ToolCreateUnitPayload: {e}").into() })
+}
+
+pub fn extract_modify_unit_payload(row: &ChatMessageRow) -> Result<ToolModifyUnitPayload, BoxError> {
+    let value = row
+        .payload
+        .clone()
+        .ok_or("modify_unit tool message has no payload")?;
+    serde_json::from_value::<ToolModifyUnitPayload>(value)
+        .map_err(|e| -> BoxError { format!("deserialize ToolModifyUnitPayload: {e}").into() })
+}
+
+pub fn extract_remove_unit_payload(row: &ChatMessageRow) -> Result<ToolRemoveUnitPayload, BoxError> {
+    let value = row
+        .payload
+        .clone()
+        .ok_or("remove_unit tool message has no payload")?;
+    serde_json::from_value::<ToolRemoveUnitPayload>(value)
+        .map_err(|e| -> BoxError { format!("deserialize ToolRemoveUnitPayload: {e}").into() })
+}
+
+pub async fn update_tool_message_payload<P: serde::Serialize>(
+    pool: &DbPool,
+    tool_message_id: Uuid,
+    payload: &P,
+    status: ChatMessageStatus,
+) -> Result<ChatMessageRow, BoxError> {
+    let payload_value = serde_json::to_value(payload)
+        .map_err(|e| -> BoxError { format!("serialize reviewer payload: {e}").into() })?;
+    block_on_db_tokio(pool, move |conn| {
+        diesel::update(chat_messages::table.filter(chat_messages::id.eq(tool_message_id)))
+            .set((
+                chat_messages::payload.eq(Some(payload_value)),
+                chat_messages::status.eq(status),
+            ))
+            .returning(ChatMessageRow::as_returning())
+            .get_result(conn)
+    })
+    .await
+    .map_err(|e| -> BoxError { e.to_string().into() })
+}
+
+pub async fn broadcast_message_updated(
+    redis_conn: &RedisConn,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
+    row: ChatMessageRow,
+) {
+    let channel = user_channel(user_id);
+    let message: ChatMessageResponse = row.into();
+    let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+        project_id,
+        session_id,
+        message,
+    });
+    let mut guard = redis_conn.lock().await;
+    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+        tracing::warn!("unit reviewer: failed to broadcast ChatSessionMessageUpdated: {}", e);
+    }
+}
+
+/// Calls `maybe_complete_invoking_message` so the AI Text invoker is completed and the LLM
+/// receives a queue continuation. Should be called whenever a tool message is set to Completed
+/// (success or failure) in the reviewer — in both cases the LLM must be allowed to continue.
+pub async fn trigger_llm_continuation(
+    pool: &DbPool,
+    redis_conn: &RedisConn,
+    chat_publisher: &Arc<SharedRabbitPublisher>,
+    invoking_message_id: Option<Uuid>,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
+) {
+    let Some(inv_id) = invoking_message_id else {
+        tracing::warn!(
+            "unit reviewer: invoking_message_id is None; cannot trigger LLM continuation"
+        );
+        return;
+    };
+    maybe_complete_invoking_message(
+        pool,
+        redis_conn,
+        Some(chat_publisher),
+        inv_id,
+        user_id,
+        project_id,
+        session_id,
+        true,
+    )
+    .await;
+}
