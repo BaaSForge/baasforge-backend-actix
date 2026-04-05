@@ -148,9 +148,9 @@ pub fn payload_from_args(
     Ok(ChatMessagePayload::ToolCreateUnit(ToolCreateUnitPayload {
         args,
         created_unit: None,
-        pre_check_sub_task: UnitSubTaskStatus::Succeeded,
-        compiler_check_sub_task: UnitSubTaskStatus::Succeeded,
-        rule_check_sub_task: UnitSubTaskStatus::Succeeded,
+        pre_check_sub_task: UnitSubTaskStatus::Waiting,
+        compiler_check_sub_task: UnitSubTaskStatus::Waiting,
+        rule_check_sub_task: UnitSubTaskStatus::Waiting,
         error: None,
         tool_call_id,
         tool_name: Some(tool_name.to_string()),
@@ -268,7 +268,10 @@ pub async fn handler(
         unit_name_slug: args.unit_name_slug.clone(),
     };
 
+    let mut pre_check_sub_task = UnitSubTaskStatus::Waiting;
+
     let (created_unit, error) = if let Some(msg) = slug_error {
+        pre_check_sub_task = UnitSubTaskStatus::Failed;
         (None, Some(msg))
     } else {
         let dup_session_msg = duplicate_unit_session_error_message(
@@ -321,6 +324,7 @@ pub async fn handler(
         .await
         {
             Ok(Ok(())) => {
+                pre_check_sub_task = UnitSubTaskStatus::Succeeded;
                 match block_on_db_tokio(&pool, move |conn| {
                     diesel::insert_into(project_units::table)
                         .values(&insert)
@@ -336,16 +340,26 @@ pub async fn handler(
                     Err(BlockingDbError::Query(diesel::result::Error::DatabaseError(
                         DatabaseErrorKind::UniqueViolation,
                         _,
-                    ))) => (None, Some(dup_session_msg)),
+                    ))) => {
+                        pre_check_sub_task = UnitSubTaskStatus::Failed;
+                        (None, Some(dup_session_msg))
+                    }
                     Err(e) => {
                         tracing::error!(%message_id, "create_unit insert: {}", e);
                         (None, Some(e.to_string()))
                     }
                 }
             }
-            Ok(Err(true)) => (None, Some(dup_session_msg)),
-            Ok(Err(false)) => (None, Some(dup_prod_msg)),
+            Ok(Err(true)) => {
+                pre_check_sub_task = UnitSubTaskStatus::Failed;
+                (None, Some(dup_session_msg))
+            }
+            Ok(Err(false)) => {
+                pre_check_sub_task = UnitSubTaskStatus::Failed;
+                (None, Some(dup_prod_msg))
+            }
             Err(e) => {
+                pre_check_sub_task = UnitSubTaskStatus::Failed;
                 tracing::error!(%message_id, "create_unit duplicate check: {}", e);
                 (None, Some(e.to_string()))
             }
@@ -356,9 +370,9 @@ pub async fn handler(
     let full_payload = ToolCreateUnitPayload {
         args,
         created_unit,
-        pre_check_sub_task: UnitSubTaskStatus::Succeeded,
-        compiler_check_sub_task: UnitSubTaskStatus::Succeeded,
-        rule_check_sub_task: UnitSubTaskStatus::Succeeded,
+        pre_check_sub_task,
+        compiler_check_sub_task: UnitSubTaskStatus::Waiting,
+        rule_check_sub_task: UnitSubTaskStatus::Waiting,
         error,
         tool_call_id,
         tool_name,

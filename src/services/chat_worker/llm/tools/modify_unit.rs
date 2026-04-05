@@ -93,9 +93,9 @@ pub fn payload_from_args(
     Ok(ChatMessagePayload::ToolModifyUnit(ToolModifyUnitPayload {
         args,
         revised_unit: None,
-        pre_check_sub_task: UnitSubTaskStatus::Succeeded,
-        compiler_check_sub_task: UnitSubTaskStatus::Succeeded,
-        rule_check_sub_task: UnitSubTaskStatus::Succeeded,
+        pre_check_sub_task: UnitSubTaskStatus::Waiting,
+        compiler_check_sub_task: UnitSubTaskStatus::Waiting,
+        rule_check_sub_task: UnitSubTaskStatus::Waiting,
         error: None,
         tool_call_id,
         tool_name: Some(tool_name.to_string()),
@@ -157,80 +157,106 @@ pub async fn handler(
             .map(|e| format!("modify_unit: unit_id invalid: {e}"))
     };
 
-    let result = if let Some(msg) = precheck {
-        Ok(Err(msg))
+    let mut pre_check_sub_task = UnitSubTaskStatus::Waiting;
+    let mut revised_unit: Option<ProjectUnitResponse> = None;
+    let mut error: Option<String> = None;
+
+    // Phase 1: pre-checks — validate format, find parent.
+    let parent_opt: Option<ProjectUnitRow> = if let Some(msg) = precheck {
+        pre_check_sub_task = UnitSubTaskStatus::Failed;
+        error = Some(msg);
+        None
     } else {
-        block_on_db_tokio(&pool, move |conn| {
-        let parent: Option<ProjectUnitRow> = project_units::table
-            .filter(project_units::project_id.eq(project_id))
-            .filter(project_units::chat_session_id.eq(session_id))
-            .filter(project_units::id.eq(&parent_key))
-            .select(ProjectUnitRow::as_select())
-            .first(conn)
-            .optional()?;
-
-        let parent = match parent {
-            Some(p) => p,
-            None => {
-                let prod_units = load_units_from_latest_production_metadata(conn, project_id)?;
-                match prod_units.into_iter().find(|u| u.id == parent_key && !u.is_deleted) {
-                    Some(prod_unit) => prod_unit.row,
-                    None => return Ok(Err(
-                        "modify_unit: unit not found in this chat session or the live production release".to_string(),
-                    )),
+        match block_on_db_tokio(&pool, move |conn| {
+            let parent: Option<ProjectUnitRow> = project_units::table
+                .filter(project_units::project_id.eq(project_id))
+                .filter(project_units::chat_session_id.eq(session_id))
+                .filter(project_units::id.eq(&parent_key))
+                .select(ProjectUnitRow::as_select())
+                .first(conn)
+                .optional()?;
+            let parent = match parent {
+                Some(p) => p,
+                None => {
+                    let prod_units = load_units_from_latest_production_metadata(conn, project_id)?;
+                    match prod_units.into_iter().find(|u| u.id == parent_key && !u.is_deleted) {
+                        Some(prod_unit) => prod_unit.row,
+                        None => return Ok(None),
+                    }
                 }
-            }
-        };
-
-        let new_rev = parent.revision + 1;
-        let new_id = compose_unit_id(
-            &parent.context_slug,
-            &parent.module_slug,
-            parent.unit_type.as_slug(),
-            &parent.unit_name_slug,
-            new_rev,
-        );
-        let insert = ProjectUnitInsert {
-            project_id,
-            chat_session_id: session_id,
-            id: new_id,
-            revision: new_rev,
-            code: Some(code),
-            explanation: Some(explanation),
-            unit_type: parent.unit_type,
-            is_deleted: false,
-            context_slug: parent.context_slug.clone(),
-            module_slug: parent.module_slug.clone(),
-            unit_name_slug: parent.unit_name_slug.clone(),
-        };
-        let row = diesel::insert_into(project_units::table)
-            .values(&insert)
-            .returning(ProjectUnitRow::as_returning())
-            .get_result::<ProjectUnitRow>(conn)?;
-        Ok(Ok(row))
-    })
+            };
+            Ok(Some(parent))
+        })
         .await
+        {
+            Ok(Some(parent)) => {
+                pre_check_sub_task = UnitSubTaskStatus::Succeeded;
+                Some(parent)
+            }
+            Ok(None) => {
+                pre_check_sub_task = UnitSubTaskStatus::Failed;
+                error = Some("modify_unit: unit not found in this chat session or the live production release".to_string());
+                None
+            }
+            Err(e) => {
+                pre_check_sub_task = UnitSubTaskStatus::Failed;
+                tracing::error!(%message_id, "modify_unit find parent: {}", e);
+                error = Some(e.to_string());
+                None
+            }
+        }
     };
 
-    let (revised_unit, error): (Option<ProjectUnitResponse>, Option<String>) = match result {
-        Ok(Ok(u)) => {
-            let rev = u.revision;
-            (Some(ProjectUnitResponse::from_row(u, rev)), None)
+    // Phase 2: insert new revision (only reached when pre-check passed).
+    if let Some(parent) = parent_opt {
+        match block_on_db_tokio(&pool, move |conn| {
+            let new_rev = parent.revision + 1;
+            let new_id = compose_unit_id(
+                &parent.context_slug,
+                &parent.module_slug,
+                parent.unit_type.as_slug(),
+                &parent.unit_name_slug,
+                new_rev,
+            );
+            let insert = ProjectUnitInsert {
+                project_id,
+                chat_session_id: session_id,
+                id: new_id,
+                revision: new_rev,
+                code: Some(code),
+                explanation: Some(explanation),
+                unit_type: parent.unit_type,
+                is_deleted: false,
+                context_slug: parent.context_slug.clone(),
+                module_slug: parent.module_slug.clone(),
+                unit_name_slug: parent.unit_name_slug.clone(),
+            };
+            diesel::insert_into(project_units::table)
+                .values(&insert)
+                .returning(ProjectUnitRow::as_returning())
+                .get_result::<ProjectUnitRow>(conn)
+        })
+        .await
+        {
+            Ok(u) => {
+                let rev = u.revision;
+                revised_unit = Some(ProjectUnitResponse::from_row(u, rev));
+            }
+            Err(e) => {
+                tracing::error!(%message_id, "modify_unit insert: {}", e);
+                error = Some(e.to_string());
+            }
         }
-        Ok(Err(msg)) => (None, Some(msg)),
-        Err(e) => {
-            tracing::error!(%message_id, "modify_unit: {}", e);
-            (None, Some(e.to_string()))
-        }
-    };
+    }
+
     let unit_for_ws = revised_unit.clone();
 
     let full_payload = ToolModifyUnitPayload {
         args,
         revised_unit,
-        pre_check_sub_task: UnitSubTaskStatus::Succeeded,
-        compiler_check_sub_task: UnitSubTaskStatus::Succeeded,
-        rule_check_sub_task: UnitSubTaskStatus::Succeeded,
+        pre_check_sub_task,
+        compiler_check_sub_task: UnitSubTaskStatus::Waiting,
+        rule_check_sub_task: UnitSubTaskStatus::Waiting,
         error,
         tool_call_id,
         tool_name,
