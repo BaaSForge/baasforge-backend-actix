@@ -32,7 +32,7 @@ pub const ARG_EXPLANATION_DESCRIPTION: &str =
     "English explanation of what this unit does (purpose, boundaries, how others use it).";
 /// Description for the `code` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_CODE_DESCRIPTION: &str =
-    "Implementation for this unit in JavaScript.";
+    "Implementation for this unit in TypeScript (Node.js environment).";
 
 /// LLM JSON shape for `modify_unit`. Unit kind and slugs are taken from the parent row in the database.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -119,7 +119,7 @@ pub const TOOL_NAME: &str = "modify_unit";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Save a new revision of an existing unit. Parent row is identified by `unit_id` (full dot-separated id; last segment is revision digits only, no `v`/`rev` prefix). Inserts a new row with the same slugs and session, new `id` with last segment revision+1, and `revision` = parent.revision + 1. The `code` argument must be JavaScript.",
+        description: "Save a new revision of an existing unit. Parent row is identified by `unit_id` (full dot-separated id; last segment is revision digits only, no `v`/`rev` prefix). Inserts a new row with the same slugs and session, new `id` with last segment revision+1, and `revision` = parent.revision + 1. The `code` argument must be TypeScript (Node.js environment).",
         parameters: params_schema(),
     }
 }

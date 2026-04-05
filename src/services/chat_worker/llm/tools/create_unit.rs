@@ -32,7 +32,7 @@ pub const ARG_EXPLANATION_DESCRIPTION: &str =
     "English explanation of what this unit does (purpose, boundaries, how others use it).";
 /// Description for the `code` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_CODE_DESCRIPTION: &str =
-    "Implementation for this unit in JavaScript.";
+    "Implementation for this unit in TypeScript (Node.js environment).";
 pub const ARG_CONTEXT_SLUG_DESCRIPTION: &str =
     "Bounded context slug: only English lowercase letters and hyphen (-), e.g. inventory.";
 pub const ARG_MODULE_SLUG_DESCRIPTION: &str =
@@ -179,7 +179,7 @@ pub const TOOL_NAME: &str = "create_unit";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Create a new unit row for this project (in-session work until released). Provide context_slug, module_slug, and unit_name_slug (English lowercase letters and hyphens only). `unit_type` is an enum: use the lowercase slug from the parameter schema (e.g. api, projection), not capitalized forms. The row `id` combines those parts and unit kind, dot-separated, with the revision as the last segment: the digit `1` for a new unit (not `v1` or `rev1`). The `code` argument must be JavaScript.",
+        description: "Create a new unit row for this project (in-session work until released). Provide context_slug, module_slug, and unit_name_slug (English lowercase letters and hyphens only). `unit_type` is an enum: use the lowercase slug from the parameter schema (e.g. api, projection), not capitalized forms. The row `id` combines those parts and unit kind, dot-separated, with the revision as the last segment: the digit `1` for a new unit (not `v1` or `rev1`). The `code` argument must be TypeScript (Node.js environment).",
         parameters: params_schema(),
     }
 }
