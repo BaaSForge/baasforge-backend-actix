@@ -10,9 +10,9 @@ use crate::services::chat_worker::llm::tools::UnitSubTaskStatus;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::helpers::{
     broadcast_message_updated, extract_create_unit_payload, load_tool_message_row,
-    simulate_compiler_check, simulate_rule_check, trigger_llm_continuation,
-    update_tool_message_payload, BoxError, RedisConn,
+    simulate_rule_check, trigger_llm_continuation, update_tool_message_payload, BoxError, RedisConn,
 };
+use crate::services::unit_technical_reviewer::type_checker::run_typescript_check;
 use crate::services::unit_technical_reviewer::queue::{
     publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
 };
@@ -30,57 +30,64 @@ pub async fn process_create_unit_compiler_check(
     let invoking_message_id = row.invoking_message_id;
     let mut payload = extract_create_unit_payload(&row)?;
 
-    // Simulate compiler check — code inspection will be added later.
-    let check_succeeded = simulate_compiler_check(&message.code);
-
-    if check_succeeded {
-        payload.compiler_check_sub_task = UnitSubTaskStatus::Succeeded;
-        // Status stays Generating; rule check follows.
-        let updated_row =
-            update_tool_message_payload(pool, tool_message_id, &payload, ChatMessageStatus::Generating)
-                .await?;
-        broadcast_message_updated(
-            redis_conn,
-            message.user_id,
-            message.project_id,
-            message.session_id,
-            updated_row,
-        )
-        .await;
-        // Dispatch rule check as the next step.
-        let next = UnitReviewerQueueMessage {
-            message_type: UnitReviewerMessageType::CreateUnitRuleCheck,
-            ..message
-        };
-        publish_reviewer_message(publisher, &next)
-            .await
-            .map_err(|e| -> BoxError { e.to_string().into() })?;
-    } else {
-        let error_msg = "Compiler check failed: code contains syntax errors.".to_string();
-        payload.compiler_check_sub_task = UnitSubTaskStatus::Failed;
-        payload.error = Some(error_msg);
-        let updated_row =
-            update_tool_message_payload(pool, tool_message_id, &payload, ChatMessageStatus::Completed)
-                .await?;
-        broadcast_message_updated(
-            redis_conn,
-            message.user_id,
-            message.project_id,
-            message.session_id,
-            updated_row,
-        )
-        .await;
-        // Done (failed): let the LLM continue so it can react to the failure.
-        trigger_llm_continuation(
-            pool,
-            redis_conn,
-            publisher,
-            invoking_message_id,
-            message.user_id,
-            message.project_id,
-            message.session_id,
-        )
-        .await;
+    match run_typescript_check(&message.code).await {
+        Ok(()) => {
+            payload.compiler_check_sub_task = UnitSubTaskStatus::Succeeded;
+            // Status stays Generating; rule check follows.
+            let updated_row = update_tool_message_payload(
+                pool,
+                tool_message_id,
+                &payload,
+                ChatMessageStatus::Generating,
+            )
+            .await?;
+            broadcast_message_updated(
+                redis_conn,
+                message.user_id,
+                message.project_id,
+                message.session_id,
+                updated_row,
+            )
+            .await;
+            // Dispatch rule check as the next step.
+            let next = UnitReviewerQueueMessage {
+                message_type: UnitReviewerMessageType::CreateUnitRuleCheck,
+                ..message
+            };
+            publish_reviewer_message(publisher, &next)
+                .await
+                .map_err(|e| -> BoxError { e.to_string().into() })?;
+        }
+        Err(error_msg) => {
+            payload.compiler_check_sub_task = UnitSubTaskStatus::Failed;
+            payload.error = Some(error_msg);
+            let updated_row = update_tool_message_payload(
+                pool,
+                tool_message_id,
+                &payload,
+                ChatMessageStatus::Completed,
+            )
+            .await?;
+            broadcast_message_updated(
+                redis_conn,
+                message.user_id,
+                message.project_id,
+                message.session_id,
+                updated_row,
+            )
+            .await;
+            // Done (failed): let the LLM continue so it can react to the failure.
+            trigger_llm_continuation(
+                pool,
+                redis_conn,
+                publisher,
+                invoking_message_id,
+                message.user_id,
+                message.project_id,
+                message.session_id,
+            )
+            .await;
+        }
     }
 
     Ok(())

@@ -131,6 +131,21 @@ The client receives incremental updates as each sub-task completes:
 3. `ChatSessionMessageUpdated` — broadcast by the reviewer after rule_check, showing `rule_check_sub_task=Succeeded/Failed`, `status=Completed`, and (on success) the populated `created_unit` / `revised_unit` / `removed_unit`.
 4. `ProjectUnitCreated` / `ProjectUnitModified` / `ProjectUnitDeleted` — broadcast by the reviewer **only** on rule_check success, after the row is actually in the database. Never sent on failure.
 
+## Compiler check: real TypeScript type checking
+
+The `compiler_check` sub-task runs a full TypeScript type check against the
+LLM-generated code. See [docs/type-checker.md](type-checker.md) for the complete
+breakdown. In brief:
+
+- Built using `oxc` for in-process AST parsing and a `tsc --noEmit` subprocess
+  for full type checking.
+- Only the eight supported `node:*` specifiers are allowed; any other `node:*`
+  import is rejected immediately.
+- `@units/*` imports resolve to a stub that exports `type Sample = {}`.
+- All `@types/node` declaration files are embedded in the binary at compile time
+  via `build.rs` (no runtime source-tree dependency).
+- Requires the Cargo feature `unit_technical_reviewer` — see **Building** below.
+
 ## Running locally
 
 ```bash
@@ -140,11 +155,27 @@ The client receives incremental updates as each sub-task completes:
 # Start everything (2 API instances, 2 chat workers, 2 reviewers)
 ./dev-scaled.sh
 
-# Or start a single reviewer instance manually
+# Or start a single reviewer instance manually (feature flag is included)
 ./dev-unit-technical-reviewer.sh
 
 # Stop everything
 ./dev-stop.sh
+```
+
+## Building
+
+The `unit_technical_reviewer` binary must be built with
+`--features unit_technical_reviewer` to activate the real TypeScript type checker.
+The other binaries do not need the flag.
+
+```bash
+# Release build — all binaries
+./release-build-all.sh
+
+# Release build — individual
+./release-build-unit-technical-reviewer.sh   # includes --features automatically
+./release-build-chat-worker.sh
+./release-build-main.sh
 ```
 
 ## Scaling
