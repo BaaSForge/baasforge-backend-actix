@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@typescript/native-preview": "^7.0.0-dev.20260405.1",
+    "@types/node": "^22.0.0"
+  }
+}

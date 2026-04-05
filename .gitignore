@@ -7,3 +7,5 @@
 .env.local
 
 .dev
+
+tsgo/node_modules/
