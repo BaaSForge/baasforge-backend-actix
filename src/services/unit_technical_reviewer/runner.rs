@@ -8,7 +8,7 @@ use crate::services::unit_technical_reviewer::handlers::{
     process_modify_unit_compiler_check, process_modify_unit_rule_check,
     process_remove_unit_rule_check,
 };
-use crate::services::unit_technical_reviewer::helpers::{BoxError, RedisConn};
+use crate::services::unit_technical_reviewer::helpers::{fail_tool_message_and_continue, BoxError, RedisConn};
 use crate::services::unit_technical_reviewer::queue::{
     create_reviewer_work_consumer_on_connection, reviewer_dead_letter_spec, reviewer_retry_policy,
     UnitReviewerMessageType, UnitReviewerQueueMessage, UNIT_REVIEWER_EXCHANGE,
@@ -40,6 +40,7 @@ pub async fn run() -> Result<(), BoxError> {
 
     let rabbit_url = settings.rabbit_url.clone();
     let retry_delay_exchange = settings.retry_delay_exchange.clone();
+    let simulate_failure = settings.unit_reviewer_simulate_failure;
     info!("Connecting to RabbitMQ...");
     let connection = lapin::Connection::connect(&rabbit_url, ConnectionProperties::default())
         .await
@@ -93,7 +94,7 @@ pub async fn run() -> Result<(), BoxError> {
         let retry_policy = reviewer_retry_policy();
         let dead_letter_spec = reviewer_dead_letter_spec();
 
-        let result = process_message(&pool, &redis_conn, &publisher, message.clone()).await;
+        let result = process_message(&pool, &redis_conn, &publisher, message.clone(), simulate_failure).await;
         if let Err(ref e) = result {
             if retry_policy.should_dead_letter(retry_num) {
                 tracing::error!(
@@ -102,6 +103,21 @@ pub async fn run() -> Result<(), BoxError> {
                     "Unit reviewer processing failed after max retries, sending to dead letter: {}",
                     e
                 );
+                // Mark the tool message as Completed/Failed and unblock the LLM before the
+                // message lands in the DLQ. Without this the tool message stays Generating
+                // forever and the LLM never receives a continuation.
+                fail_tool_message_and_continue(
+                    &pool,
+                    &redis_conn,
+                    &publisher,
+                    &message,
+                    &format!(
+                        "Reviewer failed after {} attempt(s) and will not retry: {}",
+                        retry_num + 1,
+                        e
+                    ),
+                )
+                .await;
                 if let Err(dl_e) = publish_to_dead_letter(
                     &retry_channel,
                     &dead_letter_spec.exchange_name,
@@ -193,7 +209,14 @@ async fn process_message(
     redis_conn: &RedisConn,
     publisher: &Arc<SharedRabbitPublisher>,
     message: UnitReviewerQueueMessage,
+    simulate_failure: bool,
 ) -> Result<(), BoxError> {
+    // Set UNIT_REVIEWER_SIMULATE_FAILURE=true in .env.local to force every attempt to fail,
+    // exercising the full retry → dead-letter → fail_tool_message_and_continue path.
+    if simulate_failure {
+        return Err("simulated reviewer failure (UNIT_REVIEWER_SIMULATE_FAILURE=true)".into());
+    }
+
     match message.message_type {
         UnitReviewerMessageType::CreateUnitCompilerCheck => {
             process_create_unit_compiler_check(pool, redis_conn, publisher, message).await

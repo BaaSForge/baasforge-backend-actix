@@ -7,8 +7,11 @@ use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::tools::create_unit::ToolCreateUnitPayload;
 use crate::services::chat_worker::llm::tools::modify_unit::ToolModifyUnitPayload;
 use crate::services::chat_worker::llm::tools::remove_unit::ToolRemoveUnitPayload;
-use crate::services::chat_worker::llm::tools::maybe_complete_invoking_message;
+use crate::services::chat_worker::llm::tools::{maybe_complete_invoking_message, UnitSubTaskStatus};
 use crate::services::message_queue::SharedRabbitPublisher;
+use crate::services::unit_technical_reviewer::queue::{
+    UnitReviewerMessageType, UnitReviewerQueueMessage,
+};
 use diesel::prelude::*;
 use redis::aio::MultiplexedConnection;
 use std::sync::Arc;
@@ -110,6 +113,143 @@ pub async fn broadcast_message_updated(
     if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
         tracing::warn!("unit reviewer: failed to broadcast ChatSessionMessageUpdated: {}", e);
     }
+}
+
+/// Marks a tool message as `Completed` with all still-`Waiting` sub-tasks set to `Failed`,
+/// broadcasts the update, and triggers LLM continuation.
+///
+/// Called from the runner when a message is dead-lettered after exhausting all retries.
+/// Without this the tool message stays `Generating` indefinitely and the LLM never unblocks.
+/// Best-effort: if loading or updating the DB row fails we still attempt LLM continuation.
+pub async fn fail_tool_message_and_continue(
+    pool: &DbPool,
+    redis_conn: &RedisConn,
+    publisher: &Arc<SharedRabbitPublisher>,
+    message: &UnitReviewerQueueMessage,
+    reason: &str,
+) {
+    let tool_message_id = message.tool_message_id;
+    let row = match load_tool_message_row(pool, tool_message_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(
+                %tool_message_id,
+                "fail_tool_message_and_continue: could not load tool message row: {}",
+                e
+            );
+            // Still attempt LLM continuation so it is not stuck on a Generating tool message.
+            trigger_llm_continuation(
+                pool,
+                redis_conn,
+                publisher,
+                None,
+                message.user_id,
+                message.project_id,
+                message.session_id,
+            )
+            .await;
+            return;
+        }
+    };
+    let invoking_message_id = row.invoking_message_id;
+
+    // Only flip sub-tasks that are still Waiting; leave already-Succeeded ones intact so the
+    // LLM sees an accurate picture of how far the checks got before the reviewer crashed.
+    let updated_row = match message.message_type {
+        UnitReviewerMessageType::CreateUnitCompilerCheck
+        | UnitReviewerMessageType::CreateUnitRuleCheck => {
+            match extract_create_unit_payload(&row) {
+                Ok(mut payload) => {
+                    if payload.compiler_check_sub_task == UnitSubTaskStatus::Waiting {
+                        payload.compiler_check_sub_task = UnitSubTaskStatus::Failed;
+                    }
+                    if payload.rule_check_sub_task == UnitSubTaskStatus::Waiting {
+                        payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
+                    }
+                    payload.error = Some(reason.to_string());
+                    update_tool_message_payload(
+                        pool,
+                        tool_message_id,
+                        &payload,
+                        ChatMessageStatus::Completed,
+                    )
+                    .await
+                }
+                Err(e) => Err(e),
+            }
+        }
+        UnitReviewerMessageType::ModifyUnitCompilerCheck
+        | UnitReviewerMessageType::ModifyUnitRuleCheck => {
+            match extract_modify_unit_payload(&row) {
+                Ok(mut payload) => {
+                    if payload.compiler_check_sub_task == UnitSubTaskStatus::Waiting {
+                        payload.compiler_check_sub_task = UnitSubTaskStatus::Failed;
+                    }
+                    if payload.rule_check_sub_task == UnitSubTaskStatus::Waiting {
+                        payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
+                    }
+                    payload.error = Some(reason.to_string());
+                    update_tool_message_payload(
+                        pool,
+                        tool_message_id,
+                        &payload,
+                        ChatMessageStatus::Completed,
+                    )
+                    .await
+                }
+                Err(e) => Err(e),
+            }
+        }
+        UnitReviewerMessageType::RemoveUnitRuleCheck => {
+            match extract_remove_unit_payload(&row) {
+                Ok(mut payload) => {
+                    if payload.rule_check_sub_task == UnitSubTaskStatus::Waiting {
+                        payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
+                    }
+                    payload.error = Some(reason.to_string());
+                    update_tool_message_payload(
+                        pool,
+                        tool_message_id,
+                        &payload,
+                        ChatMessageStatus::Completed,
+                    )
+                    .await
+                }
+                Err(e) => Err(e),
+            }
+        }
+    };
+
+    match updated_row {
+        Ok(row) => {
+            broadcast_message_updated(
+                redis_conn,
+                message.user_id,
+                message.project_id,
+                message.session_id,
+                row,
+            )
+            .await;
+        }
+        Err(e) => {
+            tracing::error!(
+                %tool_message_id,
+                "fail_tool_message_and_continue: could not update tool message: {}",
+                e
+            );
+        }
+    }
+
+    trigger_llm_continuation(
+        pool,
+        redis_conn,
+        publisher,
+        invoking_message_id,
+        message.user_id,
+        message.project_id,
+        message.session_id,
+    )
+    .await;
 }
 
 /// Calls `maybe_complete_invoking_message` so the AI Text invoker is completed and the LLM

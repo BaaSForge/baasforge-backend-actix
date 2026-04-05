@@ -104,6 +104,10 @@ pub struct Settings {
     pub runtime_nats_jetstream_stream_release: String,
     /// JetStream consumer name on that stream (used by the release listener).
     pub runtime_nats_jetstream_consumer_release: String,
+    /// When `true`, every unit reviewer processing attempt returns an error immediately,
+    /// exercising the full retry → dead-letter → fail_tool_message_and_continue path.
+    /// Set `UNIT_REVIEWER_SIMULATE_FAILURE=true` in .env.local; absent or `false` disables it.
+    pub unit_reviewer_simulate_failure: bool,
 }
 
 impl Settings {
@@ -241,6 +245,15 @@ impl Settings {
         }
         let runtime_nats_jetstream_consumer_release = runtime_nats_jetstream_consumer_release.to_string();
 
+        let unit_reviewer_simulate_failure: bool =
+            match env::var("UNIT_REVIEWER_SIMULATE_FAILURE") {
+                Ok(s) if s.trim().is_empty() => false,
+                Ok(s) => parse_env_bool(s.trim()).map_err(|msg| {
+                    format!("UNIT_REVIEWER_SIMULATE_FAILURE: {}", msg)
+                })?,
+                Err(_) => false,
+            };
+
         Ok(Settings {
             port,
             app_environment,
@@ -271,6 +284,7 @@ impl Settings {
             runtime_nats_subject_release,
             runtime_nats_jetstream_stream_release,
             runtime_nats_jetstream_consumer_release,
+            unit_reviewer_simulate_failure,
         })
     }
 }
