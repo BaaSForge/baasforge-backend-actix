@@ -111,6 +111,17 @@ fn emphasize_tool_error_for_upstream(payload: &Option<Value>, content: String) -
     .unwrap_or(content)
 }
 
+/// Remove internal sub-task status fields from a unit tool payload before sending to the LLM.
+/// These fields are UI-only and must not appear in LLM history.
+fn strip_unit_subtask_fields(mut v: Value) -> String {
+    if let Some(obj) = v.as_object_mut() {
+        obj.remove("pre_check_sub_task");
+        obj.remove("compiler_check_sub_task");
+        obj.remove("rule_check_sub_task");
+    }
+    v.to_string()
+}
+
 /// Extract tool_call_id, tool_name, and result content from a tool-result payload.
 fn tool_result_from_payload(
     type_: &ChatMessageType,
@@ -172,17 +183,17 @@ fn tool_result_from_payload(
         Some(ChatMessagePayload::ToolCreateUnit(p)) => (
             p.tool_call_id.clone(),
             p.tool_name.clone(),
-            serde_json::to_string(p).unwrap_or_default(),
+            strip_unit_subtask_fields(serde_json::to_value(p).unwrap_or_default()),
         ),
         Some(ChatMessagePayload::ToolModifyUnit(p)) => (
             p.tool_call_id.clone(),
             p.tool_name.clone(),
-            serde_json::to_string(p).unwrap_or_default(),
+            strip_unit_subtask_fields(serde_json::to_value(p).unwrap_or_default()),
         ),
         Some(ChatMessagePayload::ToolRemoveUnit(p)) => (
             p.tool_call_id.clone(),
             p.tool_name.clone(),
-            serde_json::to_string(p).unwrap_or_default(),
+            strip_unit_subtask_fields(serde_json::to_value(p).unwrap_or_default()),
         ),
         _ => {
             let (loose_id, loose_name) = if is_tool_result_type(type_) {

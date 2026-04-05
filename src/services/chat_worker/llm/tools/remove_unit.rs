@@ -22,7 +22,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::modify_unit::ARG_UNIT_ID_DESCRIPTION;
-use super::{BoxError, ToolSpec};
+use super::{BoxError, ToolSpec, UnitSubTaskStatus};
 
 /// LLM JSON shape for `remove_unit`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -40,6 +40,10 @@ pub struct ToolRemoveUnitArgs {
 pub struct ToolRemoveUnitPayload {
     pub args: ToolRemoveUnitArgs,
     pub removed_unit: Option<ProjectUnitResponse>,
+    /// Internal sub-task status for client UI. Never sent to the LLM in history.
+    pub pre_check_sub_task: UnitSubTaskStatus,
+    /// Internal sub-task status for client UI. Never sent to the LLM in history.
+    pub rule_check_sub_task: UnitSubTaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -66,6 +70,8 @@ pub fn payload_from_args(
     Ok(ChatMessagePayload::ToolRemoveUnit(ToolRemoveUnitPayload {
         args,
         removed_unit: None,
+        pre_check_sub_task: UnitSubTaskStatus::Succeeded,
+        rule_check_sub_task: UnitSubTaskStatus::Succeeded,
         error: None,
         tool_call_id,
         tool_name: Some(tool_name.to_string()),
@@ -199,6 +205,8 @@ pub async fn handler(
     let full_payload = ToolRemoveUnitPayload {
         args,
         removed_unit,
+        pre_check_sub_task: UnitSubTaskStatus::Succeeded,
+        rule_check_sub_task: UnitSubTaskStatus::Succeeded,
         error,
         tool_call_id,
         tool_name,

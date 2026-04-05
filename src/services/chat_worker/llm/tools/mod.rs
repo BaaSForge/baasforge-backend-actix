@@ -48,6 +48,15 @@ pub use load_latest_releases::ToolFetchLatestReleasesPayload;
 pub use modify_unit::ToolModifyUnitPayload;
 pub use remove_unit::ToolRemoveUnitPayload;
 
+/// Status of an internal sub-task check attached to unit tool messages.
+/// Stored in DB payload for client UI; **never sent to the LLM** in history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnitSubTaskStatus {
+    Succeeded,
+    Failed,
+}
+
 use crate::database::{DbPool, block_on_db_tokio};
 use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{

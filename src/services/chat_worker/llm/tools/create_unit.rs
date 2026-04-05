@@ -25,7 +25,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::{BoxError, ToolSpec};
+use super::{BoxError, ToolSpec, UnitSubTaskStatus};
 
 /// Description for the `explanation` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_EXPLANATION_DESCRIPTION: &str =
@@ -97,6 +97,12 @@ pub struct ToolCreateUnitArgs {
 pub struct ToolCreateUnitPayload {
     pub args: ToolCreateUnitArgs,
     pub created_unit: Option<ProjectUnitResponse>,
+    /// Internal sub-task status for client UI. Never sent to the LLM in history.
+    pub pre_check_sub_task: UnitSubTaskStatus,
+    /// Internal sub-task status for client UI. Never sent to the LLM in history.
+    pub compiler_check_sub_task: UnitSubTaskStatus,
+    /// Internal sub-task status for client UI. Never sent to the LLM in history.
+    pub rule_check_sub_task: UnitSubTaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +148,9 @@ pub fn payload_from_args(
     Ok(ChatMessagePayload::ToolCreateUnit(ToolCreateUnitPayload {
         args,
         created_unit: None,
+        pre_check_sub_task: UnitSubTaskStatus::Succeeded,
+        compiler_check_sub_task: UnitSubTaskStatus::Succeeded,
+        rule_check_sub_task: UnitSubTaskStatus::Succeeded,
         error: None,
         tool_call_id,
         tool_name: Some(tool_name.to_string()),
@@ -347,6 +356,9 @@ pub async fn handler(
     let full_payload = ToolCreateUnitPayload {
         args,
         created_unit,
+        pre_check_sub_task: UnitSubTaskStatus::Succeeded,
+        compiler_check_sub_task: UnitSubTaskStatus::Succeeded,
+        rule_check_sub_task: UnitSubTaskStatus::Succeeded,
         error,
         tool_call_id,
         tool_name,
