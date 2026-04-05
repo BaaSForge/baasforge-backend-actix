@@ -21,12 +21,6 @@ use uuid::Uuid;
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub type RedisConn = Arc<Mutex<MultiplexedConnection>>;
 
-/// Simulates a compiler/syntax check on JavaScript code.
-/// For now always succeeds; real AST/parse checks will replace this.
-pub fn simulate_compiler_check(_code: &str) -> bool {
-    true
-}
-
 /// Simulates a rule/convention check on the unit.
 /// For now always succeeds; real linting rules will replace this.
 pub fn simulate_rule_check(_unit_type: &str, _context_slug: &str) -> bool {

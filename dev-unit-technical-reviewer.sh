@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-# Unset wrapper so `cargo clippy` runs correctly; we rely on explicit clippy for clippy.toml lints (e.g. disallowed_methods / UUID v7)
 export CARGO_BUILD_RUSTC_WRAPPER=
-# Run full `cargo clippy` then run; clippy must pass before the reviewer starts
-CARGO_INCREMENTAL=1 cargo watch -w src -s "cargo clippy && cargo run --bin unit_technical_reviewer"
+# The unit_technical_reviewer binary requires --features unit_technical_reviewer to enable
+# the oxc-based TypeScript type checker. Without the flag the type checker is a no-op stub.
+CARGO_INCREMENTAL=1 cargo watch -w src -s "cargo run --bin unit_technical_reviewer --features unit_technical_reviewer"

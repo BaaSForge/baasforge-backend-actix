@@ -6,7 +6,7 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 ./dev.sh 1101 &
-./dev.sh 1102 &
+./dev.sh 1102 no-clippy &
 ./dev-chat-worker.sh &
 ./dev-chat-worker.sh &
 ./dev-unit-technical-reviewer.sh &

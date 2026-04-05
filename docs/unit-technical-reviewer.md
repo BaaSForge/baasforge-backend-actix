@@ -131,6 +131,13 @@ The client receives incremental updates as each sub-task completes:
 3. `ChatSessionMessageUpdated` — broadcast by the reviewer after rule_check, showing `rule_check_sub_task=Succeeded/Failed`, `status=Completed`, and (on success) the populated `created_unit` / `revised_unit` / `removed_unit`.
 4. `ProjectUnitCreated` / `ProjectUnitModified` / `ProjectUnitDeleted` — broadcast by the reviewer **only** on rule_check success, after the row is actually in the database. Never sent on failure.
 
+## Compiler check: real TypeScript type checking
+
+The `compiler_check` sub-task runs a full TypeScript type check against the
+LLM-generated code. See [docs/type-checker.md](type-checker.md) for the complete
+breakdown. In brief:
+
+
 ## Running locally
 
 ```bash
@@ -140,7 +147,7 @@ The client receives incremental updates as each sub-task completes:
 # Start everything (2 API instances, 2 chat workers, 2 reviewers)
 ./dev-scaled.sh
 
-# Or start a single reviewer instance manually
+# Or start a single reviewer instance manually (feature flag is included)
 ./dev-unit-technical-reviewer.sh
 
 # Stop everything
