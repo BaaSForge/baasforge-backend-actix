@@ -12,16 +12,8 @@ use std::fs;   // Add at the top with other imports
 const VIRTUAL_ROOT: &str = "/tsgo-vcheck-baal";
 const VIRTUAL_NODE_MODULES: &str = "/tsgo-vcheck-baal/node_modules";
 
-pub async fn run_typescript_check(_ignored_code: &str) -> Result<(), String> {
-    // 1. Using static code for debugging
-    let static_code = r#"
-        import type { IncomingMessage, ServerResponse } from "node:http";
-
-        const x: IncomingMessage = "this is a type error";
-        console.log(x);
-    "#;
-
-    let vfs = build_vfs(static_code);
+pub async fn run_typescript_check(code: &str) -> Result<(), String> {
+    let vfs = build_vfs(code);
     let mut client = TsgoIpcClient::spawn(vfs).await?;
 
     client.call("initialize", json!({})).await?;
