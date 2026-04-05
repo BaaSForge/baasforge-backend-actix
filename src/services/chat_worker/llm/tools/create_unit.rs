@@ -1,12 +1,10 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
-use crate::libs::unit_slug::{compose_unit_id, is_valid_slug, normalize_llm_slug_arg};
+use crate::libs::unit_slug::{is_valid_slug, normalize_llm_slug_arg};
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
-use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType};
-use crate::routes::ws::events::{
-    ChatSessionMessageUpdatedPayload, ProjectUnitEventPayload, WsServerEvent,
-};
+use crate::models::projects::{ProjectUnitResponse, ProjectUnitType};
+use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
@@ -18,7 +16,6 @@ use crate::services::unit_technical_reviewer::queue::{
 };
 use diesel::dsl::exists;
 use diesel::prelude::*;
-use diesel::result::DatabaseErrorKind;
 use diesel::select;
 use gemini_rust::tools::model::FunctionDeclaration;
 use schemars::JsonSchema;
@@ -28,7 +25,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::{BoxError, ToolSpec, UnitSubTaskStatus};
+use super::{maybe_complete_invoking_message, BoxError, ToolSpec, UnitSubTaskStatus};
 
 /// Description for the `explanation` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_EXPLANATION_DESCRIPTION: &str =
@@ -42,8 +39,6 @@ pub const ARG_MODULE_SLUG_DESCRIPTION: &str =
     "Module slug within the context: only English lowercase letters and hyphen (-), e.g. stock-levels.";
 pub const ARG_UNIT_NAME_SLUG_DESCRIPTION: &str =
     "Unit name slug describing what this unit does: only English lowercase letters and hyphen (-), e.g. adjust-levels.";
-
-const INITIAL_REVISION: i32 = 1;
 
 fn duplicate_unit_session_error_message(
     context_slug: &str,
@@ -250,32 +245,14 @@ pub async fn handler(
         None
     };
 
-    let id = compose_unit_id(
-        &args.context_slug,
-        &args.module_slug,
-        args.unit_type.as_slug(),
-        &args.unit_name_slug,
-        INITIAL_REVISION,
-    );
-    let insert = ProjectUnitInsert {
-        project_id,
-        chat_session_id: session_id,
-        id,
-        revision: INITIAL_REVISION,
-        code: Some(args.code.clone()),
-        explanation: Some(args.explanation.clone()),
-        unit_type: args.unit_type,
-        is_deleted: false,
-        context_slug: args.context_slug.clone(),
-        module_slug: args.module_slug.clone(),
-        unit_name_slug: args.unit_name_slug.clone(),
-    };
-
     let mut pre_check_sub_task = UnitSubTaskStatus::Waiting;
 
-    let (created_unit, pre_check_error) = if let Some(msg) = slug_error {
+    // Pre-check: slug validation + duplicate detection. The actual project_units row is NOT inserted
+    // here. Insertion happens only after all reviewer checks pass (in the reviewer's rule_check
+    // success branch) so that no unit ever persists unless it has been fully validated.
+    let pre_check_error: Option<String> = if let Some(msg) = slug_error {
         pre_check_sub_task = UnitSubTaskStatus::Failed;
-        (None, Some(msg))
+        Some(msg)
     } else {
         let dup_session_msg = duplicate_unit_session_error_message(
             &args.context_slug,
@@ -328,43 +305,20 @@ pub async fn handler(
         {
             Ok(Ok(())) => {
                 pre_check_sub_task = UnitSubTaskStatus::Succeeded;
-                match block_on_db_tokio(&pool, move |conn| {
-                    diesel::insert_into(project_units::table)
-                        .values(&insert)
-                        .returning(ProjectUnitRow::as_returning())
-                        .get_result::<ProjectUnitRow>(conn)
-                })
-                .await
-                {
-                    Ok(u) => {
-                        let rev = u.revision;
-                        (Some(ProjectUnitResponse::from_row(u, rev)), None)
-                    }
-                    Err(BlockingDbError::Query(diesel::result::Error::DatabaseError(
-                        DatabaseErrorKind::UniqueViolation,
-                        _,
-                    ))) => {
-                        pre_check_sub_task = UnitSubTaskStatus::Failed;
-                        (None, Some(dup_session_msg))
-                    }
-                    Err(e) => {
-                        tracing::error!(%message_id, "create_unit insert: {}", e);
-                        (None, Some(e.to_string()))
-                    }
-                }
+                None
             }
             Ok(Err(true)) => {
                 pre_check_sub_task = UnitSubTaskStatus::Failed;
-                (None, Some(dup_session_msg))
+                Some(dup_session_msg)
             }
             Ok(Err(false)) => {
                 pre_check_sub_task = UnitSubTaskStatus::Failed;
-                (None, Some(dup_prod_msg))
+                Some(dup_prod_msg)
             }
             Err(e) => {
                 pre_check_sub_task = UnitSubTaskStatus::Failed;
                 tracing::error!(%message_id, "create_unit duplicate check: {}", e);
-                (None, Some(e.to_string()))
+                Some(e.to_string())
             }
         }
     };
@@ -395,6 +349,7 @@ pub async fn handler(
         })
         .await
         .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
+        let invoking_id = updated_row.invoking_message_id;
         let channel = user_channel(user_id);
         let message: ChatMessageResponse = updated_row.into();
         let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
@@ -402,23 +357,33 @@ pub async fn handler(
             session_id,
             message,
         });
-        let mut guard = redis_conn.lock().await;
-        publish_event_to_channel(&mut *guard, &channel, &event)
-            .await
-            .map_err(|e| -> BoxError { e.to_string().into() })?;
-        // on_tool_message_finished → maybe_complete_invoking_message will fire after Ok(()) return,
-        // the tool message is now Completed so the LLM continuation will be triggered.
+        {
+            let mut guard = redis_conn.lock().await;
+            publish_event_to_channel(&mut *guard, &channel, &event)
+                .await
+                .map_err(|e| -> BoxError { e.to_string().into() })?;
+        }
+        // ToolCreateUnit skips generic on_tool_message_finished (see
+        // tool_message_type_skips_generic_invoker_completion). We call maybe_complete_invoking_message
+        // explicitly here because the message is now Completed and the LLM must continue.
+        if let (Some(inv_id), Some(ref publisher)) = (invoking_id, rabbit_publisher.as_ref()) {
+            maybe_complete_invoking_message(
+                &pool, &redis_conn, Some(publisher), inv_id, user_id, project_id, session_id, true,
+            )
+            .await;
+        }
         return Ok(());
     }
 
-    // Pre-check succeeded: the unit row has been inserted. Save the partial state to DB
-    // (pre_check=Succeeded, compiler/rule=Waiting, status stays Generating) and broadcast to WS,
-    // then dispatch create_unit_compiler_check to the unit technical reviewer queue.
-    // The reviewer will update this message and trigger the LLM continuation when all checks pass.
-    let unit_for_ws = created_unit.clone();
+    // Pre-check succeeded: slugs are valid and no duplicate exists.
+    // The project_units row is NOT inserted here — insertion happens only after all reviewer
+    // checks pass (compiler_check + rule_check). created_unit stays None until then.
+    // Save the partial state to DB (pre_check=Succeeded, compiler/rule=Waiting, status=Generating)
+    // and broadcast to WS, then dispatch create_unit_compiler_check to the reviewer queue.
     let partial_payload = ToolCreateUnitPayload {
         args: args.clone(),
-        created_unit,
+        // Unit is not persisted yet; will be set to Some(...) by the reviewer after rule_check passes.
+        created_unit: None,
         pre_check_sub_task: UnitSubTaskStatus::Succeeded,
         compiler_check_sub_task: UnitSubTaskStatus::Waiting,
         rule_check_sub_task: UnitSubTaskStatus::Waiting,
@@ -432,9 +397,10 @@ pub async fn handler(
         diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
             .set((
                 chat_messages::payload.eq(Some(payload_value)),
-                // Status stays Generating: the reviewer will complete this message when all
-                // checks pass (or fail). maybe_complete_invoking_message will not fire yet
-                // because this tool row is still Generating.
+                // Status stays Generating: the reviewer will set it to Completed once all checks
+                // finish (success or failure). While Generating, maybe_complete_invoking_message
+                // counts this tool as "not done" (done != total) and does NOT trigger the LLM
+                // continuation — so the LLM correctly waits for the reviewer.
                 chat_messages::status.eq(ChatMessageStatus::Generating),
             ))
             .returning(ChatMessageRow::as_returning())
@@ -450,21 +416,14 @@ pub async fn handler(
         session_id,
         message: updated_message,
     });
-    let mut guard = redis_conn.lock().await;
-    publish_event_to_channel(&mut *guard, &channel, &event)
-        .await
-        .map_err(|e| -> BoxError { e.to_string().into() })?;
-    if let Some(unit) = unit_for_ws {
-        let unit_event = WsServerEvent::ProjectUnitCreated(ProjectUnitEventPayload {
-            project_id,
-            session_id,
-            unit,
-        });
-        publish_event_to_channel(&mut *guard, &channel, &unit_event)
+    {
+        let mut guard = redis_conn.lock().await;
+        publish_event_to_channel(&mut *guard, &channel, &event)
             .await
             .map_err(|e| -> BoxError { e.to_string().into() })?;
+        // ProjectUnitCreated is NOT broadcast here. It is broadcast by the reviewer binary only
+        // after rule_check succeeds and the unit is actually inserted into project_units.
     }
-    drop(guard);
 
     // Dispatch the first reviewer check. The reviewer binary will update the tool message and
     // call maybe_complete_invoking_message once all checks complete (success or failure).

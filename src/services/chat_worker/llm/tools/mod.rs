@@ -560,6 +560,13 @@ where
 
 /// Tool types that manage their own invoker / parent completion (or defer it to another tool).
 /// All other tool types always go through [`on_tool_message_finished`] after the handler returns.
+///
+/// Unit CRUD tools (`ToolCreateUnit`, `ToolModifyUnit`, `ToolRemoveUnit`) are included here
+/// because their handlers delegate the actual work to the unit technical reviewer binary and leave
+/// the tool message in `Generating` state. Calling `maybe_complete_invoking_message` while the
+/// message is still `Generating` would be a no-op but is still skipped for clarity. These handlers
+/// call `maybe_complete_invoking_message` themselves only when the message is actually `Completed`
+/// (pre_check failure path). The reviewer calls it when all checks finish.
 pub fn tool_message_type_skips_generic_invoker_completion(type_: &ChatMessageType) -> bool {
     matches!(
         type_,
@@ -568,6 +575,9 @@ pub fn tool_message_type_skips_generic_invoker_completion(type_: &ChatMessageTyp
             | ChatMessageType::ToolFinishSolutionAnalysis
             | ChatMessageType::ToolImplementSolution
             | ChatMessageType::ToolFinishImplementation
+            | ChatMessageType::ToolCreateUnit
+            | ChatMessageType::ToolModifyUnit
+            | ChatMessageType::ToolRemoveUnit
     )
 }
 

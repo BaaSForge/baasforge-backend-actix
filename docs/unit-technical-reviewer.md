@@ -6,7 +6,7 @@ The unit technical reviewer is a second worker binary (`unit_technical_reviewer`
 
 Unit code checks (compiler syntax validation, rule/convention checking) are expected to be non-trivial operations. Offloading them to a dedicated binary means:
 
-- This binary might use v8 engine which is heavy, so it's better to have separated binary with v8 included to have flexibility to scale depending on the overal throughput of these code review messages
+- This binary might use a v8 engine which is heavy, so it's better to have a separate binary with v8 included to have flexibility to scale depending on the overall throughput of these code review messages.
 - The chat worker is never blocked waiting for a check to finish.
 - Multiple reviewer instances can run in parallel and scale independently from the chat worker.
 - Each reviewer instance picks up one check message at a time (prefetch = 1), so the same check is never processed twice by two instances simultaneously.
@@ -29,18 +29,32 @@ The queue carries `UnitReviewerQueueMessage` (defined in `src/services/unit_tech
 
 | Message type | Triggered by | Description |
 |---|---|---|
-| `create_unit_compiler_check` | `create_unit` handler after pre_check success | Syntax/compiler check on the unit's TS code |
-| `create_unit_rule_check` | Reviewer after compiler_check succeeds | Naming-convention and project-level rules check for `create_unit` |
-| `modify_unit_compiler_check` | `modify_unit` handler after pre_check success | Compiler check for a revised unit |
-| `modify_unit_rule_check` | Reviewer after compiler_check succeeds | Rule check for `modify_unit` |
-| `remove_unit_rule_check` | `remove_unit` handler after pre_check success | Rule check for a removal (no code to compile) |
+| `create_unit_compiler_check` | `create_unit` handler after pre_check success | Syntax/compiler check on the unit's NodeJS code |
+| `create_unit_rule_check` | Reviewer after compiler_check succeeds | Naming-convention and project-level rules check; **inserts the `project_units` row on success** |
+| `modify_unit_compiler_check` | `modify_unit` handler after pre_check success | Compiler check for the revised unit code |
+| `modify_unit_rule_check` | Reviewer after compiler_check succeeds | Rule check; **inserts the new revision row on success** |
+| `remove_unit_rule_check` | `remove_unit` handler after pre_check success | Rule check (no compiler check for removals); **inserts the deletion marker row on success** |
 
-Each message carries the context needed for the check and for the callback:
+Each message carries the minimum context for the check:
 
-- `tool_message_id` — ID of the original `ToolCreateUnit` / `ToolModifyUnit` / `ToolRemoveUnit` row in `chat_messages`
-- `user_id`, `project_id`, `session_id` — for WebSocket broadcasting and RabbitMQ routing
-- `code` — JavaScript source to check (empty for remove checks)
+- `tool_message_id` — ID of the `ToolCreateUnit` / `ToolModifyUnit` / `ToolRemoveUnit` row in `chat_messages`
+- `user_id`, `project_id`, `session_id` — for WebSocket broadcasting
+- `code` — NodeJS source to check (empty string for remove checks)
 - `unit_type`, `context_slug`, `module_slug`, `unit_name_slug` — unit identity for rule checks
+
+The reviewer loads the full payload (`ToolCreateUnitPayload`, etc.) directly from the DB row identified by `tool_message_id`. This gives it access to all `args` fields (`explanation`, typed `unit_type`, slugs, code) needed for the `project_units` insert, without duplicating them in the queue message.
+
+## Unit rows are written only after all checks pass
+
+**No `project_units` row is ever written by a tool handler.** Handlers only validate (slugs, duplicates, parent existence) and dispatch to the reviewer. The actual insert happens in the reviewer's final check:
+
+| Tool | Where the row is written |
+|---|---|
+| `create_unit` | Reviewer `create_unit_rule_check` success |
+| `modify_unit` | Reviewer `modify_unit_rule_check` success |
+| `remove_unit` | Reviewer `remove_unit_rule_check` success (deletion marker: `is_deleted = true`) |
+
+If any check fails, no row is written and the LLM receives the failure details in its history.
 
 ## End-to-end flow for `create_unit`
 
@@ -48,42 +62,33 @@ Each message carries the context needed for the check and for the callback:
 LLM requests create_unit
         │
         ▼
-chat worker: payload_from_args → publishes ToolCreateUnit message
-        │
-        ▼
 chat worker runner: inserts chat_messages row (status=Generating), spawns handler
         │
         ▼
 create_unit::handler
   ├─ pre_check fails (bad slug / duplicate)
-  │     └─ updates row: status=Completed, pre_check_sub_task=Failed, error set
-  │        broadcasts ChatSessionMessageUpdated via WS
-  │        returns Ok(()) → on_tool_message_finished → maybe_complete_invoking_message
-  │        → LLM continuation published → LLM continues (sees failure in history)
+  │     updates chat_messages row: status=Completed,
+  │         pre_check_sub_task=Failed, error set, created_unit=None
+  │     broadcasts ChatSessionMessageUpdated via WS
+  │     calls maybe_complete_invoking_message directly → LLM continues
   │
-  └─ pre_check succeeds
-        inserts project_units row (the real unit)
-        updates chat_messages row: status=Generating (unchanged),
-            pre_check_sub_task=Succeeded, compiler/rule=Waiting
+  └─ pre_check succeeds (slugs valid, no duplicate found)
+        NO project_units insert
+        updates chat_messages row: status=Generating,
+            pre_check_sub_task=Succeeded, compiler/rule=Waiting, created_unit=None
         broadcasts ChatSessionMessageUpdated via WS
-        broadcasts ProjectUnitCreated via WS
         publishes create_unit_compiler_check → unit_reviewer_work_queue
-        returns Ok(())
-            → on_tool_message_finished → maybe_complete_invoking_message
-            → tool message is still Generating → done != total → LLM waits
+        returns Ok() — message stays Generating, LLM waits
         │
         ▼
 unit_technical_reviewer: receives create_unit_compiler_check
   ├─ check fails
-  │     loads tool message row, deserializes ToolCreateUnitPayload
   │     updates row: compiler_check_sub_task=Failed, error set, status=Completed
   │     broadcasts ChatSessionMessageUpdated via WS
-  │     calls maybe_complete_invoking_message
-  │         → all tool siblings done → AI Text invoker set to Failed/Completed
-  │         → LLM continuation published → LLM continues (sees check failure in history)
+  │     calls maybe_complete_invoking_message → LLM continues (no unit in DB)
   │
   └─ check succeeds
-        updates row: compiler_check_sub_task=Succeeded, status=Generating (still waiting)
+        updates row: compiler_check_sub_task=Succeeded, status=Generating
         broadcasts ChatSessionMessageUpdated via WS
         publishes create_unit_rule_check → unit_reviewer_work_queue
         │
@@ -92,25 +97,39 @@ unit_technical_reviewer: receives create_unit_rule_check
   ├─ check fails
   │     updates row: rule_check_sub_task=Failed, error set, status=Completed
   │     broadcasts ChatSessionMessageUpdated via WS
-  │     calls maybe_complete_invoking_message → LLM continues (sees failure)
+  │     calls maybe_complete_invoking_message → LLM continues (no unit in DB)
   │
   └─ check succeeds
-        updates row: rule_check_sub_task=Succeeded, status=Completed
+        *** inserts project_units row (first and only write) ***
+        sets payload.created_unit = Some(ProjectUnitResponse)
+        updates row: rule_check_sub_task=Succeeded, created_unit set, status=Completed
         broadcasts ChatSessionMessageUpdated via WS
-        calls maybe_complete_invoking_message → LLM continues (all checks passed)
+        broadcasts ProjectUnitCreated via WS
+        calls maybe_complete_invoking_message → LLM continues
 ```
 
-## Key invariant: when the LLM continues
+The flows for `modify_unit` (compiler_check → rule_check → insert new revision) and `remove_unit` (rule_check only → insert deletion marker) follow the same pattern.
 
-`maybe_complete_invoking_message` (in `src/services/chat_worker/llm/tools/mod.rs`) counts child tool rows for the AI Text invoker. It only triggers the LLM continuation when **all** child rows are either `Completed` or `Failed`. Since the reviewer holds the `create_unit` row in `Generating` during checks, the LLM cannot continue prematurely.
+## LLM continuation: who calls `maybe_complete_invoking_message`
 
-When the final check finishes (success **or** failure), the reviewer sets the row to `Completed` and calls `maybe_complete_invoking_message`. At that point the invariant is satisfied and the LLM gets a new queue message to continue its turn.
+`ToolCreateUnit`, `ToolModifyUnit`, and `ToolRemoveUnit` are listed in `tool_message_type_skips_generic_invoker_completion`. This means the chat worker's generic `on_tool_message_finished` hook is **not** called after these handlers return — the handlers and the reviewer manage the LLM continuation themselves:
+
+| Situation | Who triggers LLM continuation |
+|---|---|
+| pre_check fails → message set to `Completed` | Handler calls `maybe_complete_invoking_message` before returning |
+| pre_check succeeds → dispatched to reviewer | Nobody — message stays `Generating`, LLM waits |
+| Reviewer final check (success or failure) | Reviewer calls `maybe_complete_invoking_message` after setting status to `Completed` |
+
+`maybe_complete_invoking_message` only fires the LLM continuation when **all** tool siblings for the invoking AI Text message are `Completed` or `Failed`. A tool in `Generating` state blocks the trigger.
 
 ## WebSocket events
 
-The reviewer publishes `ChatSessionMessageUpdated` after every sub-task transition so the client UI can show real-time progress (e.g. a spinner on each sub-task step). Each event carries the full updated `ChatMessageResponse`, which includes the current `pre_check_sub_task`, `compiler_check_sub_task`, and `rule_check_sub_task` values.
+The client receives incremental updates as each sub-task completes:
 
-When the unit is first inserted (`create_unit` pre-check succeeds), the handler also publishes `ProjectUnitCreated` so the client can display the new unit immediately, before checks complete.
+1. `ChatSessionMessageUpdated` — broadcast by the handler after pre_check, showing `pre_check_sub_task=Succeeded` and checks `Waiting`.
+2. `ChatSessionMessageUpdated` — broadcast by the reviewer after compiler_check, showing `compiler_check_sub_task=Succeeded/Failed`.
+3. `ChatSessionMessageUpdated` — broadcast by the reviewer after rule_check, showing `rule_check_sub_task=Succeeded/Failed`, `status=Completed`, and (on success) the populated `created_unit` / `revised_unit` / `removed_unit`.
+4. `ProjectUnitCreated` / `ProjectUnitModified` / `ProjectUnitDeleted` — broadcast by the reviewer **only** on rule_check success, after the row is actually in the database. Never sent on failure.
 
 ## Running locally
 
