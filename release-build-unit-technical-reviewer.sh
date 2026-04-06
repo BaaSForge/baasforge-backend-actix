@@ -3,11 +3,11 @@
 #
 # --features unit_technical_reviewer is required. It enables:
 #   - oxc_parser / oxc_ast / oxc_span for in-process TypeScript AST parsing
-#   - compile-time embedding of all @types/node declaration files (via build.rs)
+#   - compile-time embedding of all node_modules declaration files (via build.rs)
 #
 # Without the flag the binary compiles but the compiler check is a no-op stub.
 #
-# Runtime requirement: tsgo/node_modules/<platform>/lib/tsgo must exist at the project root.
+# Runtime requirement: src/tsgo/node_modules/<platform>/lib/tsgo must exist at the project root.
 # Run `cd tsgo && npm install` once from the repo root to populate it.
 #
 # Output: target/release/unit_technical_reviewer

@@ -2,30 +2,32 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let types_dir = PathBuf::from(&manifest_dir)
-        .join("tsgo/node_modules/@types/node");
+    let node_modules_dir = "src/tsgo/node_modules";
+    let out_path = "src/tsgo/node_modules_files.rs";
 
-    println!("cargo:rerun-if-changed={}", types_dir.display());
-
-    let out_dir = std::env::var("OUT_DIR").unwrap();
-    let out_path = PathBuf::from(&out_dir).join("node_type_files.rs");
+    println!("cargo:rerun-if-changed={}", node_modules_dir);
 
     let mut entries: Vec<(String, String)> = Vec::new();
-    collect_dts_files(&types_dir, &types_dir, &mut entries);
+    let base_path = PathBuf::from(node_modules_dir);
+    
+    collect_dts_files(&base_path, &base_path, &mut entries);
+    
+    // Sort alphabetically to ensure deterministic builds (crucial for caching)
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let mut code =
-        String::from("static NODE_TYPE_FILE_DATA: &[(&str, &str)] = &[\n");
-    for (rel_path, abs_path) in &entries {
+    let mut code = String::from("pub static NODE_MODULES_FILE_DATA: &[(&str, &str)] = &[\n");
+    
+    for (rel_path, include_path) in &entries {
+        // Using {:?} automatically wraps the string in quotes. 
+        // We no longer need the raw string (r"") because we force forward slashes below.
         code.push_str(&format!(
             "    ({:?}, include_str!({:?})),\n",
-            rel_path, abs_path
+            rel_path, include_path
         ));
     }
     code.push_str("];\n");
 
-    fs::write(&out_path, code).unwrap();
+    fs::write(out_path, code).expect("Failed to write generated type file");
 }
 
 fn collect_dts_files(base: &Path, dir: &Path, entries: &mut Vec<(String, String)>) {
@@ -33,18 +35,35 @@ fn collect_dts_files(base: &Path, dir: &Path, entries: &mut Vec<(String, String)
         Ok(rd) => rd,
         Err(_) => return,
     };
+
     for entry in read_dir.flatten() {
         let path = entry.path();
+        
         if path.is_dir() {
             collect_dts_files(base, &path, entries);
-        } else if path.extension().map(|e| e == "ts").unwrap_or(false) {
-            let rel = path
-                .strip_prefix(base)
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .replace('\\', "/");
-            entries.push((rel, path.to_str().unwrap().to_string()));
+        } else {
+            // Check if the filename ends with ".d.ts"
+            let is_dts = path.file_name()
+                .and_then(|n| n.to_str())
+                .map_or(false, |s| s.ends_with(".d.ts"));
+
+            if is_dts {
+                if let Some(path_str) = path.to_str() {
+                    println!("cargo:rerun-if-changed={}", path_str);
+                }
+
+                if let Ok(rel) = path.strip_prefix(base) {
+                    // Force forward slashes. `include_str!` handles forward slashes 
+                    // perfectly on both Windows and Unix systems.
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    
+                    // Since `node_modules_files.rs` is a sibling to the `node_modules` directory,
+                    // the relative path to include the file is just "node_modules/..."
+                    let include_path = format!("node_modules/{}", rel_str);
+                    
+                    entries.push((rel_str, include_path));
+                }
+            }
         }
     }
 }

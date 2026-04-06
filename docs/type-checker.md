@@ -40,12 +40,8 @@ Nothing is written to disk.
 /tsgo-vcheck-baal/
   tsconfig.json
   main.ts                         ← LLM code under test
-  global.d.ts                     ← ambient @units/* wildcard declaration
-  units-stub.d.ts                 ← stub target for paths mapping
   node_modules/
-    @types/node/
-      package.json
-      **/*.d.ts                   ← embedded at build time via build.rs
+    **/*.ts                   ← embedded at build time via build.rs
 ```
 
 ## tsgo IPC protocol
@@ -76,9 +72,9 @@ cd tsgo && npm install
 ```
 
 This does `npm install @typescript/native-preview` locally and copies the
-platform-native binary to `tsgo/node_modules/<platform>/lib/tsgo` (git-ignored).
+platform-native binary to `src/tsgo/node_modules/<platform>/lib/tsgo` (git-ignored).
 
-The binary is always resolved from **the project root's `tsgo/node_modules/<platform>/lib/tsgo`**:
+The binary is always resolved from **the project root's `src/tsgo/node_modules/<platform>/lib/tsgo`**:
 
 | Context | How the project root is found |
 |---|---|
@@ -108,7 +104,7 @@ The feature enables four optional Cargo dependencies:
 | `oxc_span` | `SourceType` enum used to configure the parser |
 
 `tsgo` itself is not a Cargo dependency — it is an external native binary
-(Go-compiled, no wasm, no V8) stored in `tsgo/node_modules/<platform>/lib/tsgo` after running
+(Go-compiled, no wasm, no V8) stored in `src/tsgo/node_modules/<platform>/lib/tsgo` after running
 `cd tsgo && npm install`.
 
 ## Supported `node:*` imports
@@ -128,8 +124,8 @@ Any other `node:*` specifier is rejected before reaching tsgo.
 
 ## @types/node embedding
 
-The `src/services/unit_technical_reviewer/@types/node/` directory is collected
-by `build.rs` at compile time and embedded as `NODE_TYPE_FILE_DATA` (a static
+The `src/tsgo/node_modules` directory is collected
+by `build.rs` at compile time and embedded as `NODE_MODULES_FILE_DATA` (a static
 array of `(&str, &str)` pairs). At runtime these are loaded into the VFS
 `HashMap` and served to tsgo via `readFile` callbacks — no disk I/O.
 
@@ -154,7 +150,7 @@ main.ts:12:5 — TS2322: Type 'string' is not assignable to type 'number'.
 
 **tsgo not found**:
 ```
-tsgo binary not found at tsgo/node_modules/<platform>/lib/tsgo relative to the project root.
+tsgo binary not found at src/tsgo/node_modules/<platform>/lib/tsgo relative to the project root.
 Run `cd tsgo && npm install` from the repo root.
 ```
 

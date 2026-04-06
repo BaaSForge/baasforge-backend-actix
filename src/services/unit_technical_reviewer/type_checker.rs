@@ -1,13 +1,9 @@
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::fs;   // Add at the top with other imports
+use std::collections::{HashMap, HashSet};
 
-// TODO: cache the fs files in memory, so we don't have to read them from the disk every time.
-
-// NOTE: The panic is a tsgo bug when receiving null for a required file read;
-// `tsgo error: panic: runtime error: invalid memory address or nil pointer dereference`
+use crate::tsgo::node_modules_files;
 
 const VIRTUAL_ROOT: &str = "/tsgo-vcheck-baal";
 const VIRTUAL_NODE_MODULES: &str = "/tsgo-vcheck-baal/node_modules";
@@ -23,11 +19,11 @@ pub async fn run_typescript_check(code: &str) -> Result<(), String> {
 
     // 2. Snapshot Lifecycle
     let snap_resp = client.call("updateSnapshot", json!({
-        "openProject": tsconfig_path,            // ✅ file path, not directory
+        "openProject": tsconfig_path,            
         "fileChanges": { 
             "invalidateAll": true, 
             "changed": [], 
-            "created": [tsconfig_path, main_ts_path],   // ✅ explicitly add both
+            "created": [tsconfig_path, main_ts_path],   
             "deleted": [] 
         }
     })).await?;
@@ -73,18 +69,22 @@ fn build_vfs(code: &str) -> HashMap<String, String> {
             "noEmit": true,
             "skipLibCheck": true,
             "types": ["node"],
-            "lib": ["esnext"],  // explicitly use only esnext
+            "lib": ["esnext"],  
         },
         "files": ["main.ts"]
     });
     vfs.insert(format!("{}/tsconfig.json", VIRTUAL_ROOT), tsconfig.to_string());
-
     vfs.insert(format!("{}/main.ts", VIRTUAL_ROOT), code.to_string());
-
     vfs.insert(format!("{}/package.json", VIRTUAL_ROOT), json!({
         "name": "virtual-project",
         "type": "module"
     }).to_string());
+
+    // Populate node_modules from the statically included file
+    for (rel_path, content) in node_modules_files::NODE_MODULES_FILE_DATA {
+        let full_path = format!("{}/{}", VIRTUAL_NODE_MODULES, rel_path);
+        vfs.insert(full_path, content.to_string());
+    }
 
     vfs
 }
@@ -96,6 +96,7 @@ struct TsgoIpcClient {
     writer: BufWriter<tokio::process::ChildStdin>,
     reader: BufReader<tokio::process::ChildStdout>,
     vfs: HashMap<String, String>,
+    vfs_dirs: HashSet<String>,
     next_id: u64,
 }
 
@@ -116,7 +117,23 @@ impl TsgoIpcClient {
         let writer = BufWriter::new(child.stdin.take().unwrap());
         let reader = BufReader::new(child.stdout.take().unwrap());
     
-        Ok(Self { child, writer, reader, vfs, next_id: 1 })
+        // Pre-compute directories for O(1) lookups during module resolution
+        let mut vfs_dirs = HashSet::new();
+        vfs_dirs.insert(VIRTUAL_ROOT.to_string()); // Explicit root fallback
+        
+        for key in vfs.keys() {
+            let mut current_path = Path::new(key).parent();
+            while let Some(parent) = current_path {
+                let parent_str = parent.to_string_lossy().to_string();
+                if parent_str.is_empty() || parent_str == "/" {
+                    break;
+                }
+                vfs_dirs.insert(parent_str);
+                current_path = parent.parent();
+            }
+        }
+
+        Ok(Self { child, writer, reader, vfs, vfs_dirs, next_id: 1 })
     }    
 
     // ---------- Public API ----------
@@ -130,7 +147,6 @@ impl TsgoIpcClient {
         loop {
             let resp = self.read_message().await?;
 
-            // Handle callbacks (requests from tsgo to us)
             if resp.get("method").is_some() {
                 let cb_id = resp["id"].clone();
                 let cb_method = resp["method"].as_str().unwrap();
@@ -144,7 +160,6 @@ impl TsgoIpcClient {
                 continue;
             }
 
-            // Handle response to our own request
             if resp["id"].as_str() == Some(&id) {
                 if let Some(err) = resp.get("error") {
                     return Err(format!(
@@ -159,9 +174,6 @@ impl TsgoIpcClient {
     }
 
     fn handle_fs_callback(&self, method: &str, params: &Value) -> Value {
-        // eprintln!("🔧 FS CALLBACK: method={}, params={}", method, params);
-    
-        // Extract path: string or first element of array
         let requested_path = match params {
             Value::String(s) => Some(s.as_str()),
             Value::Array(arr) => arr.first().and_then(Value::as_str),
@@ -176,64 +188,25 @@ impl TsgoIpcClient {
             format!("{}/{}", VIRTUAL_ROOT, requested_path)
         };
 
-        let real_path = if full_path.starts_with(VIRTUAL_NODE_MODULES) {
-            let suffix = &full_path[VIRTUAL_NODE_MODULES.len()..];
-            let mut real = get_real_node_modules_path();
-            if !suffix.is_empty() {
-                real.push(suffix.trim_start_matches('/'));
-            }
-            real
-        } else {
-            PathBuf::from(&full_path)
-        };        
-
         let normalized = Path::new(&full_path).components().collect::<PathBuf>();
-        let full_path = normalized.to_string_lossy().to_string();
-    
-        // eprintln!("   → full path: {}", full_path);
-    
-        let is_dir = |p: &str| -> bool {
-            if p == VIRTUAL_ROOT || p == format!("{}/", VIRTUAL_ROOT) {
-                return true;
-            }
-            let with_slash = if p.ends_with('/') { p.to_string() } else { format!("{}/", p) };
-            self.vfs.keys().any(|k| k.starts_with(&with_slash))
-        };
-    
+        // Trim any trailing slashes that tsgo might send for consistency
+        let full_path = normalized.to_string_lossy().trim_end_matches('/').to_string();
+
         match method {
             "readFile" => {
-                if is_dir(&full_path) {
-                    eprintln!("📁 readFile on directory -> null");
-                    return Value::Null;
+                if self.vfs_dirs.contains(&full_path) {
+                    return Value::Null; // Cannot read a directory
                 }
-
-                // First check virtual VFS
                 if let Some(content) = self.vfs.get(&full_path) {
-                    eprintln!("✅ readFile from VFS OK: {} ({} bytes)", full_path, content.len());
                     return json!({ "content": content });
                 }
-
-                // Fallback to real filesystem
-                if real_path.exists() && real_path.is_file() {
-                    if let Ok(content) = fs::read_to_string(&real_path) {
-                        return json!({ "content": content });
-                    }
-                }    
                 Value::Null
             }
             "fileExists" => {
-                let exists = self.vfs.contains_key(&full_path) || real_path.exists();
-                json!(exists)
+                json!(self.vfs.contains_key(&full_path))
             }
             "directoryExists" => {
-                let exists = if full_path == VIRTUAL_ROOT || full_path == format!("{}/", VIRTUAL_ROOT) {
-                    true
-                } else if full_path.starts_with("/tsgo-vcheck-baal/node_modules") {
-                    real_path.exists() && real_path.is_dir()
-                } else {
-                    real_path.is_dir()
-                };
-                json!(exists)
+                json!(self.vfs_dirs.contains(&full_path))
             }
             _ => {
                 eprintln!("⚠️ Unhandled callback: {}", method);
@@ -246,14 +219,8 @@ impl TsgoIpcClient {
     async fn write_message(&mut self, msg: &Value) -> Result<(), String> {
         let body = msg.to_string();
         let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        self.writer
-            .write_all(header.as_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
-        self.writer
-            .write_all(body.as_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
+        self.writer.write_all(header.as_bytes()).await.map_err(|e| e.to_string())?;
+        self.writer.write_all(body.as_bytes()).await.map_err(|e| e.to_string())?;
         self.writer.flush().await.map_err(|e| e.to_string())
     }
 
@@ -261,28 +228,17 @@ impl TsgoIpcClient {
         let mut len = 0;
         loop {
             let mut line = String::new();
-            let bytes_read = self.reader
-                .read_line(&mut line)
-                .await
-                .map_err(|e| e.to_string())?;
+            let bytes_read = self.reader.read_line(&mut line).await.map_err(|e| e.to_string())?;
             if bytes_read == 0 {
                 return Err("Connection closed by tsgo".to_string());
             }
-            if line.trim().is_empty() {
-                break;
-            }
+            if line.trim().is_empty() { break; }
             if line.starts_with("Content-Length: ") {
-                len = line["Content-Length: ".len()..]
-                    .trim()
-                    .parse()
-                    .map_err(|_| "Invalid Content-Length")?;
+                len = line["Content-Length: ".len()..].trim().parse().map_err(|_| "Invalid Content-Length")?;
             }
         }
         let mut body = vec![0u8; len];
-        self.reader
-            .read_exact(&mut body)
-            .await
-            .map_err(|e| e.to_string())?;
+        self.reader.read_exact(&mut body).await.map_err(|e| e.to_string())?;
         serde_json::from_slice(&body).map_err(|e| e.to_string())
     }
 }
@@ -291,19 +247,13 @@ impl TsgoIpcClient {
 fn find_tsgo_bin() -> Result<String, String> {
     let rel = tsgo_bin_rel_path()?;
     
-    // Check relative to current working directory
     let p = PathBuf::from(&rel);
-    if p.exists() {
-        return Ok(p.to_string_lossy().into_owned());
-    }
+    if p.exists() { return Ok(p.to_string_lossy().into_owned()); }
 
-    // Check relative to executable (for production)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(root) = exe.parent() {
             let p = root.join(&rel);
-            if p.exists() {
-                return Ok(p.to_string_lossy().into_owned());
-            }
+            if p.exists() { return Ok(p.to_string_lossy().into_owned()); }
         }
     }
 
@@ -319,11 +269,5 @@ fn tsgo_bin_rel_path() -> Result<String, String> {
         ("linux", "aarch64") => "@typescript/native-preview-linux-arm64",
         (os, arch) => return Err(format!("Unsupported: {os}-{arch}")),
     };
-    Ok(format!("tsgo/node_modules/{pkg}/lib/tsgo"))
-}
-
-fn get_real_node_modules_path() -> PathBuf {
-    // Relative to current working directory where tsgo is installed
-    let cwd = std::env::current_dir().unwrap();
-    cwd.join("tsgo/node_modules")
+    Ok(format!("src/tsgo/node_modules/{pkg}/lib/tsgo"))
 }
