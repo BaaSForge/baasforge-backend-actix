@@ -13,9 +13,26 @@
 //
 // Add new rules to the `rules()` vec below and implement them as private functions in this file.
 
-use super::RuleInput;
-use super::Rule;
+// ── LLM hints (always compiled — no OXC dependency) ──────────────────────────────────────────
 
+/// LLM-facing rule hints for Remove operations.
+///
+/// Each entry is `(rule_name, hint)`.  These are used to build the combined rules prompt that
+/// is injected into the developer agent's system prompt so the LLM knows the rules upfront.
+pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
+    vec![
+        // Add hints here as new remove-specific rules are introduced.
+    ]
+}
+
+// ── Linting rules (require the OXC parser) ────────────────────────────────────────────────────
+
+#[cfg(feature = "unit_technical_reviewer")]
+use super::Rule;
+#[cfg(feature = "unit_technical_reviewer")]
+use super::RuleInput;
+
+#[cfg(feature = "unit_technical_reviewer")]
 pub(super) fn rules() -> Vec<Rule> {
     vec![
         // Example (uncomment and implement when needed):
@@ -25,6 +42,7 @@ pub(super) fn rules() -> Vec<Rule> {
 
 // ── Rules ─────────────────────────────────────────────────────────────────────────────────────
 
+// #[cfg(feature = "unit_technical_reviewer")]
 // fn no_remove_pinned(input: &RuleInput) -> Vec<String> {
 //     let Some(_old_program) = input.old_program else { return vec![] };
 //     // Check for a `@pinned` JSDoc annotation in the old source.

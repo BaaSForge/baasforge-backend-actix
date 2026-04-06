@@ -14,15 +14,57 @@
 // `let Some(program) = input.program else { return vec![] };` so they are automatically
 // skipped for Remove operations (which have no new code to check).
 
-use super::ast_utils::{
+// ── LLM hints (always compiled — no OXC dependency) ──────────────────────────────────────────
+
+/// LLM-facing rule hints for API units.
+///
+/// Each entry is `(rule_name, hint)`.  These are used to build the combined rules prompt that
+/// is injected into the developer agent's system prompt so the LLM knows the rules upfront.
+pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (
+            "`RequestBody` must be exported",
+            "Always include `export type RequestBody = …` in an API unit. \
+             If the endpoint takes no request body, use `export type RequestBody = never`. \
+             The export must always be present.",
+        ),
+        (
+            "`ResponseBody` must be exported and must not be `never`",
+            "Always include `export type ResponseBody = { … }` with a concrete object type. \
+             `never` is forbidden for `ResponseBody` — every API must describe its actual response shape.",
+        ),
+        (
+            "`QueryParams` must be exported",
+            "Always include `export type QueryParams = …` in an API unit. \
+             If the endpoint takes no query parameters, use `export type QueryParams = never`. \
+             The export must always be present.",
+        ),
+        (
+            "No other exports allowed",
+            "Only `RequestBody`, `ResponseBody`, and `QueryParams` may be exported from an API unit. \
+             Do not add any other type alias exports, value exports (`export const`, `export function`, \
+             `export class`), re-exports via `export { … }`, default exports (`export default`), \
+             or wildcard re-exports (`export * from '…'`).",
+        ),
+    ]
+}
+
+// ── Linting rules (require the OXC parser) ────────────────────────────────────────────────────
+
+#[cfg(feature = "unit_technical_reviewer")]
+use super::super::ast_utils::{
     self, export_all_source, get_exported_type, has_exported_type, is_never,
     module_export_name_str,
 };
-use super::RuleInput;
-use super::Rule;
+#[cfg(feature = "unit_technical_reviewer")]
+use super::super::Rule;
+#[cfg(feature = "unit_technical_reviewer")]
+use super::super::RuleInput;
+#[cfg(feature = "unit_technical_reviewer")]
 use oxc_ast::ast::{Declaration, Statement};
 
-pub(super) fn rules() -> Vec<Rule> {
+#[cfg(feature = "unit_technical_reviewer")]
+pub fn rules() -> Vec<Rule> {
     vec![
         request_body_exported,
         response_body_exported_and_not_never,
@@ -34,6 +76,7 @@ pub(super) fn rules() -> Vec<Rule> {
 // ── Rules ─────────────────────────────────────────────────────────────────────────────────────
 
 /// `export type RequestBody` must be present.  The value may be `never` (no body).
+#[cfg(feature = "unit_technical_reviewer")]
 fn request_body_exported(input: &RuleInput) -> Vec<String> {
     let Some(program) = input.program else {
         return vec![];
@@ -51,6 +94,7 @@ fn request_body_exported(input: &RuleInput) -> Vec<String> {
 
 /// `export type ResponseBody` must be present AND must not be `never`.
 /// Every API must describe its concrete response shape.
+#[cfg(feature = "unit_technical_reviewer")]
 fn response_body_exported_and_not_never(input: &RuleInput) -> Vec<String> {
     let Some(program) = input.program else {
         return vec![];
@@ -71,6 +115,7 @@ fn response_body_exported_and_not_never(input: &RuleInput) -> Vec<String> {
 }
 
 /// `export type QueryParams` must be present.  The value may be `never` (no params).
+#[cfg(feature = "unit_technical_reviewer")]
 fn query_params_exported(input: &RuleInput) -> Vec<String> {
     let Some(program) = input.program else {
         return vec![];
@@ -90,6 +135,7 @@ fn query_params_exported(input: &RuleInput) -> Vec<String> {
 ///
 /// Forbidden: any other type alias, value exports (const / function / class), re-exports via
 /// specifiers, default exports, and wildcard `export * from '…'`.
+#[cfg(feature = "unit_technical_reviewer")]
 fn no_other_exports(input: &RuleInput) -> Vec<String> {
     let Some(program) = input.program else {
         return vec![];

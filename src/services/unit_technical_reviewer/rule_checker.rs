@@ -11,22 +11,25 @@
 //       Create  → create_rules.rs
 //       Modify  → modify_rules.rs
 //       Remove  → remove_rules.rs
-//   3. Unit-type rules (current unit type, every operation) — e.g. api_rules.rs
+//   3. Unit-type rules (current unit type, every operation) — units/<type>_rules.rs
+//
+// Each rule file also exposes `hint_entries()` (no feature gate) which feeds `rules_prompt()`,
+// the single source of truth for what rules the LLM developer agent must follow.
 
 // ── Submodules ────────────────────────────────────────────────────────────────────────────────
+//
+// The *module* declarations below are not feature-gated so that `hint_entries()` (which has no
+// OXC dependency) compiles for every binary including the chat_worker.  The OXC-dependent code
+// inside each file is individually gated with `#[cfg(feature = "unit_technical_reviewer")]`.
+
+mod generic_rules;
+mod create_rules;
+mod modify_rules;
+mod remove_rules;
+pub mod units;
 
 #[cfg(feature = "unit_technical_reviewer")]
 pub mod ast_utils;
-#[cfg(feature = "unit_technical_reviewer")]
-mod generic_rules;
-#[cfg(feature = "unit_technical_reviewer")]
-mod create_rules;
-#[cfg(feature = "unit_technical_reviewer")]
-mod modify_rules;
-#[cfg(feature = "unit_technical_reviewer")]
-mod remove_rules;
-#[cfg(feature = "unit_technical_reviewer")]
-mod api_rules;
 
 // ── Re-export OXC utilities so callers can compose new rules without knowing the internal layout
 
@@ -69,6 +72,56 @@ struct RuleInput<'a> {
 /// Every rule is a plain function: pure, no I/O, returns zero or more violation messages.
 #[cfg(feature = "unit_technical_reviewer")]
 type Rule = for<'a> fn(&RuleInput<'a>) -> Vec<String>;
+
+// ── Rules prompt (always compiled) ───────────────────────────────────────────────────────────
+
+/// Returns a Markdown string listing all enforced rules grouped by category.
+///
+/// This is the **single source of truth** for the rules the LLM must follow.  The same rules
+/// that are checked by `run_rule_check` are described here as human-readable hints.  Call this
+/// from the developer agent's system prompt so the LLM knows the constraints upfront.
+pub fn rules_prompt() -> String {
+    let mut out = String::new();
+
+    // 1. Generic rules
+    out.push_str("## 1. Generic Rules\n\n");
+    append_hints(&mut out, generic_rules::hint_entries());
+
+    // 2. Create unit rules
+    out.push_str("## 2. Create Unit Rules\n\n");
+    append_hints(&mut out, create_rules::hint_entries());
+
+    // 3. Modify unit rules
+    out.push_str("## 3. Modify Unit Rules\n\n");
+    append_hints(&mut out, modify_rules::hint_entries());
+
+    // 4. Remove unit rules
+    out.push_str("## 4. Remove Unit Rules\n\n");
+    append_hints(&mut out, remove_rules::hint_entries());
+
+    // 5. Unit-specific rules
+    out.push_str("## 5. Unit-Specific Rules\n\n");
+
+    out.push_str("### API Units\n\n");
+    append_hints(&mut out, units::api_rules::hint_entries());
+
+    // Add additional unit type sections here as new rule files are introduced:
+    // out.push_str("### Command Units\n\n");
+    // append_hints(&mut out, units::command_rules::hint_entries());
+
+    out
+}
+
+fn append_hints(out: &mut String, entries: Vec<(&'static str, &'static str)>) {
+    if entries.is_empty() {
+        out.push_str("*(No additional rules for this group.)*\n\n");
+    } else {
+        for (name, hint) in entries {
+            out.push_str(&format!("- **{name}**: {hint}\n"));
+        }
+        out.push('\n');
+    }
+}
 
 // ── Public entry point ────────────────────────────────────────────────────────────────────────
 
@@ -166,9 +219,8 @@ pub fn run_rule_check(
 #[cfg(feature = "unit_technical_reviewer")]
 fn unit_type_rules(unit_type: &str) -> Vec<Rule> {
     match unit_type {
-        "api" => api_rules::rules(),
-        // "action"     => action_rules::rules(),
-        // "command"    => command_rules::rules(),
+        "api" => units::api_rules::rules(),
+        // "command"    => units::command_rules::rules(),
         _ => vec![],
     }
 }
