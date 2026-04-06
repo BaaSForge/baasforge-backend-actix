@@ -7,9 +7,10 @@
 // All functions are pure: no side effects, no error accumulation.
 
 use oxc_ast::ast::{
-    Declaration, ExportAllDeclaration, ExportNamedDeclaration, ModuleExportName, Program,
-    Statement, TSType,
+    Declaration, ExportAllDeclaration, ExportNamedDeclaration, IdentifierReference,
+    ModuleExportName, Program, Statement, TSType,
 };
+use oxc_ast_visit::{walk, Visit};
 
 // ── Source-text utilities ─────────────────────────────────────────────────────────────────────
 
@@ -53,6 +54,32 @@ fn is_ident_byte(b: u8) -> bool {
 }
 
 // ── OXC AST utilities ─────────────────────────────────────────────────────────────────────────
+
+/// Returns `true` if an `IdentifierReference` with the given `name` appears anywhere in the AST.
+///
+/// Unlike [`contains_word`], this function only fires on actual identifier references in
+/// executable code — it is immune to false positives from comments, string literals, and
+/// template literal text.  Use this whenever you need to detect usage of a global (e.g.
+/// `console`, `process`) rather than just its textual presence in the source.
+pub fn has_identifier_reference(program: &Program, name: &str) -> bool {
+    struct Finder<'s> {
+        name: &'s str,
+        found: bool,
+    }
+
+    impl<'a, 's> Visit<'a> for Finder<'s> {
+        fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+            if ident.name.as_str() == self.name {
+                self.found = true;
+            }
+            walk::walk_identifier_reference(self, ident);
+        }
+    }
+
+    let mut finder = Finder { name, found: false };
+    finder.visit_program(program);
+    finder.found
+}
 
 /// Returns the names of all top-level exported type aliases, in source order.
 pub fn get_exported_type_names<'a>(program: &'a Program) -> Vec<&'a str> {

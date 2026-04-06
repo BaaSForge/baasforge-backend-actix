@@ -33,7 +33,8 @@ mod api_rules;
 #[cfg(feature = "unit_technical_reviewer")]
 pub use ast_utils::{
     contains_word, get_export_named_decls, get_exported_type, get_exported_type_names,
-    get_non_type_alias_exports, has_exported_type, is_never, is_object_type,
+    get_non_type_alias_exports, has_exported_type, has_identifier_reference, is_never,
+    is_object_type,
 };
 
 // ── Public types (always compiled) ───────────────────────────────────────────────────────────

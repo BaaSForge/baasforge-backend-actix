@@ -167,6 +167,7 @@ async-nats = "0.46"
 oxc_allocator = { version = "0.123", optional = true }
 oxc_parser = { version = "0.123", optional = true }
 oxc_ast = { version = "0.123", optional = true }
+oxc_ast_visit = { version = "0.123", optional = true }
 oxc_span = { version = "0.123", optional = true }
 
 [features]
@@ -174,6 +175,7 @@ unit_technical_reviewer = [
     "dep:oxc_allocator",
     "dep:oxc_parser",
     "dep:oxc_ast",
+    "dep:oxc_ast_visit",
     "dep:oxc_span",
 ]
 
