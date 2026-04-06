@@ -62,14 +62,34 @@ fn build_vfs(code: &str) -> HashMap<String, String> {
 
     let tsconfig = json!({
         "compilerOptions": {
-            "target": "ESNext",
-            "module": "NodeNext",
-            "moduleResolution": "NodeNext",
+            "target": "ES2023",
+            "module": "ES2022",
+            "moduleResolution": "node",
+            "lib": ["ES2023"],
+
+            "types": ["node"],
+            "declaration": false,
+            "sourceMap": true,
+            "skipLibCheck": true,
+
             "strict": true,
             "noEmit": true,
-            "skipLibCheck": true,
-            "types": ["node"],
-            "lib": ["esnext"],  
+            "noImplicitAny": true,
+            "strictNullChecks": true,
+            "strictFunctionTypes": true,
+            "strictBindCallApply": true,
+            "strictPropertyInitialization": true,
+            "noImplicitThis": true,
+            "alwaysStrict": true,
+            "useUnknownInCatchVariables": true,
+            "noUncheckedIndexedAccess": true,
+            "exactOptionalPropertyTypes": true,
+
+            "noUnusedLocals": true,
+            "noUnusedParameters": true,
+            "noImplicitReturns": true,
+            "noFallthroughCasesInSwitch": true,
+            "noPropertyAccessFromIndexSignature": true,
         },
         "files": ["main.ts"]
     });
