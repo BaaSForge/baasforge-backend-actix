@@ -75,6 +75,7 @@ fn build_vfs(code: &str) -> HashMap<String, String> {
             "strict": true,
             "noEmit": true,
             "noImplicitAny": true,
+            "noImplicitOverride": true,
             "strictNullChecks": true,
             "strictFunctionTypes": true,
             "strictBindCallApply": true,
