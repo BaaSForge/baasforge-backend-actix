@@ -11,7 +11,8 @@ use crate::services::chat_worker::llm::tools::UnitSubTaskStatus;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::helpers::{
     broadcast_message_updated, extract_remove_unit_payload, load_tool_message_row,
-    simulate_rule_check, trigger_llm_continuation, update_tool_message_payload, BoxError, RedisConn,
+    run_rule_check, trigger_llm_continuation, update_tool_message_payload, BoxError, RedisConn,
+    UnitOperation,
 };
 use crate::services::unit_technical_reviewer::queue::UnitReviewerQueueMessage;
 use diesel::prelude::*;
@@ -28,31 +29,35 @@ pub async fn process_remove_unit_rule_check(
     let invoking_message_id = row.invoking_message_id;
     let mut payload = extract_remove_unit_payload(&row)?;
 
-    let check_succeeded = simulate_rule_check(&message.unit_type, &message.context_slug);
+    // Load the parent unit first — needed for both old_code (passed to rule check) and the
+    // deletion-marker insert that follows if all checks pass.
+    let parent_key = payload.args.unit_id.clone();
+    let pid = message.project_id;
+    let sid = message.session_id;
+    let pk = parent_key.clone();
+    let parent_opt = block_on_db_tokio(pool, move |conn| {
+        let parent: Option<ProjectUnitRow> = project_units::table
+            .filter(project_units::project_id.eq(pid))
+            .filter(project_units::chat_session_id.eq(sid))
+            .filter(project_units::id.eq(&pk))
+            .select(ProjectUnitRow::as_select())
+            .first(conn)
+            .optional()?;
+        if let Some(p) = parent {
+            return Ok(Some(p));
+        }
+        let prod_units = load_units_from_latest_production_metadata(conn, pid)?;
+        Ok(prod_units.into_iter().find(|u| u.id == pk && !u.is_deleted).map(|u| u.row))
+    })
+    .await
+    .map_err(|e| -> BoxError { e.to_string().into() })?;
 
-    if check_succeeded {
-        // Look up the parent unit row so we can insert the deletion marker (is_deleted = true).
-        let parent_key = payload.args.unit_id.clone();
-        let pid = message.project_id;
-        let sid = message.session_id;
-        let pk = parent_key.clone();
-        let parent_opt = block_on_db_tokio(pool, move |conn| {
-            let parent: Option<ProjectUnitRow> = project_units::table
-                .filter(project_units::project_id.eq(pid))
-                .filter(project_units::chat_session_id.eq(sid))
-                .filter(project_units::id.eq(&pk))
-                .select(ProjectUnitRow::as_select())
-                .first(conn)
-                .optional()?;
-            if let Some(p) = parent {
-                return Ok(Some(p));
-            }
-            let prod_units = load_units_from_latest_production_metadata(conn, pid)?;
-            Ok(prod_units.into_iter().find(|u| u.id == pk && !u.is_deleted).map(|u| u.row))
-        })
-        .await
-        .map_err(|e| -> BoxError { e.to_string().into() })?;
+    // Remove has no new code; old_code is the existing unit source.
+    let old_code = parent_opt.as_ref().and_then(|p| p.code.as_deref());
+    let rule_errors =
+        run_rule_check(UnitOperation::Remove, &message.unit_type, "", old_code);
 
+    if rule_errors.is_empty() {
         match parent_opt {
             Some(parent) if !parent.is_deleted => {
                 let new_rev = parent.revision + 1;
@@ -158,7 +163,10 @@ pub async fn process_remove_unit_rule_check(
         }
     } else {
         payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
-        payload.error = Some("Rule check failed: cannot remove this unit type.".to_string());
+        payload.error = Some(format!(
+            "Rule check failed. Fix the following violations:\n{}",
+            rule_errors.join("\n")
+        ));
         let updated_row =
             update_tool_message_payload(pool, tool_message_id, &payload, ChatMessageStatus::Completed)
                 .await?;

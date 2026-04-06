@@ -16,7 +16,7 @@ run_typescript_check(code)
   │    └─ node:* import allowlist check
   │
   └─ tsgo IPC (virtual filesystem, no disk writes)
-       ├─ spawn: tsgo --api --async --cwd /tsgo-vcheck-baal \
+       ├─ spawn: tsgo --api --async --cwd /unit \
        │          --callbacks=readFile,fileExists,directoryExists,getAccessibleEntries
        ├─ serve all file content from in-memory HashMap via JSON-RPC callbacks
        └─ sequence: initialize → updateSnapshot → getDefaultProjectForFile
@@ -37,7 +37,7 @@ All files are served from memory via tsgo IPC callbacks.
 Nothing is written to disk.
 
 ```
-/tsgo-vcheck-baal/
+/unit/
   tsconfig.json
   main.ts                         ← LLM code under test
   node_modules/
@@ -55,7 +55,7 @@ tsgo requests file content from our process via callback RPCs:
 - `directoryExists([path])` → `true` (JSON bool, found) or `null` (fall back to real FS)
 - `getAccessibleEntries([path])` → `{"files": [...], "directories": [...]}` or `null` (fall back)
 
-Virtual paths are under `/tsgo-vcheck-baal/` which does not exist on the real
+Virtual paths are under `/unit/` which does not exist on the real
 filesystem. For any path not in our VFS we return `null` so tsgo falls back to
 the real FS — this lets it find its own TypeScript lib files (e.g. `lib.es2020.d.ts`)
 that live next to the binary.

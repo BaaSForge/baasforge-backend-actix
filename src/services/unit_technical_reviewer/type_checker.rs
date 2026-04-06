@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::tsgo::node_modules_files;
 
-const VIRTUAL_ROOT: &str = "/tsgo-vcheck-baal";
-const VIRTUAL_NODE_MODULES: &str = "/tsgo-vcheck-baal/node_modules";
+const VIRTUAL_ROOT: &str = "/unit";
+const VIRTUAL_NODE_MODULES: &str = "/unit/node_modules";
 
 pub async fn run_typescript_check(code: &str) -> Result<(), String> {
     let vfs = build_vfs(code);

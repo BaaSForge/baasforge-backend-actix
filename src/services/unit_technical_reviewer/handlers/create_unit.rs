@@ -10,7 +10,8 @@ use crate::services::chat_worker::llm::tools::UnitSubTaskStatus;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::helpers::{
     broadcast_message_updated, extract_create_unit_payload, load_tool_message_row,
-    simulate_rule_check, trigger_llm_continuation, update_tool_message_payload, BoxError, RedisConn,
+    run_rule_check, trigger_llm_continuation, update_tool_message_payload, BoxError, RedisConn,
+    UnitOperation,
 };
 use crate::services::unit_technical_reviewer::type_checker::run_typescript_check;
 use crate::services::unit_technical_reviewer::queue::{
@@ -104,10 +105,9 @@ pub async fn process_create_unit_rule_check(
     let invoking_message_id = row.invoking_message_id;
     let mut payload = extract_create_unit_payload(&row)?;
 
-    // Simulate rule check — linting / naming-convention checks will be added later.
-    let check_succeeded = simulate_rule_check(&message.unit_type, &message.context_slug);
+    let rule_errors = run_rule_check(UnitOperation::Create, &message.unit_type, &message.code, None);
 
-    if check_succeeded {
+    if rule_errors.is_empty() {
         // All checks passed: now insert the project_units row. The unit is persisted only at
         // this final step so that no partial or invalid unit ever lands in the database.
         let unit_id = compose_unit_id(
@@ -209,7 +209,10 @@ pub async fn process_create_unit_rule_check(
     } else {
         // Rule check failed — do not insert the unit.
         payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
-        payload.error = Some("Rule check failed: unit violates naming conventions.".to_string());
+        payload.error = Some(format!(
+            "Rule check failed. Fix the following violations:\n{}",
+            rule_errors.join("\n")
+        ));
         let updated_row =
             update_tool_message_payload(pool, tool_message_id, &payload, ChatMessageStatus::Completed)
                 .await?;

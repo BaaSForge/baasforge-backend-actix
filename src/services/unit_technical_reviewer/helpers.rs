@@ -21,11 +21,9 @@ use uuid::Uuid;
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub type RedisConn = Arc<Mutex<MultiplexedConnection>>;
 
-/// Simulates a rule/convention check on the unit.
-/// For now always succeeds; real linting rules will replace this.
-pub fn simulate_rule_check(_unit_type: &str, _context_slug: &str) -> bool {
-    true
-}
+/// Re-exported for convenience so callers can import from `helpers` without knowing the module
+/// structure changed.
+pub use crate::services::unit_technical_reviewer::rule_checker::{run_rule_check, UnitOperation};
 
 pub async fn load_tool_message_row(
     pool: &DbPool,
