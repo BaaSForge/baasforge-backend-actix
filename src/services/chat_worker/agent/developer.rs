@@ -8,7 +8,7 @@ use crate::services::chat_worker::llm::tools::{
     create_unit, finish_implementation, list_modules_for_unit_contexts, list_unit_contexts,
     modify_unit, remove_unit,
 };
-use crate::services::chat_worker::units_definitions;
+use crate::services::units as units_definitions;
 use crate::services::unit_technical_reviewer::rule_checker;
 use diesel::prelude::*;
 use diesel::result::Error;

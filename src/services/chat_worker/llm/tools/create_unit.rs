@@ -9,7 +9,7 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
 use crate::services::chat_worker::db::load_units_from_latest_production_metadata;
-use crate::services::chat_worker::units_definitions;
+use crate::services::units as units_definitions;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::queue::{
     publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,

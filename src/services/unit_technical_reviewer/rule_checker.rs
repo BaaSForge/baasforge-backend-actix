@@ -26,7 +26,6 @@ mod generic_rules;
 mod create_rules;
 mod modify_rules;
 mod remove_rules;
-pub mod units;
 
 #[cfg(feature = "unit_technical_reviewer")]
 pub mod ast_utils;
@@ -35,10 +34,13 @@ pub mod ast_utils;
 
 #[cfg(feature = "unit_technical_reviewer")]
 pub use ast_utils::{
-    contains_word, get_export_named_decls, get_exported_type, get_exported_type_names,
-    get_non_type_alias_exports, has_exported_type, has_identifier_reference, is_never,
-    is_object_type,
+    contains_word, export_all_source, get_export_named_decls, get_exported_type,
+    get_exported_type_names, get_non_type_alias_exports, has_exported_type,
+    has_identifier_reference, is_never, is_object_type, module_export_name_str,
 };
+
+#[cfg(feature = "unit_technical_reviewer")]
+pub use oxc_ast::ast::{Declaration, Statement};
 
 // ── TypeScript → JavaScript compiler ─────────────────────────────────────────────────────────
 
@@ -116,7 +118,7 @@ pub enum UnitOperation {
 
 /// Context passed to every rule function. A rule may inspect any combination of fields.
 #[cfg(feature = "unit_technical_reviewer")]
-struct RuleInput<'a> {
+pub(crate) struct RuleInput<'a> {
     pub operation: UnitOperation,
     pub unit_type: &'a str,
     /// Parsed new code.  `Some` for Create and Modify; `None` for Remove.
@@ -133,7 +135,7 @@ struct RuleInput<'a> {
 
 /// Every rule is a plain function: pure, no I/O, returns zero or more violation messages.
 #[cfg(feature = "unit_technical_reviewer")]
-type Rule = for<'a> fn(&RuleInput<'a>) -> Vec<String>;
+pub(crate) type Rule = for<'a> fn(&RuleInput<'a>) -> Vec<String>;
 
 // ── Rules prompt (always compiled) ───────────────────────────────────────────────────────────
 
@@ -165,7 +167,7 @@ pub fn rules_prompt() -> String {
     out.push_str("## 5. Unit-Specific Rules\n\n");
 
     out.push_str("### API Units\n\n");
-    append_hints(&mut out, units::api_rules::hint_entries());
+    append_hints(&mut out, crate::services::units::api::rules::hint_entries());
 
     // Add additional unit type sections here as new rule files are introduced:
     // out.push_str("### Command Units\n\n");
@@ -281,7 +283,7 @@ pub fn run_rule_check(
 #[cfg(feature = "unit_technical_reviewer")]
 fn unit_type_rules(unit_type: &str) -> Vec<Rule> {
     match unit_type {
-        "api" => units::api_rules::rules(),
+        "api" => crate::services::units::api::rules::rules(),
         // "command"    => units::command_rules::rules(),
         _ => vec![],
     }

@@ -192,7 +192,7 @@ pub fn is_object_type(ty: &TSType) -> bool {
 // ── Internal helpers (accessible within the `rule_checker` module family) ─────────────────────
 
 /// Extracts the string name from a `ModuleExportName` (covers ident, reference, and string forms).
-pub(super) fn module_export_name_str<'a>(name: &'a ModuleExportName<'a>) -> &'a str {
+pub fn module_export_name_str<'a>(name: &'a ModuleExportName<'a>) -> &'a str {
     match name {
         ModuleExportName::IdentifierName(id) => id.name.as_str(),
         ModuleExportName::IdentifierReference(id) => id.name.as_str(),
@@ -201,6 +201,6 @@ pub(super) fn module_export_name_str<'a>(name: &'a ModuleExportName<'a>) -> &'a 
 }
 
 /// Returns the `from '…'` source string of an `export * from '…'` declaration.
-pub(super) fn export_all_source<'a>(e: &'a ExportAllDeclaration<'a>) -> &'a str {
+pub fn export_all_source<'a>(e: &'a ExportAllDeclaration<'a>) -> &'a str {
     e.source.value.as_str()
 }

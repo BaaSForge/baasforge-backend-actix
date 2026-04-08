@@ -52,16 +52,10 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
 // ── Linting rules (require the OXC parser) ────────────────────────────────────────────────────
 
 #[cfg(feature = "unit_technical_reviewer")]
-use super::super::ast_utils::{
-    self, export_all_source, get_exported_type, has_exported_type, is_never,
-    module_export_name_str,
+use crate::services::unit_technical_reviewer::rule_checker::{
+    export_all_source, get_exported_type, has_exported_type, is_never, module_export_name_str,
+    Declaration, Rule, RuleInput, Statement,
 };
-#[cfg(feature = "unit_technical_reviewer")]
-use super::super::Rule;
-#[cfg(feature = "unit_technical_reviewer")]
-use super::super::RuleInput;
-#[cfg(feature = "unit_technical_reviewer")]
-use oxc_ast::ast::{Declaration, Statement};
 
 #[cfg(feature = "unit_technical_reviewer")]
 pub fn rules() -> Vec<Rule> {

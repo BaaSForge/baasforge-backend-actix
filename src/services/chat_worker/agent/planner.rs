@@ -7,7 +7,7 @@ use crate::services::chat_worker::llm::history::UPSTREAM_EXCLUDED_MESSAGE_TYPES;
 use crate::services::chat_worker::llm::tools::{
     analyze_architecture_tool, analyze_solution_tool, implement_solution_tool, load_latest_releases,
 };
-use crate::services::chat_worker::units_definitions;
+use crate::services::units as units_definitions;
 use diesel::dsl::not;
 use diesel::prelude::*;
 use diesel::result::Error;

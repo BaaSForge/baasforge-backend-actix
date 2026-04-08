@@ -1,5 +1,5 @@
 mod action;
-mod api;
+pub mod api;
 mod bootstrap;
 mod command;
 mod flow;
@@ -26,7 +26,7 @@ pub const UNIT_KIND_SLUGS: &[&str] = &[
     "timer",
 ];
 
-/// For `#[schemars(description = ...)]` on create_unit’s `unit_type` field (Gemini JSON schema).
+/// For `#[schemars(description = ...)]` on create_unit's `unit_type` field (Gemini JSON schema).
 pub const UNIT_TYPE_ARG_DESCRIPTION: &str =
     "Unit kind (enum): pass the lowercase slug string exactly as in the schema—e.g. api, command, projection—not Title Case (Api) or SCREAMING_SNAKE (API). Must be one of: bootstrap, action, api, command, flow, gateway, projection, query, runtime, schema, timer.";
 
@@ -52,8 +52,7 @@ pub fn all_briefs() -> String {
         (schema::TITLE, schema::BRIEF),
         (timer::TITLE, timer::BRIEF),
     ];
-    ROWS
-        .iter()
+    ROWS.iter()
         .map(|(title, brief)| format!("### {title}\n\n{brief}\n"))
         .collect()
 }
@@ -72,8 +71,7 @@ pub fn all_details() -> String {
         (schema::TITLE, schema::DETAIL),
         (timer::TITLE, timer::DETAIL),
     ];
-    ROWS
-        .iter()
+    ROWS.iter()
         .map(|(title, detail)| format!("### {title}\n\n{detail}\n"))
         .collect()
 }
@@ -92,8 +90,7 @@ pub fn all_communications() -> String {
         (schema::TITLE, schema::COMMUNICATION),
         (timer::TITLE, timer::COMMUNICATION),
     ];
-    ROWS
-        .iter()
+    ROWS.iter()
         .map(|(title, comm)| format!("### {title}\n\n{comm}\n"))
         .collect()
 }
@@ -112,8 +109,7 @@ pub fn all_metadata() -> String {
         (schema::TITLE, schema::METADATA),
         (timer::TITLE, timer::METADATA),
     ];
-    ROWS
-        .iter()
+    ROWS.iter()
         .map(|(title, meta)| format!("### {title}\n\n{meta}\n"))
         .collect()
 }

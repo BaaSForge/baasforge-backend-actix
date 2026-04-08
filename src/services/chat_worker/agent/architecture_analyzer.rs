@@ -6,7 +6,7 @@ use crate::services::chat_worker::llm::tools::{
     finish_architecture_analysis, list_modules_for_unit_contexts, list_unit_contexts,
     load_latest_production_release_units,
 };
-use crate::services::chat_worker::units_definitions;
+use crate::services::units as units_definitions;
 use diesel::prelude::*;
 use diesel::result::Error;
 use diesel::OptionalExtension;
