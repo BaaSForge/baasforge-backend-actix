@@ -1,7 +1,7 @@
 use crate::database::{block_on_db_tokio, DbPool};
 use crate::libs::unit_slug::compose_unit_id;
 use crate::models::chat_messages::ChatMessageStatus;
-use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType};
+use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow};
 use crate::routes::ws::events::{ProjectUnitEventPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
@@ -14,58 +14,12 @@ use crate::services::unit_technical_reviewer::helpers::{
     update_tool_message_payload, BoxError, RedisConn, UnitOperation,
 };
 use crate::services::unit_technical_reviewer::type_checker::run_typescript_check;
-use crate::services::unit_technical_reviewer::type_extractor::extract_api_type_metadata;
 use crate::services::unit_technical_reviewer::queue::{
     publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
 };
-use crate::services::units::{api::metadata::ApiUnitMetadata, HttpMethod, UnitMetadata};
-use uuid::Uuid;
+use crate::services::units::{build_unit_metadata, UnitMetadataBuildInput};
 use diesel::prelude::*;
 use std::sync::Arc;
-
-fn build_unit_metadata(
-    unit_type: ProjectUnitType,
-    api_method: Option<HttpMethod>,
-    type_meta: Option<ApiUnitMetadata>,
-) -> Option<UnitMetadata> {
-    match unit_type {
-        ProjectUnitType::Api => {
-            let mut meta = type_meta.unwrap_or_default();
-            meta.method = api_method;
-            Some(UnitMetadata::Api(meta))
-        }
-        _ => None,
-    }
-}
-
-/// Load units from the DB and extract API type metadata.
-/// Only performs actual work when the `unit_technical_reviewer` feature is enabled;
-/// returns `None` otherwise so the main binary never links OXC.
-#[cfg(feature = "unit_technical_reviewer")]
-async fn build_api_type_meta(
-    pool: &DbPool,
-    project_id: Uuid,
-    session_id: Uuid,
-    code: &str,
-) -> Option<ApiUnitMetadata> {
-    use crate::services::chat_worker::db::load_effective_units_for_chat_session;
-    let units = block_on_db_tokio(pool, move |conn| {
-        load_effective_units_for_chat_session(conn, project_id, session_id)
-    })
-    .await
-    .unwrap_or_default();
-    Some(extract_api_type_metadata(code, &units))
-}
-
-#[cfg(not(feature = "unit_technical_reviewer"))]
-async fn build_api_type_meta(
-    _pool: &DbPool,
-    _project_id: Uuid,
-    _session_id: Uuid,
-    _code: &str,
-) -> Option<ApiUnitMetadata> {
-    None
-}
 
 pub async fn process_create_unit_compiler_check(
     pool: &DbPool,
@@ -166,12 +120,17 @@ pub async fn process_create_unit_rule_check(
         );
         let compiled_code = compile_ts_to_js(&payload.args.code).ok();
         let depends_on = extract_unit_dependencies(&payload.args.code);
-        let type_meta = if payload.args.unit_type == ProjectUnitType::Api {
-            build_api_type_meta(pool, message.project_id, message.session_id, &payload.args.code).await
-        } else {
-            None
-        };
-        let metadata = build_unit_metadata(payload.args.unit_type, payload.args.api_method.clone(), type_meta);
+        let metadata = build_unit_metadata(
+            payload.args.unit_type,
+            pool,
+            message.project_id,
+            message.session_id,
+            UnitMetadataBuildInput {
+                code: &payload.args.code,
+                api_method: payload.args.api_method.clone(),
+            },
+        )
+        .await;
         let insert = ProjectUnitInsert {
             project_id: message.project_id,
             chat_session_id: message.session_id,

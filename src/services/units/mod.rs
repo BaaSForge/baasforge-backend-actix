@@ -9,6 +9,7 @@ mod query;
 mod runtime;
 mod schema;
 mod timer;
+pub mod type_extractor;
 
 use serde::{Deserialize, Serialize};
 
@@ -135,4 +136,44 @@ pub fn all_metadata() -> String {
     ROWS.iter()
         .map(|(title, meta)| format!("### {title}\n\n{meta}\n"))
         .collect()
+}
+
+// ── Metadata building ─────────────────────────────────────────────────────────
+
+/// Unit-type–agnostic input for `build_unit_metadata`.
+///
+/// Callers populate all fields from the LLM tool payload; each unit type uses
+/// only the fields relevant to it.
+pub struct UnitMetadataBuildInput<'a> {
+    pub code: &'a str,
+    /// HTTP method — relevant only for `Api` units.
+    pub api_method: Option<HttpMethod>,
+}
+
+/// Build the persisted `UnitMetadata` for a unit after all checks pass.
+///
+/// This is the single dispatch point: each unit type is responsible for its own
+/// `build_unit_metadata` implementation in its module folder; the match here is
+/// the only place in the technical-reviewer pipeline that is aware of concrete
+/// unit types.
+pub async fn build_unit_metadata(
+    unit_type: crate::models::projects::ProjectUnitType,
+    pool: &crate::database::DbPool,
+    project_id: uuid::Uuid,
+    session_id: uuid::Uuid,
+    input: UnitMetadataBuildInput<'_>,
+) -> Option<UnitMetadata> {
+    match unit_type {
+        crate::models::projects::ProjectUnitType::Api => {
+            api::build_unit_metadata(
+                pool,
+                project_id,
+                session_id,
+                input.code,
+                input.api_method,
+            )
+            .await
+        }
+        _ => None,
+    }
 }
