@@ -10,8 +10,8 @@ use crate::services::chat_worker::llm::tools::UnitSubTaskStatus;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::helpers::{
     broadcast_message_updated, compile_ts_to_js, extract_create_unit_payload,
-    load_tool_message_row, run_rule_check, trigger_llm_continuation, update_tool_message_payload,
-    BoxError, RedisConn, UnitOperation,
+    extract_unit_dependencies, load_tool_message_row, run_rule_check, trigger_llm_continuation,
+    update_tool_message_payload, BoxError, RedisConn, UnitOperation,
 };
 use crate::services::unit_technical_reviewer::type_checker::run_typescript_check;
 use crate::services::unit_technical_reviewer::queue::{
@@ -129,6 +129,7 @@ pub async fn process_create_unit_rule_check(
             1, // initial revision
         );
         let compiled_code = compile_ts_to_js(&payload.args.code).ok();
+        let depends_on = extract_unit_dependencies(&payload.args.code);
         let metadata = build_unit_metadata(payload.args.unit_type, payload.args.api_method.clone());
         let insert = ProjectUnitInsert {
             project_id: message.project_id,
@@ -144,6 +145,7 @@ pub async fn process_create_unit_rule_check(
             module_slug: payload.args.module_slug.clone(),
             unit_name_slug: payload.args.unit_name_slug.clone(),
             metadata,
+            depends_on,
         };
         match block_on_db_tokio(pool, move |conn| {
             diesel::insert_into(project_units::table)

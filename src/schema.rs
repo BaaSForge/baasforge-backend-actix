@@ -162,6 +162,7 @@ diesel::table! {
         revision -> Int4,
         compiled_code -> Nullable<Text>,
         metadata -> Nullable<Jsonb>,
+        depends_on -> Nullable<Text>,
     }
 }
 

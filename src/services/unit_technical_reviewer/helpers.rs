@@ -23,7 +23,7 @@ pub type RedisConn = Arc<Mutex<MultiplexedConnection>>;
 
 /// Re-exported for convenience so callers can import from `helpers` without knowing the module
 /// structure changed.
-pub use crate::services::unit_technical_reviewer::rule_checker::{compile_ts_to_js, run_rule_check, UnitOperation};
+pub use crate::services::unit_technical_reviewer::rule_checker::{compile_ts_to_js, extract_unit_dependencies, run_rule_check, UnitOperation};
 
 pub async fn load_tool_message_row(
     pool: &DbPool,

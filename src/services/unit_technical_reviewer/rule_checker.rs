@@ -104,6 +104,58 @@ pub fn compile_ts_to_js(_ts_source: &str) -> Result<String, String> {
     Ok(String::new())
 }
 
+// ── Dependency extractor ──────────────────────────────────────────────────────────────────────
+
+/// Parses `ts_source` and returns a deduplicated, sorted, comma-separated list of unit paths
+/// imported via `@units/<path>` specifiers.
+///
+/// A unit path has the form `{context}.{module}.{unit_type}.{unit_slug}` (no revision).
+/// Any import declaration whose module specifier starts with `@units/` is treated as a unit
+/// dependency; the `@units/` prefix is stripped to produce the path.
+///
+/// Only actual `import` AST nodes are visited — occurrences in comments or string literals are
+/// ignored.  Returns `None` when the source cannot be parsed or has no `@units/` imports.
+#[cfg(feature = "unit_technical_reviewer")]
+pub fn extract_unit_dependencies(ts_source: &str) -> Option<String> {
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+    use std::collections::BTreeSet;
+
+    let allocator = Allocator::default();
+    let source_type = SourceType::ts().with_module(true);
+
+    let ret = Parser::new(&allocator, ts_source, source_type).parse();
+    if !ret.errors.is_empty() {
+        return None;
+    }
+
+    let mut deps: BTreeSet<String> = BTreeSet::new();
+
+    for stmt in &ret.program.body {
+        if let oxc_ast::ast::Statement::ImportDeclaration(import_decl) = stmt {
+            let source = import_decl.source.value.as_str();
+            if let Some(path) = source.strip_prefix("@units/") {
+                if !path.is_empty() {
+                    deps.insert(path.to_string());
+                }
+            }
+        }
+    }
+
+    if deps.is_empty() {
+        None
+    } else {
+        Some(deps.into_iter().collect::<Vec<_>>().join(","))
+    }
+}
+
+/// Stub when the `unit_technical_reviewer` feature is disabled.
+#[cfg(not(feature = "unit_technical_reviewer"))]
+pub fn extract_unit_dependencies(_ts_source: &str) -> Option<String> {
+    None
+}
+
 // ── Public types (always compiled) ───────────────────────────────────────────────────────────
 
 /// Which LLM tool triggered the rule check.

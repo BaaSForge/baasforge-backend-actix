@@ -84,6 +84,7 @@ pub async fn process_remove_unit_rule_check(
                     module_slug: parent.module_slug.clone(),
                     unit_name_slug: parent.unit_name_slug.clone(),
                     metadata,
+                    depends_on: None,
                 };
                 match block_on_db_tokio(pool, move |conn| {
                     diesel::insert_into(project_units::table)

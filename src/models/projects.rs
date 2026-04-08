@@ -113,6 +113,7 @@ pub struct ProjectUnitInsert {
     pub module_slug: String,
     pub unit_name_slug: String,
     pub metadata: Option<UnitMetadata>,
+    pub depends_on: Option<String>,
 }
 
 #[derive(Insertable)]
@@ -162,6 +163,7 @@ pub struct ProjectUnitRow {
     pub module_slug: String,
     pub unit_name_slug: String,
     pub metadata: Option<UnitMetadata>,
+    pub depends_on: Option<String>,
 }
 
 #[derive(Deserialize)]
