@@ -16,7 +16,8 @@ pub use api::metadata::HttpMethod;
 
 /// Per-unit-type metadata stored as JSONB in `project_units.metadata`.
 /// Tagged with `unit_type` so each variant deserializes unambiguously.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, diesel::AsExpression, diesel::FromSqlRow)]
+#[diesel(sql_type = diesel::sql_types::Jsonb)]
 #[serde(tag = "unit_type", rename_all = "snake_case")]
 pub enum UnitMetadata {
     Api(api::metadata::ApiUnitMetadata),
