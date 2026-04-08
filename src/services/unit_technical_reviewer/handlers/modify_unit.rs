@@ -32,7 +32,7 @@ pub async fn process_modify_unit_compiler_check(
     let invoking_message_id = row.invoking_message_id;
     let mut payload = extract_modify_unit_payload(&row)?;
 
-    match run_typescript_check(&message.code).await {
+    match run_typescript_check(pool, message.project_id, message.session_id, &message.code).await {
         Ok(()) => {
             payload.compiler_check_sub_task = UnitSubTaskStatus::Succeeded;
             let updated_row = update_tool_message_payload(

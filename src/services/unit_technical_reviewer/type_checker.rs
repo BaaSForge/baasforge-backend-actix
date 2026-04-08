@@ -3,13 +3,30 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWrit
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
+use crate::database::{block_on_db_tokio, DbPool};
+use crate::models::projects::ProjectUnitResponse;
+use crate::services::chat_worker::db::load_effective_units_for_chat_session;
 use crate::tsgo::node_modules_files;
+use uuid::Uuid;
 
 const VIRTUAL_ROOT: &str = "/unit";
 const VIRTUAL_NODE_MODULES: &str = "/unit/node_modules";
+const VIRTUAL_UNITS_MODULES: &str = "/unit/node_modules/@units";
 
-pub async fn run_typescript_check(code: &str) -> Result<(), String> {
-    let vfs = build_vfs(code);
+pub async fn run_typescript_check(
+    pool: &DbPool,
+    project_id: Uuid,
+    session_id: Uuid,
+    code: &str,
+) -> Result<(), String> {
+    // Pre-load all effective units so that `@units/*` imports resolve inside the VFS.
+    let units = block_on_db_tokio(pool, move |conn| {
+        load_effective_units_for_chat_session(conn, project_id, session_id)
+    })
+    .await
+    .map_err(|e| format!("Failed to load units for type check: {}", e))?;
+
+    let vfs = build_vfs(code, &units);
     let mut client = TsgoIpcClient::spawn(vfs).await?;
 
     client.call("initialize", json!({})).await?;
@@ -57,7 +74,7 @@ pub async fn run_typescript_check(code: &str) -> Result<(), String> {
 
 // --- VFS Logic ---
 
-fn build_vfs(code: &str) -> HashMap<String, String> {
+fn build_vfs(code: &str, units: &[ProjectUnitResponse]) -> HashMap<String, String> {
     let mut vfs = HashMap::new();
 
     let tsconfig = json!({
@@ -91,6 +108,12 @@ fn build_vfs(code: &str) -> HashMap<String, String> {
             "noImplicitReturns": true,
             "noFallthroughCasesInSwitch": true,
             "noPropertyAccessFromIndexSignature": true,
+
+            // Required for @units/* path aliases to resolve.
+            "baseUrl": ".",
+            "paths": {
+                "@units/*": ["./node_modules/@units/*"]
+            }
         },
         "files": ["main.ts"]
     });
@@ -100,6 +123,27 @@ fn build_vfs(code: &str) -> HashMap<String, String> {
         "name": "virtual-project",
         "type": "module"
     }).to_string());
+
+    // Populate @units/* virtual files so TypeScript can resolve cross-unit type imports.
+    // Each non-deleted unit with code becomes a `.ts` file at:
+    //   /unit/node_modules/@units/<context>.<module>.<unit_type>.<unit_name>.ts
+    // Units are imported as: `import type { Foo } from '@units/context.module.unit-type.unit-name'`
+    for unit in units {
+        if unit.is_deleted {
+            continue;
+        }
+        if let Some(ref unit_code) = unit.code {
+            let unit_file = format!(
+                "{}/{}.{}.{}.{}.ts",
+                VIRTUAL_UNITS_MODULES,
+                unit.context_slug,
+                unit.module_slug,
+                unit.unit_type.as_slug(),
+                unit.unit_name_slug,
+            );
+            vfs.insert(unit_file, unit_code.clone());
+        }
+    }
 
     // Populate node_modules from the statically included file
     for (rel_path, content) in node_modules_files::NODE_MODULES_FILE_DATA {

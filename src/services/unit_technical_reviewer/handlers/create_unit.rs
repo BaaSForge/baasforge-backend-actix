@@ -31,7 +31,7 @@ pub async fn process_create_unit_compiler_check(
     let invoking_message_id = row.invoking_message_id;
     let mut payload = extract_create_unit_payload(&row)?;
 
-    match run_typescript_check(&message.code).await {
+    match run_typescript_check(pool, message.project_id, message.session_id, &message.code).await {
         Ok(()) => {
             payload.compiler_check_sub_task = UnitSubTaskStatus::Succeeded;
             // Status stays Generating; rule check follows.
