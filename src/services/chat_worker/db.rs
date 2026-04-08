@@ -224,6 +224,9 @@ pub fn load_units_from_release_metadata(
 /// session creation time) and load units from that release, then merge in draft unit tips from the
 /// session itself. This gives the "effective unit set" visible to tools inside a chat session:
 /// base release units overlaid with any creates/modifies/removes made in the session.
+/// 
+/// TODO: Using this function is not a good idea as it loads all units,
+/// try to replace it with something which can handle 2000+ units like using dependency graph.
 pub fn load_effective_units_for_chat_session(
     conn: &mut PooledConn,
     project_id: Uuid,
