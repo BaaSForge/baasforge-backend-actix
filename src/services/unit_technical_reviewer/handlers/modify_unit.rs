@@ -10,9 +10,9 @@ use crate::services::chat_worker::db::load_units_from_latest_production_metadata
 use crate::services::chat_worker::llm::tools::UnitSubTaskStatus;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::helpers::{
-    broadcast_message_updated, extract_modify_unit_payload, load_tool_message_row,
-    run_rule_check, trigger_llm_continuation, update_tool_message_payload, BoxError, RedisConn,
-    UnitOperation,
+    broadcast_message_updated, compile_ts_to_js, extract_modify_unit_payload,
+    load_tool_message_row, run_rule_check, trigger_llm_continuation, update_tool_message_payload,
+    BoxError, RedisConn, UnitOperation,
 };
 use crate::services::unit_technical_reviewer::type_checker::run_typescript_check;
 use crate::services::unit_technical_reviewer::queue::{
@@ -143,12 +143,14 @@ pub async fn process_modify_unit_rule_check(
                 );
                 let code = payload.args.code.clone();
                 let explanation = payload.args.explanation.clone();
+                let compiled_code = compile_ts_to_js(&code).ok();
                 let insert = ProjectUnitInsert {
                     project_id: message.project_id,
                     chat_session_id: message.session_id,
                     id: new_id,
                     revision: new_rev,
                     code: Some(code),
+                    compiled_code,
                     explanation: Some(explanation),
                     unit_type: parent.unit_type,
                     is_deleted: false,

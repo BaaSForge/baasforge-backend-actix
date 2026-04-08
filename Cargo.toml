@@ -169,6 +169,9 @@ oxc_parser = { version = "0.123", optional = true }
 oxc_ast = { version = "0.123", optional = true }
 oxc_ast_visit = { version = "0.123", optional = true }
 oxc_span = { version = "0.123", optional = true }
+oxc_transformer = { version = "0.123", optional = true }
+oxc_codegen = { version = "0.123", optional = true }
+oxc_semantic = { version = "0.123", optional = true }
 
 [features]
 unit_technical_reviewer = [
@@ -177,6 +180,9 @@ unit_technical_reviewer = [
     "dep:oxc_ast",
     "dep:oxc_ast_visit",
     "dep:oxc_span",
+    "dep:oxc_transformer",
+    "dep:oxc_codegen",
+    "dep:oxc_semantic",
 ]
 
 [lints.clippy]

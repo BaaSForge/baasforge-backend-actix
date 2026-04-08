@@ -75,6 +75,7 @@ pub async fn process_remove_unit_rule_check(
                     id: new_id,
                     revision: new_rev,
                     code: Some(String::new()),
+                    compiled_code: None,
                     explanation,
                     unit_type: parent.unit_type,
                     is_deleted: true,

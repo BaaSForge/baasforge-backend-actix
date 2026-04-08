@@ -160,6 +160,7 @@ diesel::table! {
         unit_name_slug -> Varchar,
         id -> Text,
         revision -> Int4,
+        compiled_code -> Nullable<Text>,
     }
 }
 

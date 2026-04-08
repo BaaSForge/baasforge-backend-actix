@@ -33,6 +33,7 @@ macro_rules! select_project_unit_row {
             $a.field(project_units::id),
             $a.field(project_units::revision),
             $a.field(project_units::code),
+            $a.field(project_units::compiled_code),
             $a.field(project_units::explanation),
             $a.field(project_units::unit_type),
             $a.field(project_units::is_deleted),
