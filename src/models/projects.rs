@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
 use diesel::deserialize::{self, FromSql};
+use diesel::expression::AsExpression;
 use diesel::pg::Pg;
 use diesel::serialize::{self, IsNull, Output, ToSql};
-use diesel::sql_types::Jsonb;
+use diesel::sql_types::{Jsonb, Nullable};
 use diesel::Insertable;
 use diesel::Queryable;
 use diesel::Selectable;
@@ -11,6 +12,59 @@ use serde::Serialize;
 use std::io::Write;
 use std::ops::Deref;
 use uuid::Uuid;
+
+use crate::services::units::UnitMetadata;
+
+impl FromSql<Jsonb, Pg> for UnitMetadata {
+    fn from_sql(value: diesel::pg::PgValue<'_>) -> deserialize::Result<Self> {
+        let v = <serde_json::Value as FromSql<Jsonb, Pg>>::from_sql(value)?;
+        serde_json::from_value(v).map_err(|e| Box::new(e) as _)
+    }
+}
+
+impl ToSql<Jsonb, Pg> for UnitMetadata {
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
+        // JSONB wire format: version byte 1 followed by the JSON bytes.
+        out.write_all(&[1])?;
+        serde_json::to_writer(out, self)
+            .map(|_| IsNull::No)
+            .map_err(Into::into)
+    }
+}
+
+// Delegate AsExpression to serde_json::Value which already has the diesel Jsonb impls.
+// Fully-qualified syntax disambiguates between Value's multiple AsExpression impls.
+impl AsExpression<Jsonb> for UnitMetadata {
+    type Expression = <serde_json::Value as AsExpression<Jsonb>>::Expression;
+    fn as_expression(self) -> Self::Expression {
+        let v: serde_json::Value = serde_json::to_value(self).expect("UnitMetadata serialization failed");
+        <serde_json::Value as AsExpression<Jsonb>>::as_expression(v)
+    }
+}
+
+impl<'a> AsExpression<Jsonb> for &'a UnitMetadata {
+    type Expression = <serde_json::Value as AsExpression<Jsonb>>::Expression;
+    fn as_expression(self) -> Self::Expression {
+        let v: serde_json::Value = serde_json::to_value(self).expect("UnitMetadata serialization failed");
+        <serde_json::Value as AsExpression<Jsonb>>::as_expression(v)
+    }
+}
+
+impl AsExpression<Nullable<Jsonb>> for UnitMetadata {
+    type Expression = <serde_json::Value as AsExpression<Nullable<Jsonb>>>::Expression;
+    fn as_expression(self) -> Self::Expression {
+        let v: serde_json::Value = serde_json::to_value(self).expect("UnitMetadata serialization failed");
+        <serde_json::Value as AsExpression<Nullable<Jsonb>>>::as_expression(v)
+    }
+}
+
+impl<'a> AsExpression<Nullable<Jsonb>> for &'a UnitMetadata {
+    type Expression = <serde_json::Value as AsExpression<Nullable<Jsonb>>>::Expression;
+    fn as_expression(self) -> Self::Expression {
+        let v: serde_json::Value = serde_json::to_value(self).expect("UnitMetadata serialization failed");
+        <serde_json::Value as AsExpression<Nullable<Jsonb>>>::as_expression(v)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::PlatformEnvironmentType"]
@@ -92,6 +146,7 @@ pub struct ProjectUnitInsert {
     pub context_slug: String,
     pub module_slug: String,
     pub unit_name_slug: String,
+    pub metadata: Option<UnitMetadata>,
 }
 
 #[derive(Insertable)]
@@ -140,6 +195,7 @@ pub struct ProjectUnitRow {
     pub context_slug: String,
     pub module_slug: String,
     pub unit_name_slug: String,
+    pub metadata: Option<UnitMetadata>,
 }
 
 #[derive(Deserialize)]

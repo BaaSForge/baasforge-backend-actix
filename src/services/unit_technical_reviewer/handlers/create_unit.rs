@@ -1,7 +1,7 @@
 use crate::database::{block_on_db_tokio, DbPool};
 use crate::libs::unit_slug::compose_unit_id;
 use crate::models::chat_messages::ChatMessageStatus;
-use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow};
+use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType};
 use crate::routes::ws::events::{ProjectUnitEventPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
@@ -17,8 +17,19 @@ use crate::services::unit_technical_reviewer::type_checker::run_typescript_check
 use crate::services::unit_technical_reviewer::queue::{
     publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
 };
+use crate::services::units::{api::metadata::ApiUnitMetadata, HttpMethod, UnitMetadata};
 use diesel::prelude::*;
 use std::sync::Arc;
+
+fn build_unit_metadata(unit_type: ProjectUnitType, api_method: Option<HttpMethod>) -> Option<UnitMetadata> {
+    match unit_type {
+        ProjectUnitType::Api => Some(UnitMetadata::Api(ApiUnitMetadata {
+            method: api_method,
+            ..Default::default()
+        })),
+        _ => None,
+    }
+}
 
 pub async fn process_create_unit_compiler_check(
     pool: &DbPool,
@@ -118,6 +129,7 @@ pub async fn process_create_unit_rule_check(
             1, // initial revision
         );
         let compiled_code = compile_ts_to_js(&payload.args.code).ok();
+        let metadata = build_unit_metadata(payload.args.unit_type, payload.args.api_method.clone());
         let insert = ProjectUnitInsert {
             project_id: message.project_id,
             chat_session_id: message.session_id,
@@ -131,6 +143,7 @@ pub async fn process_create_unit_rule_check(
             context_slug: payload.args.context_slug.clone(),
             module_slug: payload.args.module_slug.clone(),
             unit_name_slug: payload.args.unit_name_slug.clone(),
+            metadata,
         };
         match block_on_db_tokio(pool, move |conn| {
             diesel::insert_into(project_units::table)

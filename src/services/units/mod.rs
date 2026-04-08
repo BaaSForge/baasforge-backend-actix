@@ -10,6 +10,28 @@ mod runtime;
 mod schema;
 mod timer;
 
+use serde::{Deserialize, Serialize};
+
+pub use api::metadata::HttpMethod;
+
+/// Per-unit-type metadata stored as JSONB in `project_units.metadata`.
+/// Tagged with `unit_type` so each variant deserializes unambiguously.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "unit_type", rename_all = "snake_case")]
+pub enum UnitMetadata {
+    Api(api::metadata::ApiUnitMetadata),
+    Action(action::metadata::ActionUnitMetadata),
+    Bootstrap(bootstrap::metadata::BootstrapUnitMetadata),
+    Command(command::metadata::CommandUnitMetadata),
+    Flow(flow::metadata::FlowUnitMetadata),
+    Gateway(gateway::metadata::GatewayUnitMetadata),
+    Projection(projection::metadata::ProjectionUnitMetadata),
+    Query(query::metadata::QueryUnitMetadata),
+    Runtime(runtime::metadata::RuntimeUnitMetadata),
+    Schema(schema::metadata::SchemaUnitMetadata),
+    Timer(timer::metadata::TimerUnitMetadata),
+}
+
 /// Snake-case ids for each unit kind. Same order as [`all_briefs`] / [`all_details`] and
 /// [`crate::models::projects::ProjectUnitType`] (serde snake_case). Keep in sync when adding a unit definition module.
 pub const UNIT_KIND_SLUGS: &[&str] = &[

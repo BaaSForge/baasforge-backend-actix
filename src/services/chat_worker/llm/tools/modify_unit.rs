@@ -12,6 +12,7 @@ use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
 use crate::services::chat_worker::db::load_units_from_latest_production_metadata;
 use crate::services::message_queue::SharedRabbitPublisher;
+use crate::services::units::HttpMethod;
 use crate::services::unit_technical_reviewer::queue::{
     publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
 };
@@ -43,6 +44,11 @@ struct ModifyUnitLlmArgs {
     explanation: String,
     #[schemars(description = ARG_CODE_DESCRIPTION)]
     code: String,
+    /// HTTP method for API units (GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD).
+    /// Only set when modifying an `api` unit and you want to change its HTTP method.
+    /// Omit to keep the existing method unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_method: Option<HttpMethod>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -50,6 +56,8 @@ pub struct ToolModifyUnitArgs {
     pub unit_id: String,
     pub explanation: String,
     pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_method: Option<HttpMethod>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -89,6 +97,7 @@ pub fn payload_from_args(
         unit_id,
         explanation: raw.explanation,
         code: raw.code,
+        api_method: raw.api_method,
     };
     Ok(ChatMessagePayload::ToolModifyUnit(ToolModifyUnitPayload {
         args,
@@ -108,7 +117,12 @@ fn params_schema() -> Value {
         "properties": {
             "unit_id": { "type": "string", "description": ARG_UNIT_ID_DESCRIPTION },
             "explanation": { "type": "string", "description": ARG_EXPLANATION_DESCRIPTION },
-            "code": { "type": "string", "description": ARG_CODE_DESCRIPTION }
+            "code": { "type": "string", "description": ARG_CODE_DESCRIPTION },
+            "api_method": {
+                "type": "string",
+                "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+                "description": "HTTP method for API units. Only set when modifying an api unit and you want to change its HTTP method. Omit to keep the existing method unchanged."
+            }
         },
         "required": ["unit_id", "explanation", "code"]
     })

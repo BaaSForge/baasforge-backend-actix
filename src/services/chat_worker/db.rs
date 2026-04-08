@@ -40,6 +40,7 @@ macro_rules! select_project_unit_row {
             $a.field(project_units::context_slug),
             $a.field(project_units::module_slug),
             $a.field(project_units::unit_name_slug),
+            $a.field(project_units::metadata),
         )
     };
 }

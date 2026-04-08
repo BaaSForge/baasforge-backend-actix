@@ -9,7 +9,7 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
 use crate::services::chat_worker::db::load_units_from_latest_production_metadata;
-use crate::services::units as units_definitions;
+use crate::services::units::{self as units_definitions, HttpMethod};
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::queue::{
     publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
@@ -79,6 +79,10 @@ struct CreateUnitLlmArgs {
     code: String,
     #[schemars(description = units_definitions::UNIT_TYPE_ARG_DESCRIPTION)]
     unit_type: String,
+    /// HTTP method for API units (GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD).
+    /// Only set this when `unit_type` is `api`. Omit for all other unit types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_method: Option<HttpMethod>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -89,6 +93,8 @@ pub struct ToolCreateUnitArgs {
     pub explanation: String,
     pub code: String,
     pub unit_type: ProjectUnitType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_method: Option<HttpMethod>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -142,6 +148,7 @@ pub fn payload_from_args(
         explanation: raw.explanation,
         code: raw.code,
         unit_type,
+        api_method: raw.api_method,
     };
     Ok(ChatMessagePayload::ToolCreateUnit(ToolCreateUnitPayload {
         args,
@@ -168,6 +175,11 @@ fn params_schema() -> Value {
                 "type": "string",
                 "enum": units_definitions::UNIT_KIND_SLUGS,
                 "description": units_definitions::unit_type_description_for_tools()
+            },
+            "api_method": {
+                "type": "string",
+                "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+                "description": "HTTP method for API units. Only set this when unit_type is api. Omit for all other unit types."
             }
         },
         "required": ["context_slug", "module_slug", "unit_name_slug", "explanation", "code", "unit_type"]

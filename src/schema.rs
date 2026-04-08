@@ -161,6 +161,7 @@ diesel::table! {
         id -> Text,
         revision -> Int4,
         compiled_code -> Nullable<Text>,
+        metadata -> Nullable<Jsonb>,
     }
 }
 

@@ -69,6 +69,7 @@ pub async fn process_remove_unit_rule_check(
                     new_rev,
                 );
                 let explanation = parent.explanation.clone();
+                let metadata = parent.metadata.clone();
                 let insert = ProjectUnitInsert {
                     project_id: message.project_id,
                     chat_session_id: message.session_id,
@@ -82,6 +83,7 @@ pub async fn process_remove_unit_rule_check(
                     context_slug: parent.context_slug.clone(),
                     module_slug: parent.module_slug.clone(),
                     unit_name_slug: parent.unit_name_slug.clone(),
+                    metadata,
                 };
                 match block_on_db_tokio(pool, move |conn| {
                     diesel::insert_into(project_units::table)

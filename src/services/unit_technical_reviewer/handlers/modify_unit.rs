@@ -1,7 +1,7 @@
 use crate::database::{block_on_db_tokio, DbPool};
 use crate::libs::unit_slug::compose_unit_id;
 use crate::models::chat_messages::ChatMessageStatus;
-use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow};
+use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow, ProjectUnitType};
 use crate::routes::ws::events::{ProjectUnitEventPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
@@ -18,8 +18,32 @@ use crate::services::unit_technical_reviewer::type_checker::run_typescript_check
 use crate::services::unit_technical_reviewer::queue::{
     publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
 };
+use crate::services::units::{api::metadata::ApiUnitMetadata, HttpMethod, UnitMetadata};
 use diesel::prelude::*;
 use std::sync::Arc;
+
+/// Merges the LLM-provided `api_method` into the parent's existing metadata.
+/// For API units: updates `method` if the LLM provided one; preserves other fields from parent.
+/// For other unit types: inherits parent metadata unchanged.
+fn merge_unit_metadata(
+    unit_type: ProjectUnitType,
+    parent_metadata: Option<UnitMetadata>,
+    api_method: Option<HttpMethod>,
+) -> Option<UnitMetadata> {
+    match unit_type {
+        ProjectUnitType::Api => {
+            let mut api_meta = match parent_metadata {
+                Some(UnitMetadata::Api(m)) => m,
+                _ => ApiUnitMetadata::default(),
+            };
+            if api_method.is_some() {
+                api_meta.method = api_method;
+            }
+            Some(UnitMetadata::Api(api_meta))
+        }
+        _ => parent_metadata,
+    }
+}
 
 pub async fn process_modify_unit_compiler_check(
     pool: &DbPool,
@@ -144,6 +168,11 @@ pub async fn process_modify_unit_rule_check(
                 let code = payload.args.code.clone();
                 let explanation = payload.args.explanation.clone();
                 let compiled_code = compile_ts_to_js(&code).ok();
+                let metadata = merge_unit_metadata(
+                    parent.unit_type,
+                    parent.metadata.clone(),
+                    payload.args.api_method.clone(),
+                );
                 let insert = ProjectUnitInsert {
                     project_id: message.project_id,
                     chat_session_id: message.session_id,
@@ -157,6 +186,7 @@ pub async fn process_modify_unit_rule_check(
                     context_slug: parent.context_slug.clone(),
                     module_slug: parent.module_slug.clone(),
                     unit_name_slug: parent.unit_name_slug.clone(),
+                    metadata,
                 };
                 match block_on_db_tokio(pool, move |conn| {
                     diesel::insert_into(project_units::table)
