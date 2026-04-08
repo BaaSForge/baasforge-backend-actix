@@ -18,32 +18,10 @@ use crate::services::unit_technical_reviewer::type_checker::run_typescript_check
 use crate::services::unit_technical_reviewer::queue::{
     publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
 };
-use crate::services::units::{api::metadata::ApiUnitMetadata, HttpMethod, UnitMetadata};
+use crate::services::units::{api::metadata::ApiUnitMetadata, UnitMetadata};
 use diesel::prelude::*;
 use std::sync::Arc;
 
-/// Merges the LLM-provided `api_method` into the parent's existing metadata.
-/// For API units: updates `method` if the LLM provided one; preserves other fields from parent.
-/// For other unit types: inherits parent metadata unchanged.
-fn merge_unit_metadata(
-    unit_type: ProjectUnitType,
-    parent_metadata: Option<UnitMetadata>,
-    api_method: Option<HttpMethod>,
-) -> Option<UnitMetadata> {
-    match unit_type {
-        ProjectUnitType::Api => {
-            let mut api_meta = match parent_metadata {
-                Some(UnitMetadata::Api(m)) => m,
-                _ => ApiUnitMetadata::default(),
-            };
-            if api_method.is_some() {
-                api_meta.method = api_method;
-            }
-            Some(UnitMetadata::Api(api_meta))
-        }
-        _ => parent_metadata,
-    }
-}
 
 pub async fn process_modify_unit_compiler_check(
     pool: &DbPool,
@@ -168,11 +146,13 @@ pub async fn process_modify_unit_rule_check(
                 let code = payload.args.code.clone();
                 let explanation = payload.args.explanation.clone();
                 let compiled_code = compile_ts_to_js(&code).ok();
-                let metadata = merge_unit_metadata(
-                    parent.unit_type,
-                    parent.metadata.clone(),
-                    payload.args.api_method.clone(),
-                );
+                let metadata = match parent.unit_type {
+                    ProjectUnitType::Api => Some(UnitMetadata::Api(ApiUnitMetadata {
+                        method: payload.args.api_method.clone(),
+                        ..ApiUnitMetadata::default()
+                    })),
+                    _ => None,
+                };
                 let insert = ProjectUnitInsert {
                     project_id: message.project_id,
                     chat_session_id: message.session_id,
