@@ -7,8 +7,9 @@
 // All functions are pure: no side effects, no error accumulation.
 
 use oxc_ast::ast::{
-    Declaration, ExportAllDeclaration, ExportNamedDeclaration, IdentifierReference,
-    ModuleExportName, Program, Statement, TSType,
+    Declaration, ExportAllDeclaration, ExportNamedDeclaration, Function, IdentifierReference,
+    ImportDeclaration, ImportDeclarationSpecifier, ModuleExportName, Program, Statement, TSType,
+    TSTypeName,
 };
 use oxc_ast_visit::{walk, Visit};
 
@@ -203,4 +204,195 @@ pub fn module_export_name_str<'a>(name: &'a ModuleExportName<'a>) -> &'a str {
 /// Returns the `from '…'` source string of an `export * from '…'` declaration.
 pub fn export_all_source<'a>(e: &'a ExportAllDeclaration<'a>) -> &'a str {
     e.source.value.as_str()
+}
+
+// ── Import utilities ──────────────────────────────────────────────────────────────────────────
+
+/// Returns all `ImportDeclaration` nodes in the program, in source order.
+pub fn get_import_declarations<'a>(program: &'a Program<'a>) -> Vec<&'a ImportDeclaration<'a>> {
+    program
+        .body
+        .iter()
+        .filter_map(|stmt| {
+            if let Statement::ImportDeclaration(decl) = stmt {
+                Some(decl.as_ref())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Returns all `ImportDeclaration` nodes whose source string equals `source`.
+pub fn get_imports_from_source<'a>(
+    program: &'a Program<'a>,
+    source: &str,
+) -> Vec<&'a ImportDeclaration<'a>> {
+    get_import_declarations(program)
+        .into_iter()
+        .filter(|d| d.source.value.as_str() == source)
+        .collect()
+}
+
+/// Returns the original (imported) names of all named specifiers from `source`.
+///
+/// For `import { parse as parseQuerystring } from "node:querystring"` this returns `["parse"]`
+/// — the *imported* name, not the local alias.  Default and namespace specifiers are excluded.
+pub fn get_named_imports_from_source<'a>(program: &'a Program<'a>, source: &str) -> Vec<&'a str> {
+    get_imports_from_source(program, source)
+        .into_iter()
+        .flat_map(|decl| named_specifier_imported_names(decl))
+        .collect()
+}
+
+/// Returns `true` if there is at least one import declaration (of any kind) from `source`.
+pub fn has_import_from(program: &Program, source: &str) -> bool {
+    get_import_declarations(program)
+        .iter()
+        .any(|d| d.source.value.as_str() == source)
+}
+
+/// Returns all distinct `node:*` import source strings in the program, in first-occurrence order.
+pub fn get_node_module_import_sources<'a>(program: &'a Program<'a>) -> Vec<&'a str> {
+    let mut result: Vec<&str> = Vec::new();
+    for decl in get_import_declarations(program) {
+        let src = decl.source.value.as_str();
+        if src.starts_with("node:") && !result.contains(&src) {
+            result.push(src);
+        }
+    }
+    result
+}
+
+/// Returns `true` if the program contains a namespace import (`import * as x from source`).
+pub fn has_namespace_import_from(program: &Program, source: &str) -> bool {
+    get_imports_from_source(program, source)
+        .iter()
+        .any(|decl| {
+            decl.specifiers
+                .iter()
+                .flat_map(|v| v.iter())
+                .any(|spec| matches!(spec, ImportDeclarationSpecifier::ImportNamespaceSpecifier(_)))
+        })
+}
+
+/// Returns `true` if the program contains a default import from `source`
+/// (i.e. `import name from "source"`).
+pub fn has_default_import_from(program: &Program, source: &str) -> bool {
+    get_imports_from_source(program, source)
+        .iter()
+        .any(|decl| {
+            decl.specifiers
+                .iter()
+                .flat_map(|v| v.iter())
+                .any(|spec| matches!(spec, ImportDeclarationSpecifier::ImportDefaultSpecifier(_)))
+        })
+}
+
+// ── Type annotation utilities ─────────────────────────────────────────────────────────────────
+
+/// If `ty` is a plain `TSTypeReference` to a bare identifier (e.g. `MyType`), returns that
+/// identifier name.  Returns `None` for qualified names (`A.B`), generics, primitives, etc.
+///
+/// ```ignore
+/// if let Some(name) = ts_type_reference_name(ty) {
+///     if name == "IncomingMessage" { /* … */ }
+/// }
+/// ```
+pub fn ts_type_reference_name<'a>(ty: &'a TSType<'a>) -> Option<&'a str> {
+    if let TSType::TSTypeReference(tr) = ty {
+        if let TSTypeName::IdentifierReference(id) = &tr.type_name {
+            return Some(id.name.as_str());
+        }
+    }
+    None
+}
+
+// ── Function export utilities ─────────────────────────────────────────────────────────────────
+
+/// Returns the names of all top-level exported function declarations, in source order.
+///
+/// Only covers `export function name(…)` style — not arrow functions assigned to `const`.
+pub fn get_exported_function_names<'a>(program: &'a Program<'a>) -> Vec<&'a str> {
+    program
+        .body
+        .iter()
+        .filter_map(|stmt| {
+            if let Statement::ExportNamedDeclaration(export) = stmt {
+                if let Some(Declaration::FunctionDeclaration(func)) = &export.declaration {
+                    return func.id.as_ref().map(|id| id.name.as_str());
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+/// Returns `true` if a function named `name` is exported at the top level.
+pub fn has_exported_function(program: &Program, name: &str) -> bool {
+    get_exported_function_names(program).contains(&name)
+}
+
+/// Returns the number of parameters of the exported function named `fn_name`.
+/// Returns `None` if no such exported function is found.
+pub fn get_exported_function_param_count(program: &Program, fn_name: &str) -> Option<usize> {
+    find_exported_function(program, fn_name).map(|f| f.params.items.len())
+}
+
+/// Returns the type-reference name of the `param_index`-th (0-indexed) parameter of the exported
+/// function named `fn_name`.
+///
+/// Returns `None` when:
+/// - the function is not found,
+/// - the parameter index is out of bounds,
+/// - the parameter has no type annotation, or
+/// - the type annotation is not a plain `TSTypeReference` to a bare identifier.
+///
+/// ```ignore
+/// assert_eq!(
+///     get_exported_function_param_type_name(program, "handleRequest", 0),
+///     Some("IncomingMessage"),
+/// );
+/// ```
+pub fn get_exported_function_param_type_name<'a>(
+    program: &'a Program<'a>,
+    fn_name: &str,
+    param_index: usize,
+) -> Option<&'a str> {
+    let func = find_exported_function(program, fn_name)?;
+    let param = func.params.items.get(param_index)?;
+    let type_ann = param.type_annotation.as_ref()?;
+    ts_type_reference_name(&type_ann.type_annotation)
+}
+
+// ── Private helpers ───────────────────────────────────────────────────────────────────────────
+
+/// Returns a reference to the `Function` node for the exported function named `name`, or `None`.
+fn find_exported_function<'a>(program: &'a Program<'a>, name: &str) -> Option<&'a Function<'a>> {
+    program.body.iter().find_map(|stmt| {
+        if let Statement::ExportNamedDeclaration(export) = stmt {
+            if let Some(Declaration::FunctionDeclaration(func)) = &export.declaration {
+                if func.id.as_ref().map_or(false, |id| id.name.as_str() == name) {
+                    return Some(func.as_ref());
+                }
+            }
+        }
+        None
+    })
+}
+
+/// Returns the imported names of all `ImportSpecifier` entries in a single `ImportDeclaration`.
+/// Default and namespace specifiers are excluded.
+fn named_specifier_imported_names<'a>(decl: &'a ImportDeclaration<'a>) -> Vec<&'a str> {
+    decl.specifiers
+        .iter()
+        .flat_map(|v| v.iter())
+        .filter_map(|spec| {
+            if let ImportDeclarationSpecifier::ImportSpecifier(s) = spec {
+                Some(module_export_name_str(&s.imported))
+            } else {
+                None
+            }
+        })
+        .collect()
 }

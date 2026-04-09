@@ -26,6 +26,23 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
             "Never access `process` directly in any unit \
              (e.g. `process.env`, `process.exit`, `process.argv`).",
         ),
+        (
+            "Only supported `node:*` imports",
+            "Only the following named exports from Node built-in modules are supported — \
+             no other `node:*` modules or names may be imported. \
+             Namespace (`import * as x`) and default imports from `node:*` are forbidden. \
+             Allowed imports: \
+             `import type { IncomingMessage, ServerResponse } from \"node:http\"`, \
+             `import { parse as parseQuerystring } from \"node:querystring\"`, \
+             `import { text } from \"node:stream/consumers\"`, \
+             `import { URL } from \"node:url\"`, \
+             `import { randomUUID, randomBytes, randomInt, randomFillSync, createHash, createHmac, \
+             getHashes, getCiphers, pbkdf2Sync, scryptSync, timingSafeEqual, createCipheriv, \
+             createDecipheriv, subtle, getRandomValues } from \"node:crypto\"`, \
+             `import { Buffer } from \"node:buffer\"`, \
+             `import { TextEncoder, TextDecoder } from \"node:util\"`, \
+             `import { setTimeout as setTimeoutPromise } from \"node:timers/promises\"`.",
+        ),
     ]
 }
 
@@ -40,7 +57,7 @@ use super::RuleInput;
 
 #[cfg(feature = "unit_technical_reviewer")]
 pub(super) fn rules() -> Vec<Rule> {
-    vec![no_console, no_process]
+    vec![no_console, no_process, only_allowed_node_imports]
 }
 
 // ── Rules ─────────────────────────────────────────────────────────────────────────────────────
@@ -91,4 +108,91 @@ fn no_process(input: &RuleInput) -> Vec<String> {
     } else {
         vec![]
     }
+}
+
+#[cfg(feature = "unit_technical_reviewer")]
+fn only_allowed_node_imports(input: &RuleInput) -> Vec<String> {
+    let Some(program) = input.program else {
+        return vec![];
+    };
+
+    // Static allowlist: module source → permitted imported names (original, not aliases).
+    const ALLOWED: &[(&str, &[&str])] = &[
+        ("node:http", &["IncomingMessage", "ServerResponse"]),
+        ("node:querystring", &["parse"]),
+        ("node:stream/consumers", &["text"]),
+        ("node:url", &["URL"]),
+        (
+            "node:crypto",
+            &[
+                "randomUUID",
+                "randomBytes",
+                "randomInt",
+                "randomFillSync",
+                "createHash",
+                "createHmac",
+                "getHashes",
+                "getCiphers",
+                "pbkdf2Sync",
+                "scryptSync",
+                "timingSafeEqual",
+                "createCipheriv",
+                "createDecipheriv",
+                "subtle",
+                "getRandomValues",
+            ],
+        ),
+        ("node:buffer", &["Buffer"]),
+        ("node:util", &["TextEncoder", "TextDecoder"]),
+        ("node:timers/promises", &["setTimeout"]),
+    ];
+
+    let mut errors: Vec<String> = Vec::new();
+
+    for src in ast_utils::get_node_module_import_sources(program) {
+        // Reject any node: module not in the allowlist.
+        let Some(allowed_names) = ALLOWED.iter().find_map(|(mod_src, names)| {
+            if *mod_src == src {
+                Some(*names)
+            } else {
+                None
+            }
+        }) else {
+            errors.push(format!(
+                "Import from `{src}` is not supported in units; \
+                 only node:http, node:querystring, node:stream/consumers, node:url, \
+                 node:crypto, node:buffer, node:util, and node:timers/promises are allowed"
+            ));
+            continue;
+        };
+
+        // Namespace imports are never allowed.
+        if ast_utils::has_namespace_import_from(program, src) {
+            errors.push(format!(
+                "Namespace import (`import * as x from \"{src}\"`) is not allowed; \
+                 use explicit named imports instead"
+            ));
+        }
+
+        // Default imports are never allowed.
+        if ast_utils::has_default_import_from(program, src) {
+            errors.push(format!(
+                "Default import from `{src}` is not allowed; \
+                 use explicit named imports instead"
+            ));
+        }
+
+        // Each named import must be in the allowlist for this module.
+        for name in ast_utils::get_named_imports_from_source(program, src) {
+            if !allowed_names.contains(&name) {
+                errors.push(format!(
+                    "Import `{name}` from `{src}` is not supported; \
+                     allowed names: {}",
+                    allowed_names.join(", ")
+                ));
+            }
+        }
+    }
+
+    errors
 }
