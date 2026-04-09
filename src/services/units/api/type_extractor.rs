@@ -1,5 +1,3 @@
-// API-unit type metadata extraction.
-//
 // Resolves the three exported contract types (`RequestBody`, `QueryParams`,
 // `ResponseBody`) from an API unit's source into deeply-resolved, separated
 // TypeScript declarations — using the generic machinery in

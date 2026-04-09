@@ -1,18 +1,4 @@
 // Rules specific to API units (`unit_type == "api"`).
-//
-// An API unit is the TypeScript contract between a client caller and a server handler.
-// Its only job is to declare the three shapes that define a single HTTP endpoint:
-//
-//   export type RequestBody  = … | never   (what the client sends in the body)
-//   export type ResponseBody = { … }       (what the server returns — must be a concrete type)
-//   export type QueryParams  = … | never   (URL query parameters)
-//
-// Nothing else may be exported from an API unit.  Value exports (const, function, class),
-// re-exports, default exports, and wildcard exports are all forbidden.
-//
-// Rules here receive the full `RuleInput` context.  All four rules below guard with
-// `let Some(program) = input.program else { return vec![] };` so they are automatically
-// skipped for Remove operations (which have no new code to check).
 
 // ── LLM hints (always compiled — no OXC dependency) ──────────────────────────────────────────
 
@@ -41,8 +27,7 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
         ),
         (
             "No other exports allowed",
-            "Only `RequestBody`, `ResponseBody`, and `QueryParams` may be exported from an API unit. \
-             Do not add any other type alias exports, value exports (`export const`, `export function`, \
+            "Do not add any other type alias exports, value exports (`export const`, `export function`, \
              `export class`), re-exports via `export { … }`, default exports (`export default`), \
              or wildcard re-exports (`export * from '…'`).",
         ),
@@ -125,8 +110,6 @@ fn query_params_exported(input: &RuleInput) -> Vec<String> {
     }
 }
 
-/// Only `RequestBody`, `ResponseBody`, and `QueryParams` type aliases may be exported.
-///
 /// Forbidden: any other type alias, value exports (const / function / class), re-exports via
 /// specifiers, default exports, and wildcard `export * from '…'`.
 #[cfg(feature = "unit_technical_reviewer")]
@@ -146,15 +129,13 @@ fn no_other_exports(input: &RuleInput) -> Vec<String> {
                             let name = alias.id.name.as_str();
                             if !ALLOWED.contains(&name) {
                                 errors.push(format!(
-                                    "API unit must not export the type `{name}`; \
-                                     only `RequestBody`, `ResponseBody`, and `QueryParams` are allowed"
+                                    "API unit must not export the type `{name}`;"
                                 ));
                             }
                         }
                         _ => errors.push(
                             "API unit must not have value exports \
-                             (`export const`, `export function`, `export class`, etc.); \
-                             only `RequestBody`, `ResponseBody`, and `QueryParams` type exports are allowed"
+                             (`export const`, `export function`, `export class`, etc.);"
                                 .to_string(),
                         ),
                     }
