@@ -1,14 +1,10 @@
-mod action;
 pub mod api;
-mod bootstrap;
-mod command;
-mod flow;
-mod gateway;
-mod projection;
-mod query;
-mod runtime;
-mod schema;
-mod timer;
+pub mod command;
+pub mod gateway;
+pub mod projection;
+pub mod query;
+pub mod saga;
+pub mod policy;
 pub mod type_extractor;
 
 use serde::{Deserialize, Serialize};
@@ -22,37 +18,37 @@ pub use api::metadata::HttpMethod;
 #[serde(tag = "unit_type", rename_all = "snake_case")]
 pub enum UnitMetadata {
     Api(api::metadata::ApiUnitMetadata),
-    Action(action::metadata::ActionUnitMetadata),
-    Bootstrap(bootstrap::metadata::BootstrapUnitMetadata),
     Command(command::metadata::CommandUnitMetadata),
-    Flow(flow::metadata::FlowUnitMetadata),
+    Saga(saga::metadata::SagaUnitMetadata),
     Gateway(gateway::metadata::GatewayUnitMetadata),
     Projection(projection::metadata::ProjectionUnitMetadata),
     Query(query::metadata::QueryUnitMetadata),
-    Runtime(runtime::metadata::RuntimeUnitMetadata),
-    Schema(schema::metadata::SchemaUnitMetadata),
-    Timer(timer::metadata::TimerUnitMetadata),
+    Policy(policy::metadata::PolicyUnitMetadata),
 }
 
 /// Snake-case ids for each unit kind. Same order as [`all_briefs`] / [`all_details`] and
 /// [`crate::models::projects::ProjectUnitType`] (serde snake_case). Keep in sync when adding a unit definition module.
-pub const UNIT_KIND_SLUGS: &[&str] = &[
-    "bootstrap",
-    "action",
+macro_rules! define_unit_kind_slugs {
+    ($first:literal $(, $rest:literal)*) => {
+        pub const UNIT_KIND_SLUGS: &[&str] = &[$first $(, $rest)*];
+
+        /// For `#[schemars(description = ...)]` on create_unit's `unit_type` field (Gemini JSON schema).
+        pub const UNIT_TYPE_ARG_DESCRIPTION: &str = concat!(
+            "Unit kind (enum): pass the lowercase slug string exactly as in the schema—e.g. api, command, projection—not Title Case (Api) or SCREAMING_SNAKE (API). Must be one of: ",
+            $first $(, ", ", $rest)*
+        );
+    };
+}
+
+define_unit_kind_slugs!(
     "api",
     "command",
-    "flow",
+    "saga",
     "gateway",
     "projection",
     "query",
-    "runtime",
-    "schema",
-    "timer",
-];
-
-/// For `#[schemars(description = ...)]` on create_unit's `unit_type` field (Gemini JSON schema).
-pub const UNIT_TYPE_ARG_DESCRIPTION: &str =
-    "Unit kind (enum): pass the lowercase slug string exactly as in the schema—e.g. api, command, projection—not Title Case (Api) or SCREAMING_SNAKE (API). Must be one of: bootstrap, action, api, command, flow, gateway, projection, query, runtime, schema, timer.";
+    "policy"
+);
 
 /// Prose for LLM tool parameters (`unit_type` on `create_unit` JSON schema `description`).
 pub fn unit_type_description_for_tools() -> String {
@@ -64,17 +60,13 @@ pub fn unit_type_description_for_tools() -> String {
 
 pub fn all_briefs() -> String {
     const ROWS: &[(&str, &str)] = &[
-        (bootstrap::TITLE, bootstrap::BRIEF),
-        (action::TITLE, action::BRIEF),
         (api::TITLE, api::BRIEF),
         (command::TITLE, command::BRIEF),
-        (flow::TITLE, flow::BRIEF),
+        (saga::TITLE, saga::BRIEF),
         (gateway::TITLE, gateway::BRIEF),
         (projection::TITLE, projection::BRIEF),
         (query::TITLE, query::BRIEF),
-        (runtime::TITLE, runtime::BRIEF),
-        (schema::TITLE, schema::BRIEF),
-        (timer::TITLE, timer::BRIEF),
+        (policy::TITLE, policy::BRIEF),
     ];
     ROWS.iter()
         .map(|(title, brief)| format!("### {title}\n\n{brief}\n"))
@@ -83,17 +75,13 @@ pub fn all_briefs() -> String {
 
 pub fn all_details() -> String {
     const ROWS: &[(&str, &str)] = &[
-        (bootstrap::TITLE, bootstrap::DETAIL),
-        (action::TITLE, action::DETAIL),
         (api::TITLE, api::DETAIL),
         (command::TITLE, command::DETAIL),
-        (flow::TITLE, flow::DETAIL),
+        (saga::TITLE, saga::DETAIL),
         (gateway::TITLE, gateway::DETAIL),
         (projection::TITLE, projection::DETAIL),
         (query::TITLE, query::DETAIL),
-        (runtime::TITLE, runtime::DETAIL),
-        (schema::TITLE, schema::DETAIL),
-        (timer::TITLE, timer::DETAIL),
+        (policy::TITLE, policy::DETAIL),
     ];
     ROWS.iter()
         .map(|(title, detail)| format!("### {title}\n\n{detail}\n"))
@@ -102,17 +90,13 @@ pub fn all_details() -> String {
 
 pub fn all_communications() -> String {
     const ROWS: &[(&str, &str)] = &[
-        (bootstrap::TITLE, bootstrap::COMMUNICATION),
-        (action::TITLE, action::COMMUNICATION),
         (api::TITLE, api::COMMUNICATION),
         (command::TITLE, command::COMMUNICATION),
-        (flow::TITLE, flow::COMMUNICATION),
+        (saga::TITLE, saga::COMMUNICATION),
         (gateway::TITLE, gateway::COMMUNICATION),
         (projection::TITLE, projection::COMMUNICATION),
         (query::TITLE, query::COMMUNICATION),
-        (runtime::TITLE, runtime::COMMUNICATION),
-        (schema::TITLE, schema::COMMUNICATION),
-        (timer::TITLE, timer::COMMUNICATION),
+        (policy::TITLE, policy::COMMUNICATION),
     ];
     ROWS.iter()
         .map(|(title, comm)| format!("### {title}\n\n{comm}\n"))
@@ -121,17 +105,13 @@ pub fn all_communications() -> String {
 
 pub fn all_metadata() -> String {
     const ROWS: &[(&str, &str)] = &[
-        (bootstrap::TITLE, bootstrap::METADATA),
-        (action::TITLE, action::METADATA),
         (api::TITLE, api::METADATA),
         (command::TITLE, command::METADATA),
-        (flow::TITLE, flow::METADATA),
+        (saga::TITLE, saga::METADATA),
         (gateway::TITLE, gateway::METADATA),
         (projection::TITLE, projection::METADATA),
         (query::TITLE, query::METADATA),
-        (runtime::TITLE, runtime::METADATA),
-        (schema::TITLE, schema::METADATA),
-        (timer::TITLE, timer::METADATA),
+        (policy::TITLE, policy::METADATA),
     ];
     ROWS.iter()
         .map(|(title, meta)| format!("### {title}\n\n{meta}\n"))
