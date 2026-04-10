@@ -1,10 +1,8 @@
 pub mod api;
 pub mod command;
-pub mod gateway;
 pub mod projection;
 pub mod query;
 pub mod saga;
-pub mod policy;
 pub mod type_extractor;
 
 use serde::{Deserialize, Serialize};
@@ -20,10 +18,8 @@ pub enum UnitMetadata {
     Api(api::metadata::ApiUnitMetadata),
     Command(command::metadata::CommandUnitMetadata),
     Saga(saga::metadata::SagaUnitMetadata),
-    Gateway(gateway::metadata::GatewayUnitMetadata),
     Projection(projection::metadata::ProjectionUnitMetadata),
     Query(query::metadata::QueryUnitMetadata),
-    Policy(policy::metadata::PolicyUnitMetadata),
 }
 
 /// Snake-case ids for each unit kind. Same order as [`all_briefs`] / [`all_details`] and
@@ -63,10 +59,8 @@ pub fn all_briefs() -> String {
         (api::TITLE, api::BRIEF),
         (command::TITLE, command::BRIEF),
         (saga::TITLE, saga::BRIEF),
-        (gateway::TITLE, gateway::BRIEF),
         (projection::TITLE, projection::BRIEF),
         (query::TITLE, query::BRIEF),
-        (policy::TITLE, policy::BRIEF),
     ];
     ROWS.iter()
         .map(|(title, brief)| format!("### {title}\n\n{brief}\n"))
@@ -78,10 +72,8 @@ pub fn all_details() -> String {
         (api::TITLE, api::DETAIL),
         (command::TITLE, command::DETAIL),
         (saga::TITLE, saga::DETAIL),
-        (gateway::TITLE, gateway::DETAIL),
         (projection::TITLE, projection::DETAIL),
         (query::TITLE, query::DETAIL),
-        (policy::TITLE, policy::DETAIL),
     ];
     ROWS.iter()
         .map(|(title, detail)| format!("### {title}\n\n{detail}\n"))
@@ -93,10 +85,8 @@ pub fn all_communications() -> String {
         (api::TITLE, api::COMMUNICATION),
         (command::TITLE, command::COMMUNICATION),
         (saga::TITLE, saga::COMMUNICATION),
-        (gateway::TITLE, gateway::COMMUNICATION),
         (projection::TITLE, projection::COMMUNICATION),
         (query::TITLE, query::COMMUNICATION),
-        (policy::TITLE, policy::COMMUNICATION),
     ];
     ROWS.iter()
         .map(|(title, comm)| format!("### {title}\n\n{comm}\n"))
@@ -108,10 +98,8 @@ pub fn all_metadata() -> String {
         (api::TITLE, api::METADATA),
         (command::TITLE, command::METADATA),
         (saga::TITLE, saga::METADATA),
-        (gateway::TITLE, gateway::METADATA),
         (projection::TITLE, projection::METADATA),
         (query::TITLE, query::METADATA),
-        (policy::TITLE, policy::METADATA),
     ];
     ROWS.iter()
         .map(|(title, meta)| format!("### {title}\n\n{meta}\n"))
