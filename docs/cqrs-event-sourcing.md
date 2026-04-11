@@ -1,3 +1,39 @@
+### How to distinguish Domain vs. Subdomain in practice
+One software equals one Domain, but that Domain is a collection of Subdomains.
+
+Think of it like a Tree:
+
+- The Root (Domain: problem space): The high-level business (Real Estate).
+- The Branches (Subdomains: problem space): The logical divisions of the business (Finance, Search, Auth).
+- The Leaves (Bounded Contexts: solution space): The actual microservices or code modules you write to solve the problems identified by the branches.
+
+```mermaid
+graph TD
+    subgraph ProblemSpace ["The Single Domain (Problem Space)"]
+        D[Real Estate Trading Platform]
+        
+        D --- CS("Core Subdomain: <br>Vault & Escrow Settlement")
+        D --- SS("Supporting Subdomain: <br>Property Discovery")
+        D --- GS("Generic Subdomain: <br>Identity & KYC")
+    end
+    
+    subgraph SolutionSpace ["The Architecture (Solution Space)"]
+        CS -. "Implemented as (Event Sourced)" .-> BC1[Ledger Bounded Context]
+        SS -. "Implemented as (Standard CRUD)" .-> BC2[Catalog Bounded Context]
+        GS -. "Outsourced to" .-> BC3[Auth0 / External API]
+    end
+
+    style D fill:#2c3e50,stroke:#34495e,stroke-width:2px,color:#fff
+    style CS fill:#c0392b,stroke:#e74c3c,stroke-width:2px,color:#fff
+    style SS fill:#2980b9,stroke:#3498db,stroke-width:2px,color:#fff
+    style GS fill:#7f8c8d,stroke:#95a5a6,stroke-width:2px,color:#fff
+```
+
+### Bounded Contexts own the Event Store
+In Event Sourcing, the Event Store acts as the single source of truth. **An Event Store strictly belongs to one Bounded Context**. * Events like `FundsLockedInVault` or `EscrowReleased` are defined by the Ubiquitous Language of that specific context.
+
+- Other Bounded Contexts should not read directly from this Event Store. If the "Listing Context" needs to know an escrow closed, the "Ledger Context" publishes an Integration Event over a message broker (like NATS or RabbitMQ), rather than sharing its internal Domain Events.
+
 ### Communications between units
 
 ```mermaid
