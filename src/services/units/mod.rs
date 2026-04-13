@@ -1,8 +1,5 @@
 pub mod api;
-pub mod command;
-pub mod projection;
-pub mod query;
-pub mod saga;
+pub mod workflow;
 pub mod type_extractor;
 
 use serde::{Deserialize, Serialize};
@@ -16,10 +13,7 @@ pub use api::metadata::HttpMethod;
 #[serde(tag = "unit_type", rename_all = "snake_case")]
 pub enum UnitMetadata {
     Api(api::metadata::ApiUnitMetadata),
-    Command(command::metadata::CommandUnitMetadata),
-    Saga(saga::metadata::SagaUnitMetadata),
-    Projection(projection::metadata::ProjectionUnitMetadata),
-    Query(query::metadata::QueryUnitMetadata),
+    Workflow(workflow::metadata::WorkflowUnitMetadata),
 }
 
 /// Snake-case ids for each unit kind. Same order as [`all_briefs`] / [`all_details`] and
@@ -30,21 +24,13 @@ macro_rules! define_unit_kind_slugs {
 
         /// For `#[schemars(description = ...)]` on create_unit's `unit_type` field (Gemini JSON schema).
         pub const UNIT_TYPE_ARG_DESCRIPTION: &str = concat!(
-            "Unit kind (enum): pass the lowercase slug string exactly as in the schema—e.g. api, command, projection—not Title Case (Api) or SCREAMING_SNAKE (API). Must be one of: ",
+            "Unit kind (enum): pass the lowercase slug string exactly as in the schema—e.g. api, workflow—not Title Case (Api) or SCREAMING_SNAKE (API). Must be one of: ",
             $first $(, ", ", $rest)*
         );
     };
 }
 
-define_unit_kind_slugs!(
-    "api",
-    "command",
-    "saga",
-    "gateway",
-    "projection",
-    "query",
-    "policy"
-);
+define_unit_kind_slugs!("api", "workflow");
 
 /// Prose for LLM tool parameters (`unit_type` on `create_unit` JSON schema `description`).
 pub fn unit_type_description_for_tools() -> String {
@@ -57,10 +43,7 @@ pub fn unit_type_description_for_tools() -> String {
 pub fn all_briefs() -> String {
     const ROWS: &[(&str, &str)] = &[
         (api::TITLE, api::BRIEF),
-        (command::TITLE, command::BRIEF),
-        (saga::TITLE, saga::BRIEF),
-        (projection::TITLE, projection::BRIEF),
-        (query::TITLE, query::BRIEF),
+        (workflow::TITLE, workflow::BRIEF),
     ];
     ROWS.iter()
         .map(|(title, brief)| format!("### {title}\n\n{brief}\n"))
@@ -70,10 +53,7 @@ pub fn all_briefs() -> String {
 pub fn all_details() -> String {
     const ROWS: &[(&str, &str)] = &[
         (api::TITLE, api::DETAIL),
-        (command::TITLE, command::DETAIL),
-        (saga::TITLE, saga::DETAIL),
-        (projection::TITLE, projection::DETAIL),
-        (query::TITLE, query::DETAIL),
+        (workflow::TITLE, workflow::DETAIL),
     ];
     ROWS.iter()
         .map(|(title, detail)| format!("### {title}\n\n{detail}\n"))
@@ -83,10 +63,7 @@ pub fn all_details() -> String {
 pub fn all_communications() -> String {
     const ROWS: &[(&str, &str)] = &[
         (api::TITLE, api::COMMUNICATION),
-        (command::TITLE, command::COMMUNICATION),
-        (saga::TITLE, saga::COMMUNICATION),
-        (projection::TITLE, projection::COMMUNICATION),
-        (query::TITLE, query::COMMUNICATION),
+        (workflow::TITLE, workflow::COMMUNICATION),
     ];
     ROWS.iter()
         .map(|(title, comm)| format!("### {title}\n\n{comm}\n"))
@@ -96,10 +73,7 @@ pub fn all_communications() -> String {
 pub fn all_metadata() -> String {
     const ROWS: &[(&str, &str)] = &[
         (api::TITLE, api::METADATA),
-        (command::TITLE, command::METADATA),
-        (saga::TITLE, saga::METADATA),
-        (projection::TITLE, projection::METADATA),
-        (query::TITLE, query::METADATA),
+        (workflow::TITLE, workflow::METADATA),
     ];
     ROWS.iter()
         .map(|(title, meta)| format!("### {title}\n\n{meta}\n"))
@@ -142,6 +116,6 @@ pub async fn build_unit_metadata(
             )
             .await
         }
-        _ => None,
+        crate::models::projects::ProjectUnitType::Workflow => None,
     }
 }

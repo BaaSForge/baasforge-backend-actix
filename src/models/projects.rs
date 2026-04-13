@@ -46,53 +46,23 @@ pub enum PlatformEnvironmentType {
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectUnitType {
-    Bootstrap,
-    Action,
     Api,
-    Command,
-    Flow,
-    Gateway,
-    Projection,
-    Query,
-    Runtime,
-    Schema,
-    Timer,
+    Workflow,
 }
 
 impl ProjectUnitType {
     pub fn as_slug(&self) -> &'static str {
         match self {
-            Self::Bootstrap => "bootstrap",
-            Self::Action => "action",
             Self::Api => "api",
-            Self::Command => "command",
-            Self::Flow => "flow",
-            Self::Gateway => "gateway",
-            Self::Projection => "projection",
-            Self::Query => "query",
-            Self::Runtime => "runtime",
-            Self::Schema => "schema",
-            Self::Timer => "timer",
+            Self::Workflow => "workflow",
         }
     }
 
     /// Parses the slug used in composite unit ids (`context.module.<slug>.…`). Inverse of [`Self::as_slug`].
     pub fn from_slug(s: &str) -> Option<Self> {
-        [
-            Self::Bootstrap,
-            Self::Action,
-            Self::Api,
-            Self::Command,
-            Self::Flow,
-            Self::Gateway,
-            Self::Projection,
-            Self::Query,
-            Self::Runtime,
-            Self::Schema,
-            Self::Timer,
-        ]
-        .into_iter()
-        .find(|t| t.as_slug() == s)
+        [Self::Api, Self::Workflow]
+            .into_iter()
+            .find(|t| t.as_slug() == s)
     }
 }
 

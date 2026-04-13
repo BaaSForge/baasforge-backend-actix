@@ -191,7 +191,7 @@ pub const TOOL_NAME: &str = "create_unit";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Create a new unit row for this project (in-session work until released). Provide context_slug, module_slug, and unit_name_slug (English lowercase letters and hyphens only). `unit_type` is an enum: use the lowercase slug from the parameter schema (e.g. api, projection), not capitalized forms. The row `id` combines those parts and unit kind, dot-separated, with the revision as the last segment: the digit `1` for a new unit (not `v1` or `rev1`). The `code` argument must be TypeScript (Node.js environment).",
+        description: "Create a new unit row for this project (in-session work until released). Provide context_slug, module_slug, and unit_name_slug (English lowercase letters and hyphens only). `unit_type` is an enum: use the lowercase slug from the parameter schema (e.g. api, workflow), not capitalized forms. The row `id` combines those parts and unit kind, dot-separated, with the revision as the last segment: the digit `1` for a new unit (not `v1` or `rev1`). The `code` argument must be TypeScript (Node.js environment).",
         parameters: params_schema(),
     }
 }

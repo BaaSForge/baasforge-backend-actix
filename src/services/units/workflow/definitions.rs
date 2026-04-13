@@ -1,4 +1,4 @@
-pub const TITLE: &str = "Projection";
+pub const TITLE: &str = "Workflow";
 
 pub const BRIEF: &str = r#"
 "#;
