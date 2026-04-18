@@ -85,7 +85,7 @@ pub struct UnitPath {
 /// (no `v`/`rev`/other prefix), then [`parse_unit_path`] for slug and unit type.
 pub fn validate_full_unit_id_for_tool(unit_id: &str) -> Result<(), String> {
     validate_full_unit_id_revision_segment(unit_id)?;
-    parse_unit_path(unit_id).map(|_| ()).map_err(|e| e.to_string())
+    parse_unit_path(unit_id).map(|_| ())
 }
 
 /// Revision segment only: five dot-separated segments; last segment must be decimal digits with no
@@ -122,38 +122,56 @@ pub fn validate_full_unit_id_revision_segment(unit_id: &str) -> Result<(), Strin
 ///   `v`/`rev` prefix; parse as a positive integer). Same path as the first four segments (revision
 ///   is ignored for lookup).
 /// - **Path only** — four segments: `context.module.unit_type.unit_name`.
-pub fn parse_unit_path(s: &str) -> Result<UnitPath, &'static str> {
+pub fn parse_unit_path(s: &str) -> Result<UnitPath, String> {
     let parts: Vec<&str> = s.split('.').filter(|p| !p.is_empty()).collect();
     let (a, b, c, d) = match parts.len() {
         5 => {
             let rev_seg = parts[4];
             if !rev_seg.chars().all(|c| c.is_ascii_digit()) {
-                return Err(
-                    "invalid unit path: revision must be decimal digits only with no prefix (e.g. ...unit.1 not ...unit.v1)",
-                );
+                return Err(format!(
+                    "invalid unit path: revision segment `{}` must be decimal digits only with no prefix (e.g. `...unit.1`, not `...unit.v1` or `...unit.rev1`)",
+                    rev_seg
+                ));
             }
-            let rev: i32 = rev_seg
-                .parse()
-                .map_err(|_| "invalid unit path: revision must be a positive integer")?;
+            let rev: i32 = rev_seg.parse().map_err(|_| {
+                format!("invalid unit path: revision `{}` is out of i32 range", rev_seg)
+            })?;
             if rev < 1 {
-                return Err("invalid unit path: revision must be >= 1");
+                return Err(format!(
+                    "invalid unit path: revision must be >= 1, got `{}`",
+                    rev
+                ));
             }
             (parts[0], parts[1], parts[2], parts[3])
         }
         4 => (parts[0], parts[1], parts[2], parts[3]),
-        _ => {
-            return Err(
-                "invalid unit path: expected four segments (context.module.unit_type.unit_name) or five with a revision",
-            );
+        n => {
+            return Err(format!(
+                "invalid unit path `{}`: expected 4 segments (context.module.unit_type.unit_name) or 5 with a revision, got {}",
+                s, n
+            ));
         }
     };
-    for p in [a, b, c, d] {
-        if !is_valid_slug(p) {
-            return Err("invalid unit path: each segment must be a valid slug");
+    let segment_names = ["context_slug", "module_slug", "unit_type", "unit_name_slug"];
+    for (name, val) in segment_names.iter().zip([a, b, c, d]) {
+        if !is_valid_slug(val) {
+            return Err(format!(
+                "invalid unit path: `{}` segment `{}` is not a valid slug (must match `{}`)",
+                name, val, SLUG_PATTERN
+            ));
         }
     }
-    let unit_type =
-        ProjectUnitType::from_slug(c).ok_or("invalid unit path: unknown unit_type")?;
+    let unit_type = ProjectUnitType::from_slug(c).ok_or_else(|| {
+        let valid = ProjectUnitType::all()
+            .iter()
+            .map(|t| format!("`{}`", t.as_slug()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "invalid unit path: unit_type `{}` is unknown; valid values are {}",
+            c, valid
+        )
+    })?;
     Ok(UnitPath {
         context_slug: a.to_string(),
         module_slug: b.to_string(),
