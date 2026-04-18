@@ -1,5 +1,16 @@
 declare module "@sdk" {
   // ---------------------------------------------------------------------------
+  // Required-generic marker
+  //
+  // When a generic that controls the return type is omitted, it defaults to
+  // _Req. The conditional helper _R<T> then resolves to `never`, making the
+  // call result unusable and surfacing a type error at the consumer.
+  // ---------------------------------------------------------------------------
+
+  interface _Req { readonly _: never }
+  type _R<T> = T extends _Req ? never : T;
+
+  // ---------------------------------------------------------------------------
   // SDK singleton — platform primitives
   // ---------------------------------------------------------------------------
 
@@ -14,33 +25,33 @@ declare module "@sdk" {
      */
     getApiUnitTriggerUrl(unitPathOrId: ApiUnitPathOrId): string;
 
-    callWorkflow<T = any>(unitPath: string, data?: any): Promise<T>;
+    callWorkflow<T = _Req>(unitPath: string, data?: any): Promise<_R<T>>;
 
-    enqueueWorker<T = any>(
+    enqueueWorker<T = unknown>(
       unitPath: string,
       data?: T,
       opts?: EnqueueWorkerOptions,
     ): Promise<{ runId: string }>;
 
-    callActor<TInput = any, TResult = any>(
+    callActor<TInput = unknown, TResult = _Req>(
       unitPath: string,
       actorId: string,
       handler: string,
       payload?: TInput,
       opts?: CallActorOptions,
-    ): Promise<TResult>;
+    ): Promise<_R<TResult>>;
 
     /**
      * Durable actor call (workflow-only). Suspends the workflow via a durable
      * promise until the actor handler completes, then resumes with the result.
      * Only available inside a workflow `run` handler; patched by workflow-runtime.js.
      */
-    callActorDurable<TInput = any, TResult = any>(
+    callActorDurable<TInput = unknown, TResult = _Req>(
       unitPath: string,
       actorId: string,
       handler: string,
       payload?: TInput,
-    ): Promise<TResult>;
+    ): Promise<_R<TResult>>;
   };
 
   // ---------------------------------------------------------------------------
@@ -107,11 +118,11 @@ declare module "@sdk" {
   // Queue Worker — definition
   // ---------------------------------------------------------------------------
 
-  export function queueWorker<TData = any, TResult = any>(
+  export function queueWorker<TData, TResult>(
     handler: (ctx: QueueWorkerContext, data: TData) => Promise<TResult>,
   ): QueueWorkerDefinition<TData, TResult>;
 
-  export function queueWorker<TData = any, TResult = any>(
+  export function queueWorker<TData, TResult>(
     config: QueueWorkerConfig<TData, TResult>,
   ): QueueWorkerDefinition<TData, TResult>;
 
@@ -121,7 +132,7 @@ declare module "@sdk" {
     metadata?: QueueWorkerMetadata;
   }
 
-  export interface QueueWorkerDefinition<TData = any, TResult = any> {}
+  export interface QueueWorkerDefinition<TData, TResult> {}
 
   // ---------------------------------------------------------------------------
   // Queue Worker — execution context
@@ -138,11 +149,11 @@ declare module "@sdk" {
   // Workflow — definition
   // ---------------------------------------------------------------------------
 
-  export function workflow<TInput = any, TOutput = any>(
+  export function workflow<TInput, TOutput>(
     handler: (ctx: WorkflowContext, input: TInput) => Promise<TOutput>,
   ): WorkflowDefinition<TInput, TOutput>;
 
-  export function workflow<TInput = any, TOutput = any>(
+  export function workflow<TInput, TOutput>(
     config: WorkflowConfig<TInput, TOutput>,
   ): WorkflowDefinition<TInput, TOutput>;
 
@@ -151,7 +162,7 @@ declare module "@sdk" {
     handlers?: Record<string, (ctx: WorkflowSharedContext, input?: any) => Promise<any>>;
   }
 
-  export interface WorkflowDefinition<TInput = any, TOutput = any> {}
+  export interface WorkflowDefinition<TInput, TOutput> {}
 
   // ---------------------------------------------------------------------------
   // Workflow — run context (available inside the `run` handler)
@@ -178,10 +189,10 @@ declare module "@sdk" {
      * is resolved or rejected (or a timeout elapses). Use `.resolve()` /
      * `.reject()` from a shared handler to unblock the workflow.
      */
-    promise<T = any>(name: string): DurablePromise<T>;
+    promise<T = _Req>(name: string): DurablePromise<_R<T>>;
 
     set(key: string, value: any): void;
-    get<T = any>(key: string): Promise<T | null>;
+    get<T = _Req>(key: string): Promise<_R<T> | null>;
 
     /**
      * Deterministic random helpers. Values are seeded by the instance ID
@@ -204,8 +215,8 @@ declare module "@sdk" {
 
   export interface WorkflowSharedContext {
     readonly key: string;
-    promise<T = any>(name: string): DurablePromiseHandle<T>;
-    get<T = any>(key: string): Promise<T | null>;
+    promise<T = _Req>(name: string): DurablePromiseHandle<_R<T>>;
+    get<T = _Req>(key: string): Promise<_R<T> | null>;
   }
 
   // ---------------------------------------------------------------------------
@@ -279,9 +290,9 @@ declare module "@sdk" {
     onDeadLetter?: (ctx: ActorContext<TState>, handler: string, payload: any, error: Error) => void | Promise<void>;
   }
 
-  export interface ActorDefinition<TState = any> {}
+  export interface ActorDefinition<TState> {}
 
-  export function actor<TState = any>(config: ActorConfig<TState>): ActorDefinition<TState>;
+  export function actor<TState>(config: ActorConfig<TState>): ActorDefinition<TState>;
 
   // ---------------------------------------------------------------------------
   // Terminal error
