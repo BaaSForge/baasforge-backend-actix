@@ -110,8 +110,9 @@ After your analysis is complete, do not stop at narrative-only turns: call finis
 
 pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::new(|| {
     let combined = format!(
-        "{SYSTEM_PROMPT_CORE}\n\n## Unit type reference (detailed)\n\nUse the following when reasoning about how units relate, conflict, or should connect.\n\n{}",
+        "{SYSTEM_PROMPT_CORE}\n\n## Unit type reference (detailed)\n\nUse the following when reasoning about how units relate, conflict, or should connect.\n\n{}\n## Unit communication reference\n\nHow each unit type communicates with the outside world and with other units.\n\n{}",
         units_definitions::all_details(),
+        units_definitions::all_communications(),
     );
     Box::leak(combined.into_boxed_str())
 });

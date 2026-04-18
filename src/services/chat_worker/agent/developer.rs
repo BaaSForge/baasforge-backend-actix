@@ -112,12 +112,16 @@ In **`detailed_report`**, do not include trial-and-error narratives, dead ends, 
 pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::new(|| {
     let combined = format!(
         "{SYSTEM_PROMPT_CORE}\n\n\
-        ## Unit type reference (detailed)\n\n{}
+        ## Unit type reference (detailed)\n\n{}\n\
+        ## Unit communication reference\n\nHow each unit type communicates with the outside world and with other units.\n\n{}\n\
+        ## Unit metadata reference\n\nPersisted metadata schema and semantics for each unit type.\n\n{}\n\
         ## Automated Code Rules\n\n\
          The following rules are enforced by an automated linter after every `create_unit` or \
          `modify_unit` or `remove_unit` call. Follow them precisely when writing unit code.\n\n\
          {}\n",
         units_definitions::all_details(),
+        units_definitions::all_communications(),
+        units_definitions::all_metadata(),
         rule_checker::rules_prompt(),
     );
     Box::leak(combined.into_boxed_str())
