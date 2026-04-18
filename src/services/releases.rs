@@ -628,16 +628,18 @@ pub fn attach_is_draft_flags_from_latest_production(
     Ok(units)
 }
 
-/// Chat “current units” list: latest production combined snapshot merged with this session’s unit tips
-/// (same merge rules as stage release metadata).
+/// Chat “current units” list: session baseline production snapshot merged with this session’s unit tips.
+/// Uses the release that was live when the session was created so the result reflects only what
+/// was deployed at session-open time plus the session’s own drafts.
 pub fn load_chat_session_units_merged_with_latest_production(
     conn: &mut PooledConn,
     project_id: Uuid,
     session_id: Uuid,
 ) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
     let previous_combined = {
-        let prod = load_latest_production_release_for_project(conn, project_id)?;
-        match prod.as_ref().and_then(|r| r.units_metadata.as_ref()) {
+        let (_baseline_id, baseline_release) =
+            load_baseline_production_release_for_chat_session(conn, project_id, session_id)?;
+        match baseline_release.as_ref().and_then(|r| r.units_metadata.as_ref()) {
             Some(m) => combined_units_from_release_metadata(conn, project_id, Some(m))?,
             None => Vec::new(),
         }
