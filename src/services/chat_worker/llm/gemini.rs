@@ -544,3 +544,115 @@ pub async fn call_gemini_stream(
         thinking_blocks,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::chat_worker::llm::tools::{
+        create_unit as create_unit_tool, modify_unit as modify_unit_tool,
+    };
+
+    /// Asserts that argument descriptions (e.g. slug rules forbidding digits) survive all the
+    /// way through schemars -> gemini-rust -> sanitize into the JSON that is sent to Gemini.
+    fn assert_property_description_contains(
+        decl_json: &Value,
+        property: &str,
+        needle: &str,
+        tool_name: &str,
+    ) {
+        let params = decl_json.get("parameters").unwrap_or_else(|| {
+            panic!("{tool_name}: declaration has no `parameters` field: {decl_json}")
+        });
+        let props = params
+            .get("properties")
+            .unwrap_or_else(|| panic!("{tool_name}: parameters has no `properties`: {params}"));
+        let field = props.get(property).unwrap_or_else(|| {
+            panic!("{tool_name}: properties is missing `{property}`: {props}")
+        });
+        let desc = field
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| {
+                panic!("{tool_name}: property `{property}` has no `description`: {field}")
+            });
+        assert!(
+            desc.contains(needle),
+            "{tool_name}: property `{property}` description missing expected text {needle:?}; got: {desc:?}"
+        );
+    }
+
+    fn sanitized_declaration_json(
+        build: fn() -> FunctionDeclaration,
+    ) -> Value {
+        let decl = sanitize_gemini_function_declaration(build())
+            .expect("sanitize should succeed");
+        serde_json::to_value(&decl).expect("serialize sanitized declaration")
+    }
+
+    #[test]
+    fn gemini_create_unit_schema_includes_slug_rule_descriptions() {
+        let v = sanitized_declaration_json(create_unit_tool::gemini_declaration);
+        assert_property_description_contains(
+            &v,
+            "unit_name_slug",
+            "NO digits or numbers",
+            create_unit_tool::TOOL_NAME,
+        );
+        assert_property_description_contains(
+            &v,
+            "context_slug",
+            "NO digits or numbers",
+            create_unit_tool::TOOL_NAME,
+        );
+        assert_property_description_contains(
+            &v,
+            "module_slug",
+            "NO digits or numbers",
+            create_unit_tool::TOOL_NAME,
+        );
+    }
+
+    #[test]
+    fn gemini_modify_unit_schema_keeps_argument_descriptions() {
+        let v = sanitized_declaration_json(modify_unit_tool::gemini_declaration);
+        let params = v.get("parameters").expect("has parameters");
+        let props = params.get("properties").expect("has properties");
+        let obj = props.as_object().expect("properties is object");
+        assert!(!obj.is_empty(), "modify_unit has no properties: {params}");
+        for (name, schema) in obj {
+            assert!(
+                schema
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .is_some(),
+                "modify_unit: property `{name}` has no/empty description: {schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_strips_additional_properties_but_keeps_descriptions() {
+        let v = sanitized_declaration_json(create_unit_tool::gemini_declaration);
+        fn walk_and_assert_no_additional_props(v: &Value) {
+            match v {
+                Value::Object(map) => {
+                    assert!(
+                        !map.contains_key("additionalProperties"),
+                        "schema still contains additionalProperties: {v}"
+                    );
+                    for child in map.values() {
+                        walk_and_assert_no_additional_props(child);
+                    }
+                }
+                Value::Array(arr) => {
+                    for item in arr {
+                        walk_and_assert_no_additional_props(item);
+                    }
+                }
+                _ => {}
+            }
+        }
+        walk_and_assert_no_additional_props(&v);
+    }
+}
