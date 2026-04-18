@@ -48,6 +48,8 @@ pub enum PlatformEnvironmentType {
 pub enum ProjectUnitType {
     Api,
     Workflow,
+    QueueWorker,
+    Actor,
 }
 
 impl ProjectUnitType {
@@ -55,12 +57,14 @@ impl ProjectUnitType {
         match self {
             Self::Api => "api",
             Self::Workflow => "workflow",
+            Self::QueueWorker => "queue_worker",
+            Self::Actor => "actor",
         }
     }
 
     /// Parses the slug used in composite unit ids (`context.module.<slug>.…`). Inverse of [`Self::as_slug`].
     pub fn from_slug(s: &str) -> Option<Self> {
-        [Self::Api, Self::Workflow]
+        [Self::Api, Self::Workflow, Self::QueueWorker, Self::Actor]
             .into_iter()
             .find(|t| t.as_slug() == s)
     }

@@ -340,7 +340,9 @@ pub fn run_rule_check(
 fn unit_type_rules(unit_type: &str) -> Vec<Rule> {
     match unit_type {
         "api" => crate::services::units::api::rules::rules(),
-        // "command"    => units::command_rules::rules(),
+        "workflow" => crate::services::units::workflow::rules::rules(),
+        "queue_worker" => crate::services::units::queue_worker::rules::rules(),
+        "actor" => crate::services::units::actor::rules::rules(),
         _ => vec![],
     }
 }

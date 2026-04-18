@@ -1,4 +1,6 @@
+pub mod actor;
 pub mod api;
+pub mod queue_worker;
 pub mod workflow;
 pub mod type_extractor;
 
@@ -14,6 +16,8 @@ pub use api::metadata::HttpMethod;
 pub enum UnitMetadata {
     Api(api::metadata::ApiUnitMetadata),
     Workflow(workflow::metadata::WorkflowUnitMetadata),
+    QueueWorker(queue_worker::metadata::QueueWorkerUnitMetadata),
+    Actor(actor::metadata::ActorUnitMetadata),
 }
 
 /// Snake-case ids for each unit kind. Same order as [`all_briefs`] / [`all_details`] and
@@ -30,7 +34,7 @@ macro_rules! define_unit_kind_slugs {
     };
 }
 
-define_unit_kind_slugs!("api", "workflow");
+define_unit_kind_slugs!("api", "workflow", "queue_worker", "actor");
 
 /// Prose for LLM tool parameters (`unit_type` on `create_unit` JSON schema `description`).
 pub fn unit_type_description_for_tools() -> String {
@@ -44,6 +48,8 @@ pub fn all_briefs() -> String {
     const ROWS: &[(&str, &str)] = &[
         (api::TITLE, api::BRIEF),
         (workflow::TITLE, workflow::BRIEF),
+        (queue_worker::TITLE, queue_worker::BRIEF),
+        (actor::TITLE, actor::BRIEF),
     ];
     ROWS.iter()
         .map(|(title, brief)| format!("### {title}\n\n{brief}\n"))
@@ -54,6 +60,8 @@ pub fn all_details() -> String {
     const ROWS: &[(&str, &str)] = &[
         (api::TITLE, api::DETAIL),
         (workflow::TITLE, workflow::DETAIL),
+        (queue_worker::TITLE, queue_worker::DETAIL),
+        (actor::TITLE, actor::DETAIL),
     ];
     ROWS.iter()
         .map(|(title, detail)| format!("### {title}\n\n{detail}\n"))
@@ -64,6 +72,8 @@ pub fn all_communications() -> String {
     const ROWS: &[(&str, &str)] = &[
         (api::TITLE, api::COMMUNICATION),
         (workflow::TITLE, workflow::COMMUNICATION),
+        (queue_worker::TITLE, queue_worker::COMMUNICATION),
+        (actor::TITLE, actor::COMMUNICATION),
     ];
     ROWS.iter()
         .map(|(title, comm)| format!("### {title}\n\n{comm}\n"))
@@ -74,6 +84,8 @@ pub fn all_metadata() -> String {
     const ROWS: &[(&str, &str)] = &[
         (api::TITLE, api::METADATA),
         (workflow::TITLE, workflow::METADATA),
+        (queue_worker::TITLE, queue_worker::METADATA),
+        (actor::TITLE, actor::METADATA),
     ];
     ROWS.iter()
         .map(|(title, meta)| format!("### {title}\n\n{meta}\n"))
@@ -117,5 +129,7 @@ pub async fn build_unit_metadata(
             .await
         }
         crate::models::projects::ProjectUnitType::Workflow => None,
+        crate::models::projects::ProjectUnitType::QueueWorker => None,
+        crate::models::projects::ProjectUnitType::Actor => None,
     }
 }
