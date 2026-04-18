@@ -39,17 +39,20 @@ pub enum LlmClient {
         model: String,
         /// Chat Completions `reasoning_effort` when set (reasoning-capable models only).
         reasoning_effort: Option<String>,
+        base_runtime_endpoint: String,
     },
     Gemini {
         api_key: String,
         model: String,
         thinking: GeminiThinkingEnv,
+        base_runtime_endpoint: String,
     },
     Claude {
         api_key: String,
         model: String,
         /// `None` disables extended thinking on the request.
         thinking_budget_tokens: Option<u32>,
+        base_runtime_endpoint: String,
     },
 }
 
@@ -74,6 +77,7 @@ impl LlmClient {
                 credentials,
                 model,
                 reasoning_effort,
+                base_runtime_endpoint,
             } => {
                 openai::call_gpt_stream(
                     credentials,
@@ -91,6 +95,7 @@ impl LlmClient {
                     agent,
                     queue_invoking_message_id,
                     stale_base_release,
+                    base_runtime_endpoint,
                 )
                 .await
             }
@@ -98,6 +103,7 @@ impl LlmClient {
                 api_key,
                 model,
                 thinking,
+                base_runtime_endpoint,
             } => {
                 gemini::call_gemini_stream(
                     api_key,
@@ -115,6 +121,7 @@ impl LlmClient {
                     agent,
                     queue_invoking_message_id,
                     stale_base_release,
+                    base_runtime_endpoint,
                 )
                 .await
             }
@@ -122,6 +129,7 @@ impl LlmClient {
                 api_key,
                 model,
                 thinking_budget_tokens,
+                base_runtime_endpoint,
             } => {
                 claude::call_claude_stream(
                     api_key,
@@ -139,6 +147,7 @@ impl LlmClient {
                     agent,
                     queue_invoking_message_id,
                     stale_base_release,
+                    base_runtime_endpoint,
                 )
                 .await
             }
@@ -157,6 +166,7 @@ pub fn build_llm_client(settings: &Settings) -> Result<LlmClient, BoxError> {
                 credentials: ::openai::Credentials::new(key, ""),
                 model: settings.openai_model.clone(),
                 reasoning_effort: settings.openai_reasoning_effort.clone(),
+                base_runtime_endpoint: settings.base_runtime_endpoint.clone(),
             })
         }
         LlmProvider::Gemini => {
@@ -171,6 +181,7 @@ pub fn build_llm_client(settings: &Settings) -> Result<LlmClient, BoxError> {
                     level: settings.gemini_thinking_level.clone(),
                     budget: settings.gemini_thinking_budget,
                 },
+                base_runtime_endpoint: settings.base_runtime_endpoint.clone(),
             })
         }
         LlmProvider::Anthropic => {
@@ -181,6 +192,7 @@ pub fn build_llm_client(settings: &Settings) -> Result<LlmClient, BoxError> {
                 api_key: key,
                 model: settings.anthropic_model.clone(),
                 thinking_budget_tokens: settings.anthropic_thinking_budget_tokens,
+                base_runtime_endpoint: settings.base_runtime_endpoint.clone(),
             })
         }
     }

@@ -191,11 +191,12 @@ pub async fn call_gemini_stream(
     agent: ChatAgentType,
     queue_invoking_message_id: Option<Uuid>,
     stale_base_release: bool,
+    base_runtime_endpoint: &str,
 ) -> Result<GenerateOutcome, BoxError> {
     let client = Gemini::with_model(api_key, gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
 
-    let system_prompt = system_prompt_for_agent(&agent, stale_base_release);
+    let system_prompt = system_prompt_for_agent(&agent, stale_base_release, project_id, base_runtime_endpoint);
     let declarations: Vec<FunctionDeclaration> = to_gemini_declarations_for_agent(&agent)
         .into_iter()
         .map(sanitize_gemini_function_declaration)

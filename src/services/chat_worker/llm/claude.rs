@@ -417,8 +417,9 @@ pub async fn call_claude_stream(
     agent: ChatAgentType,
     queue_invoking_message_id: Option<Uuid>,
     stale_base_release: bool,
+    base_runtime_endpoint: &str,
 ) -> Result<GenerateOutcome, BoxError> {
-    let system_prompt = system_prompt_for_agent(&agent, stale_base_release);
+    let system_prompt = system_prompt_for_agent(&agent, stale_base_release, project_id, base_runtime_endpoint);
     let tools_list = to_tools_json(&agent);
     let tool_count = tools_list.len();
 

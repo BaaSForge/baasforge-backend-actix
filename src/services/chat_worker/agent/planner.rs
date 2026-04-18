@@ -79,6 +79,7 @@ Each project has Stage and Production **runtimes** (Stage runtimes exact count c
 DDD naming semantics: `context` is the DDD domain / bounded context. `module` is a subdomain inside that context. They are different layers; do not conflate them when writing `intent` / `directive` for sub-agents.
 **Cross-unit type imports:** Units may share TypeScript types with other units using `import type`. Only types may cross unit boundaries — no runtime values, functions, or classes may be imported from another unit.
 **Unit id and path structure:** A unit full id is `{context}.{module}.{unit_type}.{unit_slug_name}.{revision}`. The unit path (without revision) is `{context}.{module}.{unit_type}.{unit_slug_name}`. Each dot-separated segment is independently meaningful — split on `.` to extract `context`, `module`, `unit_type`, or `unit_slug_name` from any id or path.
+**API unit trigger URL:** `{BASE_RUNTIME_ENDPOINT}/api/v1/trigger/{PROJECT_ID}/{context}/{module}/{unit_slug_name}` — no revision or unit_type in the URL. The actual `BASE_RUNTIME_ENDPOINT` and `PROJECT_ID` for this session are injected at the end of this prompt under **Runtime context**.
 **Unit ids in intents/directives:** When you reference a unit’s full id, use the stored form: dot-separated path plus revision. The revision is **only** a number in the last segment (e.g. `demo.greeter.api.greeter-api.1`). Do not prefix the revision with `v`, `rev`, or anything else.
 
 2.1. IMPORTANT — Sub-agent context is isolated (read carefully)

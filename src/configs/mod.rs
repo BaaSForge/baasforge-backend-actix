@@ -108,6 +108,9 @@ pub struct Settings {
     /// exercising the full retry → dead-letter → fail_tool_message_and_continue path.
     /// Set `UNIT_REVIEWER_SIMULATE_FAILURE=true` in .env.local; absent or `false` disables it.
     pub unit_reviewer_simulate_failure: bool,
+    /// Base URL of the runtime, no trailing slash (e.g. `https://runtime.example.com`).
+    /// Injected into agent prompts so the LLM can construct API unit trigger URLs.
+    pub base_runtime_endpoint: String,
 }
 
 impl Settings {
@@ -254,6 +257,11 @@ impl Settings {
                 Err(_) => false,
             };
 
+        let base_runtime_endpoint = env::var("BASE_RUNTIME_ENDPOINT")
+            .expect("BASE_RUNTIME_ENDPOINT must be set")
+            .trim_end_matches('/')
+            .to_string();
+
         Ok(Settings {
             port,
             app_environment,
@@ -285,6 +293,7 @@ impl Settings {
             runtime_nats_jetstream_stream_release,
             runtime_nats_jetstream_consumer_release,
             unit_reviewer_simulate_failure,
+            base_runtime_endpoint,
         })
     }
 }

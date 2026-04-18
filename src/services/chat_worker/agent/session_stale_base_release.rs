@@ -8,6 +8,7 @@
 
 use crate::models::chat_messages::ChatAgentType;
 use std::borrow::Cow;
+use uuid::Uuid;
 
 use super::{
     architecture_analyzer, developer, planner, solution_analyzer, tool_names_for_agent,
@@ -26,20 +27,38 @@ This chat’s **saved baseline** is **not** the production release that is **liv
 
 **Usually safer:** A **new chat** created while aligned with **current** production avoids this revert unless they mean to do it."#;
 
-pub fn system_prompt_for_agent(agent: &ChatAgentType, stale_base_release: bool) -> Cow<'static, str> {
+pub fn system_prompt_for_agent(
+    agent: &ChatAgentType,
+    stale_base_release: bool,
+    project_id: Uuid,
+    base_runtime_endpoint: &str,
+) -> Cow<'static, str> {
     let base: &'static str = match agent {
         ChatAgentType::Planner => *planner::SYSTEM_PROMPT_WITH_UNIT_BRIEFS,
         ChatAgentType::ArchitectureAnalyzer => *architecture_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
         ChatAgentType::SolutionAnalyzer => *solution_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
         ChatAgentType::Developer => *developer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
     };
-    if !stale_base_release {
+
+    let needs_trigger_url = matches!(agent, ChatAgentType::Planner | ChatAgentType::Developer);
+    let needs_stale_appendix = stale_base_release && matches!(agent, ChatAgentType::Planner);
+
+    if !needs_trigger_url && !needs_stale_appendix {
         return Cow::Borrowed(base);
     }
-    match agent {
-        ChatAgentType::Planner => Cow::Owned(format!("{base}{PLANNER_STALE_BASE_APPENDIX}")),
-        _ => Cow::Borrowed(base),
+
+    let mut prompt = base.to_string();
+    if needs_trigger_url {
+        prompt.push_str(&format!(
+            "\n\n## Runtime context (system-injected)\n\
+            - **Base runtime endpoint:** `{base_runtime_endpoint}`\n\
+            - **Project ID:** `{project_id}`",
+        ));
     }
+    if needs_stale_appendix {
+        prompt.push_str(PLANNER_STALE_BASE_APPENDIX);
+    }
+    Cow::Owned(prompt)
 }
 
 /// Tool names exposed to the LLM and queue callbacks for this agent (full set; stale baseline does not disable tools).
