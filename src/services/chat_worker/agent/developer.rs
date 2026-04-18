@@ -92,7 +92,7 @@ const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the Programmer for a "No-Code"
 - **Automated code rules:** Strictly follow every rule listed in **§ Automated Code Rules** at the end of this prompt. These rules are enforced by an automated linter after every `create_unit` or `modify_unit` or `remove_unit` call; any violation is returned as an error you must fix before calling `finish_implementation`, if you got any error while creating or modifying, it means the change is not applied, so you must fix the error and try the same tool call again.
 - **Code language:** All implementation you put in the `code` field of create unit and modify unit must be **TypeScript** (Node.js environment). Do not use plain JavaScript as it throws compiler errors.
 - **create_unit `unit_type`:** Enum of lowercase slugs only (`api`, `queue_worker`, … per the tool schema)—never Title Case or ALL CAPS.
-- **Slug arguments:** Use ASCII lowercase letters and hyphens only for `context_slug`, `module_slug`, and `unit_name_slug`; copy from list tools when possible so names match what is already in the project.
+- **Slug arguments:** Use ONLY ASCII lowercase letters [a-z] and hyphens (-) for `context_slug`, `module_slug`, and `unit_name_slug` — NO digits or numbers ever (`e2e-test`, `run-v2`, `step-1` are all invalid. Copy from list tools when possible so names match what is already in the project.
 - **modify_unit:** You cannot change the unit kind when revising; the new draft row keeps the parent unit’s type. To use a different kind, create a new unit with create_unit instead. Pass `unit_id` as the exact `id` field from list or tool results (dot-separated: context.module.kind.name.revision)—copy it verbatim, not a label or paraphrase. The last segment is **only** the revision **number** (decimal digits): never prefix it with `v`, `rev`, or anything else (correct: `demo.greeter.api.greeter-api.1`; wrong: `...v1`, `...rev1`, or `...{anything}1`).
 - **remove_unit:** Soft-removes a unit by inserting a new draft revision with empty code, explanation copied from the parent revision, is_deleted true. Same `unit_id` rules as modify_unit. Use when the directive asks to delete or drop a unit.
 - **Cross-unit type imports:** To use a TypeScript type defined in another unit, write `import type { TypeName } from '@units/context.module.unit-type.unit-name'` — replacing each segment with the target unit's actual slugs (e.g. `import type { UserPayload } from '@units/auth.users.api.users'`). You may **only** use `import type` — never import runtime values, functions, or classes from another unit. Value-level dependencies between units must go through the message bus, not direct imports.
@@ -114,14 +114,23 @@ pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::n
         "{SYSTEM_PROMPT_CORE}\n\n\
         ## Unit type reference (detailed)\n\n{}\n\
         ## Unit communication reference\n\nHow each unit type communicates with the outside world and with other units.\n\n{}\n\
+        ## Unit code examples\n\nFull working examples for each unit type.\n\n{}\n\
         ## Unit metadata reference\n\nPersisted metadata schema and semantics for each unit type.\n\n{}\n\
+        ## Platform SDK (`@sdk`)\n\n\
+        All unit code runs in a Node.js TypeScript environment. The `@sdk` module is the \
+        only way to interact with other units and platform primitives. Import from it with \
+        `import {{ sdk }} from '@sdk'` (or any named export below). Do not invent SDK \
+        methods not listed here.\n\n\
+        ```typescript\n{}\n```\n\n\
         ## Automated Code Rules\n\n\
          The following rules are enforced by an automated linter after every `create_unit` or \
          `modify_unit` or `remove_unit` call. Follow them precisely when writing unit code.\n\n\
          {}\n",
         units_definitions::all_details(),
         units_definitions::all_communications(),
+        units_definitions::all_code_examples(),
         units_definitions::all_metadata(),
+        include_str!("../../../tsgo/@sdk.d.ts"),
         rule_checker::rules_prompt(),
     );
     Box::leak(combined.into_boxed_str())

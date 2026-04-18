@@ -68,6 +68,18 @@ pub fn all_details() -> String {
         .collect()
 }
 
+pub fn all_code_examples() -> String {
+    const ROWS: &[(&str, &str)] = &[
+        (api::TITLE, api::CODE_EXAMPLES),
+        (workflow::TITLE, workflow::CODE_EXAMPLES),
+        (queue_worker::TITLE, queue_worker::CODE_EXAMPLES),
+        (actor::TITLE, actor::CODE_EXAMPLES),
+    ];
+    ROWS.iter()
+        .map(|(title, example)| format!("### {title}\n\n{example}\n"))
+        .collect()
+}
+
 pub fn all_communications() -> String {
     const ROWS: &[(&str, &str)] = &[
         (api::TITLE, api::COMMUNICATION),
