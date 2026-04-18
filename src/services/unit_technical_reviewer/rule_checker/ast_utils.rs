@@ -7,9 +7,9 @@
 // All functions are pure: no side effects, no error accumulation.
 
 use oxc_ast::ast::{
-    Declaration, ExportAllDeclaration, ExportNamedDeclaration, Function, IdentifierReference,
-    ImportDeclaration, ImportDeclarationSpecifier, ModuleExportName, Program, Statement, TSType,
-    TSTypeName,
+    Declaration, ExportAllDeclaration, ExportDefaultDeclarationKind, ExportNamedDeclaration,
+    Expression, Function, IdentifierReference, ImportDeclaration, ImportDeclarationSpecifier,
+    ModuleExportName, Program, Statement, TSType, TSTypeName,
 };
 use oxc_ast_visit::{walk, Visit};
 
@@ -309,6 +309,29 @@ pub fn ts_type_reference_name<'a>(ty: &'a TSType<'a>) -> Option<&'a str> {
 }
 
 // ── Function export utilities ─────────────────────────────────────────────────────────────────
+
+/// Returns `true` if the program has any `export default` statement.
+pub fn has_export_default(program: &Program) -> bool {
+    program
+        .body
+        .iter()
+        .any(|stmt| matches!(stmt, Statement::ExportDefaultDeclaration(_)))
+}
+
+/// If `export default` is a direct call expression (`export default fn(...)`), returns the
+/// callee identifier name.  Returns `None` if there's no default export or it's not a plain call.
+pub fn get_export_default_call_name<'a>(program: &'a Program<'a>) -> Option<&'a str> {
+    for stmt in &program.body {
+        if let Statement::ExportDefaultDeclaration(export) = stmt {
+            if let ExportDefaultDeclarationKind::CallExpression(call) = &export.declaration {
+                if let Expression::Identifier(id) = &call.callee {
+                    return Some(id.name.as_str());
+                }
+            }
+        }
+    }
+    None
+}
 
 /// Returns the names of all top-level exported function declarations, in source order.
 ///

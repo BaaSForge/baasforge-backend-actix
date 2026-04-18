@@ -34,13 +34,14 @@ pub mod ast_utils;
 
 #[cfg(feature = "unit_technical_reviewer")]
 pub use ast_utils::{
-    contains_word, export_all_source, get_export_named_decls, get_exported_type,
-    get_exported_type_names, get_import_declarations, get_imports_from_source,
+    contains_word, export_all_source, get_export_named_decls, get_export_default_call_name,
+    get_exported_type, get_exported_type_names, get_import_declarations, get_imports_from_source,
     get_named_imports_from_source, get_node_module_import_sources, get_non_type_alias_exports,
-    has_default_import_from, has_exported_function, has_exported_type, has_identifier_reference,
-    has_import_from, has_namespace_import_from, get_exported_function_names,
-    get_exported_function_param_count, get_exported_function_param_type_name, is_never,
-    is_object_type, module_export_name_str, ts_type_reference_name,
+    has_default_import_from, has_export_default, has_exported_function, has_exported_type,
+    has_identifier_reference, has_import_from, has_namespace_import_from,
+    get_exported_function_names, get_exported_function_param_count,
+    get_exported_function_param_type_name, is_never, is_object_type, module_export_name_str,
+    ts_type_reference_name,
 };
 
 #[cfg(feature = "unit_technical_reviewer")]
@@ -225,9 +226,14 @@ pub fn rules_prompt() -> String {
     out.push_str("### API Units\n\n");
     append_hints(&mut out, crate::services::units::api::rules::hint_entries());
 
-    // Add additional unit type sections here as new rule files are introduced:
-    // out.push_str("### Command Units\n\n");
-    // append_hints(&mut out, units::command_rules::hint_entries());
+    out.push_str("### Workflow Units\n\n");
+    append_hints(&mut out, crate::services::units::workflow::rules::hint_entries());
+
+    out.push_str("### Actor Units\n\n");
+    append_hints(&mut out, crate::services::units::actor::rules::hint_entries());
+
+    out.push_str("### Queue Worker Units\n\n");
+    append_hints(&mut out, crate::services::units::queue_worker::rules::hint_entries());
 
     out
 }

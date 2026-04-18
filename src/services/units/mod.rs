@@ -128,8 +128,14 @@ pub async fn build_unit_metadata(
             )
             .await
         }
-        crate::models::projects::ProjectUnitType::Workflow => None,
-        crate::models::projects::ProjectUnitType::QueueWorker => None,
-        crate::models::projects::ProjectUnitType::Actor => None,
+        crate::models::projects::ProjectUnitType::Workflow => {
+            workflow::build_unit_metadata(pool, project_id, session_id, input.code).await
+        }
+        crate::models::projects::ProjectUnitType::QueueWorker => {
+            queue_worker::build_unit_metadata(pool, project_id, session_id, input.code).await
+        }
+        crate::models::projects::ProjectUnitType::Actor => {
+            actor::build_unit_metadata(pool, project_id, session_id, input.code).await
+        }
     }
 }

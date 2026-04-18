@@ -503,6 +503,37 @@ pub fn build_units_vfs(units: &[ProjectUnitResponse]) -> HashMap<String, String>
     vfs
 }
 
+/// Returns the names of all exported type aliases from a TypeScript source string.
+///
+/// Only `export type Name = …` declarations are included (not plain `type Name = …` or
+/// `export interface`).  Returns an empty vec when the source cannot be parsed.
+#[cfg(feature = "unit_technical_reviewer")]
+pub fn get_exported_type_names_from_source(code: &str) -> Vec<String> {
+    use oxc_allocator::Allocator;
+    use oxc_ast::ast::{Declaration, Statement};
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+
+    let allocator = Allocator::default();
+    let source_type = SourceType::ts().with_module(true);
+    let ret = Parser::new(&allocator, code, source_type).parse();
+    if !ret.errors.is_empty() {
+        return vec![];
+    }
+    ret.program
+        .body
+        .iter()
+        .filter_map(|stmt| {
+            if let Statement::ExportNamedDeclaration(export) = stmt {
+                if let Some(Declaration::TSTypeAliasDeclaration(alias)) = &export.declaration {
+                    return Some(alias.id.name.as_str().to_string());
+                }
+            }
+            None
+        })
+        .collect()
+}
+
 /// Extract the deeply-resolved TypeScript declaration string for a single named exported type.
 ///
 /// Returns `type` declarations joined by newlines, in dependency-first order.
