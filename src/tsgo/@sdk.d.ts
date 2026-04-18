@@ -3,7 +3,17 @@ declare module "@sdk" {
   // SDK singleton — platform primitives
   // ---------------------------------------------------------------------------
 
+  export type ApiUnitPathOrId = `${string}.${string}.api.${string}`;
+
   export const sdk: {
+    /**
+     * Returns the full trigger URL for an API unit.
+     * Accepts a 4-segment unit path (`context.module.api.name`) or a 5-segment unit id
+     * (revision is stripped automatically). Throws if the unit type is not `api`.
+     * Automatically uses stage URL format (with runtime id) when running inside a stage runtime.
+     */
+    getApiUnitTriggerUrl(unitPathOrId: ApiUnitPathOrId): string;
+
     callWorkflow<T = any>(unitPath: string, data?: any): Promise<T>;
 
     enqueueWorker<T = any>(
