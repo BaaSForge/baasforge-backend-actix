@@ -20,49 +20,55 @@ A workflow unit must have a default export produced by the `workflow()` function
 side effects and I/O must be inside `ctx.run()` steps. Code outside steps re-executes on
 every replay.
 
-`ctx` inside `run`:
+`ctx` inside `run` — SYNCHRONOUS unless noted:
 - ctx.key: string — the workflow instance ID
 - ctx.TerminalError — throw to permanently fail the workflow without retry
 
-ctx.run(name, fn, opts?) — durable step:
+ctx.run(name, fn, opts?) — durable step. RETURNS A PROMISE; use `await ctx.run(...)`.
   - fn executes exactly once; on replay, returns the cached result without calling fn again
   - name must be unique across all steps in this workflow instance
   - opts.retryPolicy: RetryPolicy — step-level retry on fn failure
   - All side effects (HTTP calls, actor calls, enqueue) must be inside ctx.run()
+  - `ctx.run` is the ONLY ctx method that needs `await`.
 
-ctx.sleep(name, duration) — durable timer:
-  - Suspends the workflow until the duration elapses
+ctx.sleep(name, duration) — durable timer. SYNCHRONOUS; no await.
+  - Suspends the workflow until the duration elapses (via an internal sentinel throw)
   - Survives crashes, restarts, and deployments
   - duration: Duration object { milliseconds?, seconds?, minutes?, hours?, days? } or number (ms)
   - name must be unique
 
-ctx.promise(name) — durable promise (DurablePromise<T>):
-  - .get(opts?) — suspends the workflow until the promise is resolved or rejected; returns
-    null on timeout. opts.timeout: Duration
-  - .resolve(value) — resolve the promise (from inside a ctx.run step or a shared handler)
-  - .reject(error: string) — reject the promise
+ctx.promise(name) — durable promise. Returns a WorkflowDurablePromise:
+  - .get(opts?) — SYNCHRONOUS; suspends the workflow until resolved/rejected; returns
+    null on timeout. opts.timeout: Duration. No `await`; let its internal throw propagate.
+  - .resolve(value) — SYNCHRONOUS; resolve the promise (from a ctx.run step or a shared handler)
+  - .reject(error: string) — SYNCHRONOUS; reject the promise
   - name must be unique
 
-ctx.set(key, value) — persist arbitrary key-value state for this workflow instance
-ctx.get(key) — read persisted state (returns null if not set)
+ctx.set(key, value) — SYNCHRONOUS; persist arbitrary key-value state
+ctx.get(key) — SYNCHRONOUS; read persisted state (returns T | null)
 
 ctx.rand.uuidv4() / ctx.rand.random() — deterministic random seeded by instance ID + step
   position; produces the same values on replay. Use instead of Math.random().
 ctx.date.now() — deterministic current timestamp captured at step boundary; use instead of
   Date.now() inside workflow logic.
 
-`handlers` — optional named functions called externally while the workflow is running.
-They receive WorkflowSharedContext:
+`handlers` — optional named functions invoked EXTERNALLY (from another unit via
+`sdk.callWorkflowHandlerAndWaitForResultSync`) while the workflow is running. They are
+NOT triggered by `sdk.startWorkflowSync` / `callWorkflowAndWaitForOutputSync`, and they
+do NOT auto-run when the workflow starts. A handler's only jobs are to read state and
+resolve/reject a durable promise that the `run` function is waiting on. Handlers
+receive WorkflowSharedContext:
 - ctx.key: string — instance ID
-- ctx.promise(name) — returns DurablePromiseHandle: { resolve(value), reject(error) }
-- ctx.get(key) — read workflow state
+- ctx.promise(name) — returns WorkflowDurablePromiseHandle: { resolve(value), reject(error) } — synchronous
+- ctx.get(key) — synchronous; read workflow state
 
 CRITICAL rules:
 - ALL side effects must be inside ctx.run() — anything outside re-runs on every replay
 - Step names (run, sleep, promise) must be unique within the workflow instance
 - Never use Date.now() or Math.random() directly — use ctx.date.now() and ctx.rand.*
-- Do not catch or swallow exceptions thrown by ctx.sleep() or ctx.promise().get() in a
-  try/catch — they use a special suspension mechanism that must propagate normally
+- Do not catch or swallow exceptions thrown by ctx.sleep(), ctx.promise().get(), or
+  sdk.callActorDurableAndWaitForResultSync — they use a suspension mechanism that must
+  propagate normally
 - TerminalError thrown inside ctx.run() permanently fails that step (and the workflow)
 
 RetryPolicy: { maxAttempts?, initialInterval?: Duration, backoffFactor?, maxInterval?: Duration }
@@ -72,10 +78,11 @@ Exported types (MANDATORY — used for automatic documentation generation and cr
 
 - export type Input = { ... }               — the workflow start payload (REQUIRED)
 - export type Output = { ... }              — the workflow completion result (REQUIRED)
+- export type {HandlerName}Input = { ... }  — input type of each shared handler that takes input
 - export type {HandlerName}Output = { ... } — return type of each shared handler that returns a value (REQUIRED per handler)
 
-Naming convention: PascalCase handler name + "Output" suffix for shared handler types.
-Example: handler "status" → StatusOutput, handler "approve" → ApproveOutput.
+Naming convention: PascalCase handler name + "Input" / "Output" suffix.
+Example: handler "approve" → ApproveInput, ApproveOutput.
 "#;
 
 pub const CODE_EXAMPLES: &str = r#"
@@ -86,44 +93,45 @@ import type { Input as FulfillInput } from "@units/my-ctx.my-module.queue_worker
 export type Input = { orderId: string; userId: string };
 export type Output = { success: boolean; orderId: string };
 export type StatusOutput = { phase: string } | null;
+export type ApproveInput = { approvedBy: string };
 export type ApproveOutput = { ok: boolean };
 export type RejectOutput = { ok: boolean };
 
 export default workflow<Input, Output>({
   run: async (ctx, input): Promise<Output> => {
-    await ctx.run("charge-payment", async (): Promise<ChargeOutput> => {
-      return sdk.callActorDurable<ChargeInput, ChargeOutput>(
+    await ctx.run("charge-payment", (): ChargeOutput =>
+      sdk.callActorDurableAndWaitForResultSync<ChargeInput, ChargeOutput>(
         "my-ctx.my-module.actor.billing",
         input.userId,
         "charge",
         { orderId: input.orderId },
-      );
-    });
+      ),
+    );
 
     ctx.set("phase", "awaiting-approval");
 
-    const approval = await ctx.promise<{ approved: boolean }>("approval").get({
+    const approval = ctx.promise<{ approved: boolean }>("approval").get({
       timeout: { hours: 24 },
     });
 
     if (!approval?.approved) {
-      await ctx.run("refund", async (): Promise<RefundOutput> => {
-        return sdk.callActorDurable<RefundInput, RefundOutput>(
+      await ctx.run("refund", (): RefundOutput =>
+        sdk.callActorDurableAndWaitForResultSync<RefundInput, RefundOutput>(
           "my-ctx.my-module.actor.billing",
           input.userId,
           "refund",
           { orderId: input.orderId },
-        );
-      });
+        ),
+      );
       return { success: false, orderId: input.orderId };
     }
 
     ctx.set("phase", "fulfilling");
 
-    await ctx.sleep("fulfillment-delay", { seconds: 5 });
+    ctx.sleep("fulfillment-delay", { seconds: 5 });
 
-    await ctx.run("fulfill-order", async (): Promise<void> => {
-      await sdk.enqueueWorker<FulfillInput>(
+    await ctx.run("fulfill-order", (): void => {
+      sdk.enqueueWorkerSync<FulfillInput>(
         "my-ctx.my-module.queue_worker.fulfill-order",
         { orderId: input.orderId, idempotencyKey: ctx.rand.uuidv4() },
       );
@@ -134,16 +142,16 @@ export default workflow<Input, Output>({
 
   handlers: {
     status: async (ctx): Promise<StatusOutput> => {
-      return (await ctx.get<{ phase: string }>("phase")) ?? null;
+      return ctx.get<{ phase: string }>("phase") ?? null;
     },
 
-    approve: async (ctx): Promise<ApproveOutput> => {
-      await ctx.promise("approval").resolve({ approved: true });
+    approve: async (ctx, _input: ApproveInput): Promise<ApproveOutput> => {
+      ctx.promise<{ approved: boolean }>("approval").resolve({ approved: true });
       return { ok: true };
     },
 
     reject: async (ctx): Promise<RejectOutput> => {
-      await ctx.promise("approval").resolve({ approved: false });
+      ctx.promise<{ approved: boolean }>("approval").resolve({ approved: false });
       return { ok: true };
     },
   },
@@ -151,13 +159,59 @@ export default workflow<Input, Output>({
 "#;
 
 pub const COMMUNICATION: &str = r#"
-Start a workflow from any unit type using sdk.callWorkflow. Blocks until the workflow
-completes and returns its output. From inside another workflow's run, it automatically
-becomes a durable suspension instead of a blocking call:
+Inbound — another unit can interact with this workflow in two ways. All sdk.* calls are
+synchronous; do NOT write `await` in front of them.
 
-  import type { Input, Output } from "@units/ctx.mod.workflow.name";
+  1) Start a new instance:
 
-  const result = await sdk.callWorkflow<Output>("ctx.mod.workflow.name", inputData as Input);
+     import type { Input, Output } from "@units/ctx.mod.workflow.name";
+
+     // Fire-and-forget — returns { instanceId } immediately; this is the
+     // recommended form whenever the workflow waits on a signal/promise.
+     const { instanceId } = sdk.startWorkflowSync<Input>(
+       "ctx.mod.workflow.name", inputData,
+     );
+
+     // Start and BLOCK until the workflow terminates. Only safe for short,
+     // non-signal workflows.
+     const out = sdk.callWorkflowAndWaitForOutputSync<Input, Output>(
+       "ctx.mod.workflow.name", inputData,
+     );
+
+  2) Signal / query a RUNNING instance by calling one of its `handlers`:
+
+     import type { ApproveInput, ApproveOutput } from "@units/ctx.mod.workflow.name";
+
+     const result = sdk.callWorkflowHandlerAndWaitForResultSync<ApproveInput, ApproveOutput>(
+       "ctx.mod.workflow.name", instanceId, "approve", { approvedBy: "admin" },
+     );
+
+     It blocks until the handler returns. The handler typically resolves a
+     durable promise that the `run` function is waiting on.
+
+Outbound (what THIS workflow can do) — inside `run`, ALL sdk.* calls are synchronous.
+The only `await` should be in front of `ctx.run(...)`.
+
+  // Durable actor call (preferred for all actor calls from a workflow)
+  await ctx.run("step-name", (): Out =>
+    sdk.callActorDurableAndWaitForResultSync<In, Out>(
+      "ctx.mod.actor.name", id, "handler", payload,
+    ),
+  );
+
+  // Fire-and-forget enqueue — wrap in ctx.run for determinism on replay
+  await ctx.run("enqueue-step", (): void => {
+    sdk.enqueueWorkerSync<In>("ctx.mod.queue_worker.name", payload);
+  });
+
+  // Durable child workflow: BLOCKS (suspends durably) and returns child Output.
+  // Must NOT be wrapped in ctx.run — the suspension machinery owns the replay.
+  const childOut = sdk.callWorkflowAndWaitForOutputSync<ChildInput, ChildOutput>(
+    "ctx.mod.workflow.child", childInput,
+  );
+
+`sdk.callActorAndWaitForResultSync` (non-durable) is not available inside a workflow
+`run` — use `sdk.callActorDurableAndWaitForResultSync` instead.
 "#;
 
 pub const METADATA: &str = r#"

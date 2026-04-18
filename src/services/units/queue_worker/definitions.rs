@@ -73,14 +73,14 @@ export default queueWorker<Input, Output>({
   },
 
   async process(ctx, data): Promise<Output> {
-    await sdk.callActor<MarkProcessedInput, MarkProcessedOutput>(
+    sdk.callActorAndWaitForResultSync<MarkProcessedInput, MarkProcessedOutput>(
       "my-ctx.my-module.actor.order-state",
       data.orderId,
       "markProcessed",
       { attempt: ctx.attempt },
     );
 
-    await sdk.enqueueWorker<NotificationInput>(
+    sdk.enqueueWorkerSync<NotificationInput>(
       "my-ctx.my-module.queue_worker.send-notification",
       { userId: data.userId, message: "Your order has been processed." },
     );
@@ -89,7 +89,7 @@ export default queueWorker<Input, Output>({
   },
 
   async onDeadLetter(ctx, data: Input, error: Error): Promise<void> {
-    await sdk.callActor<RecordInput, void>(
+    sdk.sendActorMessageSync<RecordInput>(
       "my-ctx.my-module.actor.dead-letter-log",
       "global",
       "record",
@@ -100,31 +100,58 @@ export default queueWorker<Input, Output>({
 "#;
 
 pub const COMMUNICATION: &str = r#"
-Any unit can enqueue a queue worker job using the SDK:
+All sdk.* calls are synchronous — do NOT write `await` in front of them.
+
+Inbound — any unit can enqueue a queue worker job using the SDK:
 
   import { sdk } from "@sdk";
-  // Import the target worker's payload type (compile-time only, stripped at runtime)
   import type { Input } from "@units/ctx.mod.queue_worker.name";
 
   // Basic enqueue — returns { runId: string }
-  const { runId } = await sdk.enqueueWorker<Input>("ctx.mod.queue_worker.name", { key: "value" });
+  const { runId } = sdk.enqueueWorkerSync<Input>(
+    "ctx.mod.queue_worker.name", { key: "value" },
+  );
 
   // Enqueue with a delay
-  const { runId } = await sdk.enqueueWorker<Input>(
+  const { runId } = sdk.enqueueWorkerSync<Input>(
     "ctx.mod.queue_worker.name",
     { key: "value" },
     { delay: { minutes: 5 } },
   );
 
   // Enqueue with deduplication — same key within dedup window enqueues only once
-  const { runId } = await sdk.enqueueWorker<Input>(
+  const { runId } = sdk.enqueueWorkerSync<Input>(
     "ctx.mod.queue_worker.name",
     { key: "value" },
     { deduplicationKey: "order-123-notification" },
   );
 
-Queue workers cannot be called synchronously — enqueueWorker is always fire-and-forget.
-The returned runId can be used to check status via the HTTP management API.
+Queue workers cannot be called synchronously — enqueueWorkerSync is always
+fire-and-forget. The returned runId can be used to check status via the HTTP
+management API.
+
+Outbound (what THIS worker can do):
+
+  // Blocking actor call
+  const out = sdk.callActorAndWaitForResultSync<In, Out>(
+    "ctx.mod.actor.name", id, "handler", payload,
+  );
+
+  // Fire-and-forget actor message
+  sdk.sendActorMessageSync<In>("ctx.mod.actor.name", id, "handler", payload);
+
+  // Fire-and-forget enqueue of another worker
+  const { runId } = sdk.enqueueWorkerSync<In>("ctx.mod.queue_worker.other", payload);
+
+  // Start a workflow (fire-and-forget)
+  const { instanceId } = sdk.startWorkflowSync<WfInput>(
+    "ctx.mod.workflow.name", input,
+  );
+
+  // Signal a running workflow
+  const r = sdk.callWorkflowHandlerAndWaitForResultSync<HIn, HOut>(
+    "ctx.mod.workflow.name", instanceId, "handlerName", input,
+  );
 "#;
 
 pub const METADATA: &str = r#"

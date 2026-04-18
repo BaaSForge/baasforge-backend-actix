@@ -110,8 +110,8 @@ export default actor<State>({
       return { ok: true };
     },
 
-    async notify(ctx, payload: NotifyInput): Promise<NotifyOutput> {
-      await sdk.enqueueWorker<NotificationInput>(
+    notify(ctx, payload: NotifyInput): NotifyOutput {
+      sdk.enqueueWorkerSync<NotificationInput>(
         "my-ctx.my-module.queue_worker.send-notification",
         { actorId: ctx.id, message: payload.message },
       );
@@ -132,37 +132,68 @@ export default actor<State>({
 "#;
 
 pub const COMMUNICATION: &str = r#"
-Actors are called via the SDK. The function to use depends on the caller's unit type.
+All sdk.* calls are synchronous — do NOT write `await` in front of them.
 
-From API, actor, or queue_worker units — sdk.callActor is available:
+Inbound — actors are called via the SDK. The function to use depends on the caller's
+unit type.
+
+From API, actor, or queue_worker units:
 
   import type { IncrementInput, IncrementOutput } from "@units/ctx.mod.actor.name";
 
-  // Wait for result (default)
-  const result = await sdk.callActor<IncrementInput, IncrementOutput>(
+  // Wait for result
+  const result = sdk.callActorAndWaitForResultSync<IncrementInput, IncrementOutput>(
     "ctx.mod.actor.name", "actor-instance-id", "increment", { by: 1 },
   );
 
-  // Fire-and-forget
-  await sdk.callActor<IncrementInput>(
-    "ctx.mod.actor.name", "actor-instance-id", "increment", { by: 1 }, { awaitResult: false },
+  // Fire-and-forget (no result)
+  sdk.sendActorMessageSync<IncrementInput>(
+    "ctx.mod.actor.name", "actor-instance-id", "increment", { by: 1 },
   );
 
   // With a custom timeout (ms)
-  const result = await sdk.callActor<IncrementInput, IncrementOutput>(
+  const result = sdk.callActorAndWaitForResultSync<IncrementInput, IncrementOutput>(
     "ctx.mod.actor.name", "actor-instance-id", "increment", { by: 1 }, { timeoutMs: 5000 },
   );
 
-From workflow units — only sdk.callActorDurable is available (sdk.callActor does not exist
-in workflow units). It suspends the workflow durably until the handler completes, and returns
-the cached result on replay:
+From workflow `run` — use sdk.callActorDurableAndWaitForResultSync (the non-durable
+forms are unavailable inside a workflow). It suspends the workflow durably until the
+handler completes, and returns the cached result on replay. MUST be wrapped in
+ctx.run for determinism:
 
-  const result = await sdk.callActorDurable<IncrementInput, IncrementOutput>(
-    "ctx.mod.actor.name", "actor-instance-id", "increment", { by: 1 },
+  await ctx.run("step", (): IncrementOutput =>
+    sdk.callActorDurableAndWaitForResultSync<IncrementInput, IncrementOutput>(
+      "ctx.mod.actor.name", "actor-instance-id", "increment", { by: 1 },
+    ),
   );
 
 The actorId is any string chosen by the caller. Same unit path + actorId always reaches the
 same state. Different actorIds are fully isolated instances.
+
+Outbound (what THIS actor can do) — every sync-wait call blocks the handler until it
+returns; handler execution is sequential per actor instance so long blocking calls
+stall the mailbox.
+
+  // Blocking actor call
+  const out = sdk.callActorAndWaitForResultSync<In, Out>(
+    "ctx.mod.actor.other", id, "handler", payload,
+  );
+
+  // Fire-and-forget actor message
+  sdk.sendActorMessageSync<In>("ctx.mod.actor.other", id, "handler", payload);
+
+  // Fire-and-forget background job
+  const { runId } = sdk.enqueueWorkerSync<In>("ctx.mod.queue_worker.name", payload);
+
+  // Start a workflow (fire-and-forget; preferred)
+  const { instanceId } = sdk.startWorkflowSync<WfInput>(
+    "ctx.mod.workflow.name", input,
+  );
+
+  // Signal a running workflow
+  const r = sdk.callWorkflowHandlerAndWaitForResultSync<HIn, HOut>(
+    "ctx.mod.workflow.name", instanceId, "handlerName", input,
+  );
 "#;
 
 pub const METADATA: &str = r#"
