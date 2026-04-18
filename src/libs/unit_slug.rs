@@ -152,8 +152,7 @@ pub fn parse_unit_path(s: &str) -> Result<UnitPath, String> {
             ));
         }
     };
-    let segment_names = ["context_slug", "module_slug", "unit_type", "unit_name_slug"];
-    for (name, val) in segment_names.iter().zip([a, b, c, d]) {
+    for (name, val) in [("context_slug", a), ("module_slug", b), ("unit_name_slug", d)] {
         if !is_valid_slug(val) {
             return Err(format!(
                 "invalid unit path: `{}` segment `{}` is not a valid slug (must match `{}`)",
