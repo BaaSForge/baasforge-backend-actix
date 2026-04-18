@@ -63,12 +63,23 @@ receive WorkflowSharedContext:
 - ctx.get(key) — synchronous; read workflow state
 
 CRITICAL rules:
-- ALL side effects must be inside ctx.run() — anything outside re-runs on every replay
-- Step names (run, sleep, promise) must be unique within the workflow instance
+- Two categories of calls inside `run` — never mix them:
+  SUSPENSION PRIMITIVES — call bare in the run body, never inside ctx.run():
+    ctx.sleep(...)
+    ctx.promise(...).get()
+    sdk.callActorDurableAndWaitForResultSync(...)
+    sdk.callWorkflowAndWaitForOutputSync(...)
+  They throw an internal sentinel that must propagate freely. Wrapping in ctx.run()
+  swallows the sentinel and breaks the suspension mechanism.
+  SIDE EFFECTS — wrap every one inside `await ctx.run("step", () => ...)`:
+    sdk.callActorAndWaitForResultSync(...)
+    sdk.enqueueWorkerSync(...)
+    sdk.startWorkflowSync(...)
+    sdk.sendActorMessageSync(...)
+  Anything outside ctx.run() re-executes on every replay.
+- Step names (ctx.run, ctx.sleep, ctx.promise) must be unique within the workflow instance
 - Never use Date.now() or Math.random() directly — use ctx.date.now() and ctx.rand.*
-- Do not catch or swallow exceptions thrown by ctx.sleep(), ctx.promise().get(), or
-  sdk.callActorDurableAndWaitForResultSync — they use a suspension mechanism that must
-  propagate normally
+- Do not catch or swallow exceptions from suspension primitives — let them propagate
 - TerminalError thrown inside ctx.run() permanently fails that step (and the workflow)
 
 RetryPolicy: { maxAttempts?, initialInterval?: Duration, backoffFactor?, maxInterval?: Duration }
@@ -100,7 +111,7 @@ export type RejectOutput = { ok: boolean };
 export default workflow<Input, Output>({
   run: async (ctx, input): Promise<Output> => {
     await ctx.run("charge-payment", (): ChargeOutput =>
-      sdk.callActorDurableAndWaitForResultSync<ChargeInput, ChargeOutput>(
+      sdk.callActorAndWaitForResultSync<ChargeInput, ChargeOutput>(
         "my-ctx.my-module.actor.billing",
         input.userId,
         "charge",
@@ -116,7 +127,7 @@ export default workflow<Input, Output>({
 
     if (!approval?.approved) {
       await ctx.run("refund", (): RefundOutput =>
-        sdk.callActorDurableAndWaitForResultSync<RefundInput, RefundOutput>(
+        sdk.callActorAndWaitForResultSync<RefundInput, RefundOutput>(
           "my-ctx.my-module.actor.billing",
           input.userId,
           "refund",
@@ -189,29 +200,42 @@ synchronous; do NOT write `await` in front of them.
      It blocks until the handler returns. The handler typically resolves a
      durable promise that the `run` function is waiting on.
 
-Outbound (what THIS workflow can do) — inside `run`, ALL sdk.* calls are synchronous.
-The only `await` should be in front of `ctx.run(...)`.
+Outbound (what THIS workflow can do) — two patterns, never mix them:
 
-  // Durable actor call (preferred for all actor calls from a workflow)
-  await ctx.run("step-name", (): Out =>
-    sdk.callActorDurableAndWaitForResultSync<In, Out>(
-      "ctx.mod.actor.name", id, "handler", payload,
-    ),
+SUSPENSION PRIMITIVES — call bare in the run body, never inside ctx.run():
+
+  // Actor call via durable suspension — bare, no ctx.run wrapper
+  const result = sdk.callActorDurableAndWaitForResultSync<In, Out>(
+    "ctx.mod.actor.name", id, "handler", payload,
   );
 
-  // Fire-and-forget enqueue — wrap in ctx.run for determinism on replay
-  await ctx.run("enqueue-step", (): void => {
-    sdk.enqueueWorkerSync<In>("ctx.mod.queue_worker.name", payload);
-  });
-
-  // Durable child workflow: BLOCKS (suspends durably) and returns child Output.
-  // Must NOT be wrapped in ctx.run — the suspension machinery owns the replay.
+  // Child workflow — suspends durably until child completes
   const childOut = sdk.callWorkflowAndWaitForOutputSync<ChildInput, ChildOutput>(
     "ctx.mod.workflow.child", childInput,
   );
 
-`sdk.callActorAndWaitForResultSync` (non-durable) is not available inside a workflow
-`run` — use `sdk.callActorDurableAndWaitForResultSync` instead.
+  // Timer and external signal — also bare suspension primitives
+  ctx.sleep("wait", { seconds: 30 });
+  ctx.promise<T>("signal-name").get();
+
+SIDE EFFECTS — every one wrapped in `await ctx.run("name", () => ...)`:
+
+  // Actor call as a named, journaled step
+  const result = await ctx.run("step-name", (): Out =>
+    sdk.callActorAndWaitForResultSync<In, Out>(
+      "ctx.mod.actor.name", id, "handler", payload,
+    ),
+  );
+
+  // Fire-and-forget enqueue
+  await ctx.run("enqueue-step", (): void => {
+    sdk.enqueueWorkerSync<In>("ctx.mod.queue_worker.name", payload);
+  });
+
+  // Fire-and-forget workflow start
+  await ctx.run("start-child", (): { instanceId: string } =>
+    sdk.startWorkflowSync<ChildInput>("ctx.mod.workflow.child", childInput),
+  );
 "#;
 
 pub const METADATA: &str = r#"

@@ -39,19 +39,25 @@
 //
 //   target \ source             │ API │ Actor │ Workflow │ QueueWorker │
 //   ────────────────────────────┼─────┼───────┼──────────┼─────────────┤
-//   Actor handler (wait result) │  ✓  │   ✓   │    ✓*    │      ✓      │
+//   Actor handler (wait result) │  ✓  │   ✓   │   †/wrap │      ✓      │
 //   Actor handler (fire&forget) │  ✓  │   ✓   │   wrap** │      ✓      │
 //   Queue Worker (enqueue)      │  ✓  │   ✓   │   wrap** │      ✓      │
 //   Start new Workflow (f&f)    │  ✓  │   ✓   │   wrap** │      ✓      │
-//   Run Workflow (wait output)  │  ✓  │   ✓   │   wrap** │      ✓      │
+//   Run Workflow (wait output)  │  ✓  │   ✓   │    ✓†    │      ✓      │
 //   Workflow shared handler     │  ✓  │   ✓   │   wrap** │      ✓      │
 //   API unit                    │  —  │   —   │    —     │      —      │  (use fetch)
 //
-//   *   from inside a workflow `run`, use callActorDurableAndWaitForResultSync
-//       (NOT callActorAndWaitForResultSync) so the call is durable on replay
-//   **  any side-effect from inside a workflow `run` should be wrapped in
-//       `await ctx.run("step-name", () => sdk.xxxSync(...))` so it replays
-//       deterministically
+//   †   suspension primitive — call BARE in the `run` body (no ctx.run wrapper).
+//       These throw an internal sentinel that must propagate freely:
+//         ctx.sleep(...)
+//         ctx.promise(...).get()
+//         sdk.callActorDurableAndWaitForResultSync(...)   ← actor variant
+//         sdk.callWorkflowAndWaitForOutputSync(...)       ← child workflow variant
+//       NEVER place them inside ctx.run() — the sentinel would be swallowed.
+//   **  side-effecting sdk.* calls that are NOT suspension primitives MUST be
+//       wrapped: `await ctx.run("step", () => sdk.xxxSync(...))` so they execute
+//       exactly once and replay deterministically from the journal.
+//       Use sdk.callActorAndWaitForResultSync (not the Durable variant) here.
 //
 // =============================================================================
 // Naming conventions for `sdk.*`
@@ -117,8 +123,9 @@ declare module "@sdk" {
     /**
      * Invoke an actor handler and BLOCK until it returns its result.
      *
-     * Not callable from inside a workflow `run` — workflows must use
-     * `callActorDurableAndWaitForResultSync` instead.
+     * Callable from inside a workflow `run` only when wrapped in
+     * `await ctx.run("step-name", () => sdk.callActorAndWaitForResultSync(...))`.
+     * Outside a workflow (API, Actor, QueueWorker) call it directly.
      *
      * Synchronous — returns the handler's result directly; do NOT `await`.
      *
@@ -165,23 +172,22 @@ declare module "@sdk" {
     ): { delivered: true };
 
     /**
-     * Workflow-only: durably call an actor handler from inside a workflow
-     * `run`. Suspends the workflow on a durable promise until the handler
+     * Workflow-only suspension primitive: durably call an actor handler from
+     * inside a workflow `run`. Suspends the workflow until the handler
      * completes, then resumes with the result. On replay the result is
      * returned from the durable cache without re-invoking the actor.
      *
-     * MUST be wrapped in `ctx.run(name, () => ...)` so the overall step is
-     * also deterministic under replay.
+     * Call BARE in the `run` body — like `ctx.sleep` / `ctx.promise().get()`.
+     * NEVER place inside `ctx.run()`: the internal suspension sentinel would
+     * be swallowed by ctx.run's error boundary and the call would break.
      *
-     * Synchronous — returns the handler result directly (it throws a
-     * suspension sentinel internally when the result is not yet known;
-     * never `await` this call and never catch its error).
+     * Synchronous — returns the handler result directly (throws a suspension
+     * sentinel when the result is not yet known; never `await` and never
+     * catch its error — let the sentinel propagate).
      *
      * @example
-     *   const charge = await ctx.run("charge", () =>
-     *     sdk.callActorDurableAndWaitForResultSync<ChargeInput, ChargeOutput>(
-     *       "billing.core.actor.wallet", input.userId, "charge", { amount: 100 },
-     *     ),
+     *   const charge = sdk.callActorDurableAndWaitForResultSync<ChargeInput, ChargeOutput>(
+     *     "billing.core.actor.wallet", input.userId, "charge", { amount: 100 },
      *   );
      */
     callActorDurableAndWaitForResultSync<TInput, TResult = _Internal_RequireExplicit>(
