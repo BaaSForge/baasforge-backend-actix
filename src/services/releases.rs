@@ -628,30 +628,6 @@ pub fn attach_is_draft_flags_from_latest_production(
     Ok(units)
 }
 
-/// Chat “current units” list: session baseline production snapshot merged with this session’s unit tips.
-/// Uses the release that was live when the session was created so the result reflects only what
-/// was deployed at session-open time plus the session’s own drafts.
-pub fn load_chat_session_units_merged_with_latest_production(
-    conn: &mut PooledConn,
-    project_id: Uuid,
-    session_id: Uuid,
-) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
-    let previous_combined = {
-        let (_baseline_id, baseline_release) =
-            load_baseline_production_release_for_chat_session(conn, project_id, session_id)?;
-        match baseline_release.as_ref().and_then(|r| r.units_metadata.as_ref()) {
-            Some(m) => combined_units_from_release_metadata(conn, project_id, Some(m))?,
-            None => Vec::new(),
-        }
-    };
-    let session_tips = crate::services::chat_worker::db::load_chat_session_unit_tips_for_merge(
-        conn,
-        project_id,
-        session_id,
-    )?;
-    Ok(merge_combined_units(&previous_combined, &session_tips))
-}
-
 /// 1-based index of this message among `ReleaseControllerBox` rows in the session (order: `created_at`, `id`).
 pub fn release_controller_ordinal_in_session(
     conn: &mut PooledConn,
