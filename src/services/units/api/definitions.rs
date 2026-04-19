@@ -8,8 +8,13 @@ interaction. Each unit serves one purpose and one HTTP method.
 
 pub const DETAIL: &str = r#"
 URL: The trigger URL of an API unit is fixed by the platform and derived entirely from the
-unit's path — users cannot define or customize it. Do not write code that depends on a
-specific URL shape; use req.url only to read query parameters.
+unit's path — users cannot define, customize, or add path segments to it.
+
+CRITICAL: Path parameters are forbidden. Never design or generate a URL with dynamic
+segments such as `/{id}`, `/:userId`, or any variable path component. The URL is static
+and immutable; the platform owns it entirely. All variable input MUST come through query
+parameters (req.url searchParams) or the request body. There is no mechanism to read
+path parameters because path parameters cannot exist.
 
 IMPORTANT: One API unit = one endpoint = one HTTP method. Do NOT switch on req.method or
 handle multiple methods in a single unit. Each HTTP method (GET, POST, PUT, DELETE, etc.)
