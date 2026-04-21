@@ -7,6 +7,7 @@
 //! Types listed in [`UPSTREAM_EXCLUDED_MESSAGE_TYPES`] are stripped in
 //! [`filter_session_messages_for_upstream_llm`] (called from [`crate::services::chat_worker::agent::load_history_for_agent`])
 //! and skipped again in [`session_messages_to_upstream_entries`] as a safeguard.
+//! [`ChatMessageType::RejectControllerBox`] is included upstream as [`UpstreamHistoryEntry::System`] when `is_rejected` is true.
 
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload, ThinkingBlock,
@@ -59,6 +60,8 @@ pub enum UpstreamHistoryEntry {
         tool_name: String,
         content: String,
     },
+    /// Instructional notice (e.g. reject-controller); mapped to provider-specific roles (`system` or `user`).
+    System { text: String },
 }
 
 /// Tool message types that represent tool execution results (to be sent as tool/tool_result).
@@ -447,6 +450,32 @@ pub fn trim_assistant_requested_tool_calls_to_match_following_tool_results(
     }
 }
 
+fn reject_controller_box_upstream_notice(payload: &Option<Value>) -> Option<String> {
+    let p = ChatMessagePayload::from_value(
+        &ChatMessageType::RejectControllerBox,
+        payload.clone(),
+    )
+    .ok()
+    .flatten()?;
+    let ChatMessagePayload::RejectControllerBox(box_payload) = p else {
+        return None;
+    };
+    if !box_payload.is_rejected {
+        return None;
+    }
+    let ids: Vec<String> = box_payload.unit_changes.iter().map(|u| u.id.clone()).collect();
+    if ids.is_empty() {
+        return Some(
+            "The user rejected the changes from your last assistant turn. No affected unit ids were recorded."
+                .to_string(),
+        );
+    }
+    Some(format!(
+        "The user rejected the changes from your last assistant turn. Reverted or removed units: {}.",
+        ids.join(", ")
+    ))
+}
+
 fn payload_to_string(payload: &Option<Value>) -> String {
     match payload {
         None => String::new(),
@@ -531,6 +560,13 @@ pub fn session_messages_to_upstream_entries(
                             tool_calls,
                             thinking_blocks,
                         });
+                    }
+                }
+            }
+            (ChatSessionRoleType::System, ChatMessageType::RejectControllerBox) => {
+                if let Some(text) = reject_controller_box_upstream_notice(payload) {
+                    if !text.is_empty() {
+                        out.push(UpstreamHistoryEntry::System { text });
                     }
                 }
             }

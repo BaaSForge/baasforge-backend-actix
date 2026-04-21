@@ -30,6 +30,7 @@ use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
 use crate::schema::project_releases;
 use crate::schema::project_runtimes;
+use crate::schema::project_units;
 use crate::schema::projects;
 use crate::services::chat_worker::db::{
     load_chat_session_draft_units_as_of_release_controller_message,
@@ -46,6 +47,8 @@ use crate::services::releases::{
     prod_live_release_source_chat_session, production_release_id_for_live_runtimes,
     stale_base_release_from_baseline,
 };
+use crate::services::chat_worker::release_controller_box::apply_is_disabled_due_to_reject_on_matching_release_box;
+use crate::services::chat_worker::reject_controller_box::apply_disabled_due_to_production_release_on_matching_reject_box;
 use crate::services::stage_release_from_controller::{
     transaction_create_stage_release_from_controller, StageReleaseFromControllerError,
 };
@@ -460,6 +463,7 @@ pub async fn handle_create_chat_session_message(
         invoking_message_id: None,
         agent: ChatAgentType::Planner,
         sub_agent_stuck_continuation_count: 0,
+        assistant_turn_id: None,
     };
     let publish_result = if let Some(ref publisher) = context.rabbit_publisher {
         chat_message_queue::publish_with_publisher(
@@ -1167,7 +1171,12 @@ pub struct CreateProductionReleaseBody {
 }
 
 enum ProdReleaseOutcome {
-    Success(ProjectReleaseResponse, ChatMessageRow, Option<Uuid>),
+    Success(
+        ProjectReleaseResponse,
+        ChatMessageRow,
+        Option<Uuid>,
+        Option<ChatMessageRow>,
+    ),
     SessionNotFound,
     MessageNotFound,
     NotReleaseController,
@@ -1524,10 +1533,18 @@ pub async fn handle_create_production_release(
             .returning(ChatMessageRow::as_returning())
             .get_result(conn)?;
 
+            let reject_updated_row = match box_payload.assistant_turn_id {
+                Some(tid) => apply_disabled_due_to_production_release_on_matching_reject_box(
+                    conn, session_id, tid,
+                )?,
+                None => None,
+            };
+
             Ok(ProdReleaseOutcome::Success(
                 inserted,
                 updated_row,
                 previous_prod_release_id,
+                reject_updated_row,
             ))
         })
     })
@@ -1542,7 +1559,7 @@ pub async fn handle_create_production_release(
     };
 
     match outcome {
-        ProdReleaseOutcome::Success(release, row, previous_prod_release_id) => {
+        ProdReleaseOutcome::Success(release, row, previous_prod_release_id, reject_row_opt) => {
             let release_for_attach = release.clone();
             let release_for_response = match database::block_on_db(&context.pool, move |conn| {
                 attach_base_production_releases(conn, project_id, vec![release_for_attach])
@@ -1569,6 +1586,24 @@ pub async fn handle_create_production_release(
                 if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
                 {
                     tracing::warn!("[handle_create_production_release] WS publish failed: {}", e);
+                }
+                if let Some(reject_row) = reject_row_opt {
+                    let message_reject: ChatMessageResponse = reject_row.into();
+                    let event_reject =
+                        WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                            project_id,
+                            session_id,
+                            message: message_reject,
+                        });
+                    if let Err(e) =
+                        publish_event_to_channel(&mut *guard, &user_channel(user_id), &event_reject)
+                            .await
+                    {
+                        tracing::warn!(
+                            "[handle_create_production_release] WS publish (reject box) failed: {}",
+                            e
+                        );
+                    }
                 }
             }
             broadcast_production_live_release_changed(&context, project_id).await;
@@ -1638,5 +1673,314 @@ pub async fn handle_create_production_release(
         )),
         ProdReleaseOutcome::Metadata(msg) => HttpResponse::InternalServerError()
             .json(api_error(&format!("Failed to serialize message payload: {}", msg), json!({}))),
+    }
+}
+
+#[derive(Debug)]
+enum ConfirmRejectOutcome {
+    Success(
+        ChatMessageRow,
+        Option<ChatMessageRow>,
+        Option<Uuid>,
+        Vec<Uuid>,
+    ),
+    SessionNotFound,
+    MessageNotFound,
+    NotRejectController,
+    PayloadInvalid,
+    AlreadyRejected,
+    DisabledByProductionRelease,
+    NotLastMessage,
+}
+
+/// POST — set `is_rejected` on a `reject_controller_box` row when it is still actionable (last session
+/// message, not disabled by production release) and disable the paired release controller.
+pub async fn handle_confirm_reject_controller(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid, Uuid)>,
+) -> HttpResponse {
+    let extensions = req.extensions();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist");
+
+    let (project_id, session_id, message_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        conn.transaction(|conn| -> Result<ConfirmRejectOutcome, diesel::result::Error> {
+            let session_ok = chat_sessions::table
+                .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+                .filter(projects::owner_user_id.eq(user_id))
+                .filter(chat_sessions::id.eq(session_id))
+                .filter(chat_sessions::project_id.eq(project_id))
+                .select(chat_sessions::id)
+                .first::<Uuid>(conn)
+                .optional()?;
+            if session_ok.is_none() {
+                return Ok(ConfirmRejectOutcome::SessionNotFound);
+            }
+
+            let msg_row: Option<ChatMessageRow> = chat_messages::table
+                .filter(chat_messages::id.eq(message_id))
+                .filter(chat_messages::chat_session_id.eq(session_id))
+                .select(ChatMessageRow::as_select())
+                .first(conn)
+                .optional()?;
+            let Some(msg_row) = msg_row else {
+                return Ok(ConfirmRejectOutcome::MessageNotFound);
+            };
+            if msg_row.type_ != ChatMessageType::RejectControllerBox {
+                return Ok(ConfirmRejectOutcome::NotRejectController);
+            }
+
+            let mut box_payload = match ChatMessagePayload::from_value(
+                &msg_row.type_,
+                msg_row.payload.clone(),
+            ) {
+                Ok(Some(ChatMessagePayload::RejectControllerBox(p))) => p,
+                Ok(None) => return Ok(ConfirmRejectOutcome::PayloadInvalid),
+                Ok(Some(other)) => {
+                    tracing::warn!(
+                        message_id = %message_id,
+                        variant = other.variant_label(),
+                        "reject_controller_box row has unexpected payload variant"
+                    );
+                    return Ok(ConfirmRejectOutcome::PayloadInvalid);
+                }
+                Err(e) => {
+                    tracing::warn!(message_id = %message_id, error = %e, "reject_controller_box payload deserialize failed");
+                    return Ok(ConfirmRejectOutcome::PayloadInvalid);
+                }
+            };
+
+            if box_payload.is_rejected {
+                return Ok(ConfirmRejectOutcome::AlreadyRejected);
+            }
+            if box_payload.is_disabled_due_to_production_release {
+                return Ok(ConfirmRejectOutcome::DisabledByProductionRelease);
+            }
+
+            let tip: Option<ChatMessageRow> = chat_messages::table
+                .filter(chat_messages::chat_session_id.eq(session_id))
+                .order((
+                    chat_messages::created_at.desc(),
+                    chat_messages::id.desc(),
+                ))
+                .select(ChatMessageRow::as_select())
+                .first(conn)
+                .optional()?;
+            let Some(tip) = tip else {
+                return Ok(ConfirmRejectOutcome::NotLastMessage);
+            };
+            if tip.id != message_id {
+                return Ok(ConfirmRejectOutcome::NotLastMessage);
+            }
+
+            let unit_ids: Vec<String> = box_payload
+                .unit_changes
+                .iter()
+                .map(|u| u.id.clone())
+                .collect();
+
+            let turn_id = box_payload.assistant_turn_id;
+            let mut stage_release_id_to_delete: Option<Uuid> = None;
+            let mut stage_runtime_ids_cleared: Vec<Uuid> = Vec::new();
+            for u in &mut box_payload.unit_changes {
+                u.is_rejected = true;
+            }
+            box_payload.is_rejected = true;
+            let payload_json = match serde_json::to_value(&box_payload) {
+                Ok(v) => v,
+                Err(_) => return Ok(ConfirmRejectOutcome::PayloadInvalid),
+            };
+
+            if !unit_ids.is_empty() {
+                diesel::delete(
+                    project_units::table
+                        .filter(project_units::project_id.eq(project_id))
+                        .filter(project_units::chat_session_id.eq(session_id))
+                        .filter(project_units::id.eq_any(&unit_ids)),
+                )
+                .execute(conn)?;
+            }
+
+            let reject_row = diesel::update(
+                chat_messages::table.filter(chat_messages::id.eq(message_id)),
+            )
+            .set(chat_messages::payload.eq(Some(payload_json)))
+            .returning(ChatMessageRow::as_returning())
+            .get_result(conn)?;
+
+            let release_row = match turn_id {
+                Some(tid) => {
+                    let rows: Vec<ChatMessageRow> = chat_messages::table
+                        .filter(chat_messages::chat_session_id.eq(session_id))
+                        .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
+                        .select(ChatMessageRow::as_select())
+                        .load(conn)?;
+                    let mut updated: Option<ChatMessageRow> = None;
+                    for row in rows {
+                        let Ok(Some(ChatMessagePayload::ReleaseControllerBox(mut p))) =
+                            ChatMessagePayload::from_value(&row.type_, row.payload.clone())
+                        else {
+                            continue;
+                        };
+                        if p.assistant_turn_id != Some(tid) {
+                            continue;
+                        }
+                        stage_release_id_to_delete = p.stage_release.as_ref().map(|s| s.release.id);
+                        p.stage_release = None;
+                        p.is_disabled_due_to_reject = true;
+                        let payload_json = match serde_json::to_value(&p) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        let updated_row = diesel::update(
+                            chat_messages::table.filter(chat_messages::id.eq(row.id)),
+                        )
+                        .set(chat_messages::payload.eq(Some(payload_json)))
+                        .returning(ChatMessageRow::as_returning())
+                        .get_result(conn)?;
+                        updated = Some(updated_row);
+                        break;
+                    }
+                    updated
+                }
+                None => None,
+            };
+
+            if let Some(stage_release_id) = stage_release_id_to_delete {
+                stage_runtime_ids_cleared = project_runtimes::table
+                    .filter(project_runtimes::project_id.eq(project_id))
+                    .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Stage))
+                    .filter(project_runtimes::live_release_id.eq(Some(stage_release_id)))
+                    .select(project_runtimes::id)
+                    .load::<Uuid>(conn)?;
+
+                if !stage_runtime_ids_cleared.is_empty() {
+                    diesel::update(
+                        project_runtimes::table
+                            .filter(project_runtimes::project_id.eq(project_id))
+                            .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Stage))
+                            .filter(project_runtimes::live_release_id.eq(Some(stage_release_id))),
+                    )
+                    .set(project_runtimes::live_release_id.eq(None::<Uuid>))
+                    .execute(conn)?;
+                }
+
+                diesel::delete(
+                    project_releases::table
+                        .filter(project_releases::project_id.eq(project_id))
+                        .filter(project_releases::id.eq(stage_release_id))
+                        .filter(project_releases::is_stage.eq(true)),
+                )
+                .execute(conn)?;
+            }
+
+            Ok(ConfirmRejectOutcome::Success(
+                reject_row,
+                release_row,
+                stage_release_id_to_delete,
+                stage_runtime_ids_cleared,
+            ))
+        })
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::error!("[handle_confirm_reject_controller] DB error: {}", e);
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    match outcome {
+        ConfirmRejectOutcome::Success(
+            reject_row,
+            release_row_opt,
+            stage_release_id_opt,
+            stage_runtime_ids_cleared,
+        ) => {
+            if let Some(ref redis_conn) = context.redis_conn {
+                let message: ChatMessageResponse = reject_row.into();
+                let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                    project_id,
+                    session_id,
+                    message,
+                });
+                let mut guard = redis_conn.lock().await;
+                if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
+                {
+                    tracing::warn!("[handle_confirm_reject_controller] WS publish (reject) failed: {}", e);
+                }
+                if let Some(release_row) = release_row_opt {
+                    let message_r: ChatMessageResponse = release_row.into();
+                    let event_r =
+                        WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                            project_id,
+                            session_id,
+                            message: message_r,
+                        });
+                    if let Err(e) =
+                        publish_event_to_channel(&mut *guard, &user_channel(user_id), &event_r).await
+                    {
+                        tracing::warn!(
+                            "[handle_confirm_reject_controller] WS publish (release) failed: {}",
+                            e
+                        );
+                    }
+                }
+            }
+
+            if let (Some(stage_release_id), true) = (stage_release_id_opt, !stage_runtime_ids_cleared.is_empty()) {
+                if let Some(ref nats) = context.runtime_nats_publisher {
+                    let subject = context.settings.runtime_nats_subject_release.as_str();
+                    for runtime_id in stage_runtime_ids_cleared {
+                        if let Err(e) = nats
+                            .publish_stage_release_cleared(
+                                subject,
+                                project_id,
+                                runtime_id,
+                                Some(stage_release_id),
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                "[handle_confirm_reject_controller] NATS publish stage cleared failed: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+            HttpResponse::Ok().json(api_success("Reject confirmed", json!({})))
+        }
+        ConfirmRejectOutcome::SessionNotFound => HttpResponse::NotFound()
+            .json(api_error("Chat session not found", json!({}))),
+        ConfirmRejectOutcome::MessageNotFound => HttpResponse::NotFound()
+            .json(api_error("Message not found", json!({}))),
+        ConfirmRejectOutcome::NotRejectController => HttpResponse::BadRequest().json(api_error(
+            "Message is not a reject_controller_box row",
+            json!({}),
+        )),
+        ConfirmRejectOutcome::PayloadInvalid => HttpResponse::BadRequest().json(api_error(
+            "Reject controller payload is missing or invalid",
+            json!({}),
+        )),
+        ConfirmRejectOutcome::AlreadyRejected => HttpResponse::BadRequest()
+            .json(api_error("Reject controller already confirmed", json!({}))),
+        ConfirmRejectOutcome::DisabledByProductionRelease => HttpResponse::BadRequest().json(
+            api_error(
+                "Reject controller is disabled because a production release was created",
+                json!({}),
+            ),
+        ),
+        ConfirmRejectOutcome::NotLastMessage => HttpResponse::BadRequest().json(api_error(
+            "Reject controller must be the latest message in the chat session",
+            json!({}),
+        )),
     }
 }

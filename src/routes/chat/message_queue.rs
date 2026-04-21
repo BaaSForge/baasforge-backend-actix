@@ -87,6 +87,9 @@ pub struct ChatSessionQueueMessage {
     /// Incremented when the worker re-queues a nested sub-agent that completed with no tool calls.
     #[serde(default)]
     pub sub_agent_stuck_continuation_count: u8,
+    /// Shared id for paired release/reject controller rows from the same planner completion.
+    #[serde(default)]
+    pub assistant_turn_id: Option<Uuid>,
 }
 
 impl ChatSessionQueueMessage {

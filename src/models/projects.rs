@@ -150,6 +150,8 @@ struct ProjectUnitResponseDe {
     latest_revision: Option<i32>,
     #[serde(default)]
     is_draft: Option<bool>,
+    #[serde(default)]
+    is_rejected: bool,
 }
 
 impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
@@ -159,6 +161,7 @@ impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
             row: d.row,
             latest_revision,
             is_draft: d.is_draft,
+            is_rejected: d.is_rejected,
         }
     }
 }
@@ -172,8 +175,8 @@ impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
 /// `POST .../unit-latest-revisions-by-ids` returns only the max `revision` per unit path without loading full rows.
 /// `POST .../unit-pre-chat-base-by-paths` returns the row at `MIN(revision) - 1` per path (state before the first in-session revision).
 ///
-/// JSON is a single flat object (`row` fields + `latest_revision`, optional `is_draft`). Use [`Deref`] to access row
-/// fields as `unit.revision`, `unit.context_slug`, etc.
+/// JSON is a single flat object (`row` fields + `latest_revision`, optional `is_draft`, optional `is_rejected` on
+/// reject-controller `unit_changes`). Use [`Deref`] to access row fields as `unit.revision`, `unit.context_slug`, etc.
 ///
 /// `is_draft` is set on project **units** HTTP responses: `false` when this row’s `revision` matches
 /// the latest production combined snapshot for the same logical unit (`context_slug`, `module_slug`,
@@ -186,6 +189,8 @@ pub struct ProjectUnitResponse {
     pub latest_revision: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_draft: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_rejected: bool,
 }
 
 impl ProjectUnitResponse {
@@ -194,6 +199,7 @@ impl ProjectUnitResponse {
             row,
             latest_revision,
             is_draft: None,
+            is_rejected: false,
         }
     }
 }

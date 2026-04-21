@@ -155,6 +155,16 @@ fn entries_to_claude_messages(entries: &[UpstreamHistoryEntry]) -> Vec<ClaudeMes
                     }],
                 });
             }
+            // Anthropic: `system` is a single top-level field on the request, not a row in
+            // `messages` (only user/assistant there). Interleaved notices use a user message.
+            UpstreamHistoryEntry::System { text } => {
+                if !text.is_empty() {
+                    out.push(ClaudeMessage {
+                        role: "user".into(),
+                        content: vec![ClaudeContentBlock::Text { text: text.clone() }],
+                    });
+                }
+            }
         }
     }
     out

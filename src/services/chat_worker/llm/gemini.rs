@@ -302,6 +302,14 @@ pub async fn call_gemini_stream(
                     .with_function_response(tool_name.clone(), response_value)
                     .map_err(|e| format!("Gemini history function response: {}", e))?;
             }
+            // Gemini has no `system` role on history turns: `Role` is only User/Model, and
+            // `with_system_instruction` applies once per request (not in chronological order).
+            // Ordered notices are sent as user text, same pattern as function responses.
+            UpstreamHistoryEntry::System { text } => {
+                if !text.is_empty() {
+                    request = request.with_user_message(text.clone());
+                }
+            }
         }
     }
 

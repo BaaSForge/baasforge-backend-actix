@@ -116,6 +116,7 @@ pub async fn handler(
         invoking_message_id: Some(message_id),
         agent: ChatAgentType::ArchitectureAnalyzer,
         sub_agent_stuck_continuation_count: 0,
+        assistant_turn_id: None,
     };
 
     chat_message_queue::publish_with_publisher(

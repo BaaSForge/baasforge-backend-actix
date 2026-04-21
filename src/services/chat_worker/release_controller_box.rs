@@ -1,17 +1,20 @@
 //! After the planner finishes a turn (no further LLM continuation), a queue probe runs so we can
 //! append a `release_controller_box` message when the turn included unit create/modify/delete tools.
+//! When that probe is consumed and the release row is inserted, we enqueue the paired
+//! `reject_controller_box` probe so it always follows the release step in the queue.
 
-use crate::database::{block_on_db_tokio, DbPool};
+use crate::database::{block_on_db_tokio, DbPool, PooledConn};
 use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
-    ChatSessionRoleType, ReleaseControllerBoxPayload,
+    ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus,
+    ChatMessageType, ChatSessionRoleType, ReleaseControllerBoxPayload,
 };
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{ChatSessionMessageCreatedPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
+use crate::services::chat_worker::reject_controller_box;
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
 use redis::aio::MultiplexedConnection;
@@ -25,6 +28,7 @@ pub async fn publish_release_controller_probe(
     user_id: Uuid,
     project_id: Uuid,
     session_id: Uuid,
+    assistant_turn_id: Uuid,
 ) {
     let response_message_id = new_uuid();
     let queue_message = ChatSessionQueueMessage {
@@ -37,6 +41,7 @@ pub async fn publish_release_controller_probe(
         invoking_message_id: None,
         agent: ChatAgentType::default(),
         sub_agent_stuck_continuation_count: 0,
+        assistant_turn_id: Some(assistant_turn_id),
     };
     if let Err(e) = chat_message_queue::publish_with_publisher(
         rabbit_publisher,
@@ -63,14 +68,17 @@ pub async fn publish_release_controller_probe(
     }
 }
 
-/// Inserts the UI message when the last user → pending tail includes unit CRUD tool rows.
+/// Inserts the UI message when the last user → pending tail includes unit CRUD tool rows, then
+/// publishes the `reject_controller_box` queue message for the same `assistant_turn_id`.
 pub async fn consume_release_controller_queue_message(
     pool: &DbPool,
     redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    rabbit_publisher: &Arc<SharedRabbitPublisher>,
     user_id: Uuid,
     project_id: Uuid,
     session_id: Uuid,
     response_message_id: Uuid,
+    assistant_turn_id: Option<Uuid>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let session_id_db = session_id;
 
@@ -127,6 +135,8 @@ pub async fn consume_release_controller_queue_message(
     let body = ReleaseControllerBoxPayload {
         stage_release: None,
         prod_release: None,
+        assistant_turn_id,
+        is_disabled_due_to_reject: false,
     };
     let payload_json = serde_json::to_value(&body)?;
 
@@ -167,5 +177,63 @@ pub async fn consume_release_controller_queue_message(
     });
     let mut guard = redis_conn.lock().await;
     let _ = publish_event_to_channel(&mut *guard, &channel, &event).await;
+    drop(guard);
+
+    if let Some(tid) = assistant_turn_id {
+        reject_controller_box::publish_reject_controller_box_probe(
+            rabbit_publisher,
+            user_id,
+            project_id,
+            session_id,
+            tid,
+        )
+        .await;
+    } else {
+        tracing::warn!(
+            %project_id,
+            %session_id,
+            %response_message_id,
+            "release_controller_box: inserted row but assistant_turn_id missing; skip reject_controller probe"
+        );
+    }
     Ok(())
+}
+
+pub fn apply_is_disabled_due_to_reject_on_matching_release_box(
+    conn: &mut PooledConn,
+    session_id: Uuid,
+    assistant_turn_id: Uuid,
+) -> Result<Option<ChatMessageRow>, diesel::result::Error> {
+    let rows: Vec<ChatMessageRow> = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
+        .select(ChatMessageRow::as_select())
+        .load(conn)?;
+
+    for row in rows {
+        let Ok(Some(ChatMessagePayload::ReleaseControllerBox(mut p))) =
+            ChatMessagePayload::from_value(&row.type_, row.payload.clone())
+        else {
+            continue;
+        };
+        if p.assistant_turn_id != Some(assistant_turn_id) {
+            continue;
+        }
+        if p.is_disabled_due_to_reject {
+            return Ok(Some(row));
+        }
+        p.is_disabled_due_to_reject = true;
+        let payload_json = match serde_json::to_value(&p) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let updated_row = diesel::update(
+            chat_messages::table.filter(chat_messages::id.eq(row.id)),
+        )
+        .set(chat_messages::payload.eq(Some(payload_json)))
+        .returning(ChatMessageRow::as_returning())
+        .get_result(conn)?;
+        return Ok(Some(updated_row));
+    }
+    Ok(None)
 }

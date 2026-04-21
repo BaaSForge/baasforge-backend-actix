@@ -155,6 +155,13 @@ fn entries_to_openai_messages(
                     tool_calls: Some(Vec::new()),
                 });
             }
+            // Chat Completions supports multiple `system` messages in the array (unlike Gemini/Claude
+            // history shapes), so we preserve semantic role here.
+            UpstreamHistoryEntry::System { text } => {
+                if !text.is_empty() {
+                    messages.push(openai_msg(ChatCompletionMessageRole::System, text.clone()));
+                }
+            }
         }
     }
     messages

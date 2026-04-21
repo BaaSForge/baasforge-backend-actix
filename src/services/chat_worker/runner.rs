@@ -24,6 +24,7 @@ use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::chat_worker::llm::{GenerateOutcome, build_llm_client};
 use crate::services::chat_worker::processor::process_one;
 use crate::services::chat_worker::release_controller_box;
+use crate::services::chat_worker::reject_controller_box;
 use crate::services::message_queue::{
     create_shared_publisher, publish_to_dead_letter, publish_to_retry_delay,
 };
@@ -318,6 +319,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                     invoking_message_id: payload.invoking_message_id,
                                     agent: agent.clone(),
                                     sub_agent_stuck_continuation_count: next_count,
+                                    assistant_turn_id: None,
                                 };
                                 match chat_message_queue::publish_with_publisher(
                                     &rabbit_publisher,
@@ -366,11 +368,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     )
                     .await;
                     if should_publish_release_probe {
+                        let assistant_turn_id = new_uuid();
                         release_controller_box::publish_release_controller_probe(
                             &rabbit_publisher,
                             user_id,
                             project_id,
                             session_id,
+                            assistant_turn_id,
                         )
                         .await;
                     }
@@ -515,13 +519,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         } else if payload.type_ == ChatMessageType::ReleaseControllerBox {
             let user_id = payload.user_id;
+            let assistant_turn_id = payload.assistant_turn_id;
             if let Err(e) = release_controller_box::consume_release_controller_queue_message(
                 &pool,
                 &redis_conn,
+                &rabbit_publisher,
                 user_id,
                 project_id,
                 session_id,
                 response_message_id,
+                assistant_turn_id,
             )
             .await
             {
@@ -530,6 +537,31 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     %session_id,
                     %response_message_id,
                     "release_controller_box consumer: {}",
+                    e
+                );
+            }
+            if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {
+                tracing::warn!("Failed to ack delivery");
+            }
+        } else if payload.type_ == ChatMessageType::RejectControllerBox {
+            let user_id = payload.user_id;
+            let assistant_turn_id = payload.assistant_turn_id;
+            if let Err(e) = reject_controller_box::consume_reject_controller_box_queue_message(
+                &pool,
+                &redis_conn,
+                user_id,
+                project_id,
+                session_id,
+                response_message_id,
+                assistant_turn_id,
+            )
+            .await
+            {
+                tracing::error!(
+                    %project_id,
+                    %session_id,
+                    %response_message_id,
+                    "reject_controller_box consumer: {}",
                     e
                 );
             }

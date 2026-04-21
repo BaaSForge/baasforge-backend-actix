@@ -98,6 +98,21 @@ pub type ReleaseType = ProjectReleaseResponse;
 pub struct ReleaseControllerBoxPayload {
     pub stage_release: Option<ProjectReleaseWithBaseline>,
     pub prod_release: Option<ProjectReleaseWithBaseline>,
+    /// Correlates this controller with the paired [`RejectControllerBoxPayload`] from the same planner turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_turn_id: Option<Uuid>,
+    #[serde(default)]
+    pub is_disabled_due_to_reject: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RejectControllerBoxPayload {
+    pub is_rejected: bool,
+    pub unit_changes: Vec<ProjectUnitResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_turn_id: Option<Uuid>,
+    #[serde(default, alias = "disabled_due_to_production_release")]
+    pub is_disabled_due_to_production_release: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DbEnum, Serialize, Deserialize)]
@@ -107,7 +122,7 @@ pub struct ReleaseControllerBoxPayload {
 pub enum ChatSessionRoleType {
     User,
     Ai,
-    /// Non-model rows (e.g. UI chrome such as [`ChatMessageType::ReleaseControllerBox`]).
+    /// Non-model rows (e.g. UI chrome such as [`ChatMessageType::ReleaseControllerBox`], [`ChatMessageType::RejectControllerBox`]).
     System,
 }
 
@@ -120,6 +135,7 @@ pub enum ChatMessageType {
     Units,
     /// UI hint for release/deploy controls after a planner turn that touched units (internal; not LLM input).
     ReleaseControllerBox,
+    RejectControllerBox,
     ToolFetchRelevantUnits,
     ToolFetchLatestReleases,
     ToolListUnitContexts,
@@ -168,6 +184,7 @@ pub enum ChatMessagePayload {
     Text(TextPayload),
     Units(Vec<ProjectUnitResponse>),
     ReleaseControllerBox(ReleaseControllerBoxPayload),
+    RejectControllerBox(RejectControllerBoxPayload),
     ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
     ToolFetchLatestReleases(ToolFetchLatestReleasesPayload),
     // `ToolListUnitContexts` / `ToolListModulesForUnitContexts` use permissive `args` + defaults.
@@ -193,6 +210,7 @@ impl ChatMessagePayload {
             ChatMessagePayload::Text(_) => "Text",
             ChatMessagePayload::Units(_) => "Units",
             ChatMessagePayload::ReleaseControllerBox(_) => "ReleaseControllerBox",
+            ChatMessagePayload::RejectControllerBox(_) => "RejectControllerBox",
             ChatMessagePayload::ToolFetchRelevantUnits(_) => "ToolFetchRelevantUnits",
             ChatMessagePayload::ToolFetchLatestReleases(_) => "ToolFetchLatestReleases",
             ChatMessagePayload::ToolAnalyzeArchitecture(_) => "ToolAnalyzeArchitecture",
@@ -224,6 +242,10 @@ impl ChatMessagePayload {
             ChatMessageType::ReleaseControllerBox => {
                 let p = serde_json::from_value::<ReleaseControllerBoxPayload>(v)?;
                 ChatMessagePayload::ReleaseControllerBox(p)
+            }
+            ChatMessageType::RejectControllerBox => {
+                let p = serde_json::from_value::<RejectControllerBoxPayload>(v)?;
+                ChatMessagePayload::RejectControllerBox(p)
             }
             ChatMessageType::Units => {
                 let arr = serde_json::from_value::<Vec<ProjectUnitResponse>>(v)?;
