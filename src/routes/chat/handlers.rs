@@ -1180,6 +1180,7 @@ enum ProdReleaseOutcome {
         ChatMessageRow,
         Option<Uuid>,
         Option<ChatMessageRow>,
+        Vec<ChatMessageRow>,
     ),
     SessionNotFound,
     MessageNotFound,
@@ -1545,21 +1546,26 @@ pub async fn handle_create_production_release(
             };
 
             let controller_at = msg_row.created_at;
-            diesel::update(chat_messages::table)
-                .filter(chat_messages::chat_session_id.eq(session_id))
-                .filter(chat_messages::role.eq(ChatSessionRoleType::User))
-                .filter(
-                    chat_messages::created_at
-                        .lt(controller_at),
-                )
-                .set(chat_messages::is_edit_disabled_due_to_production_release.eq(true))
-                .execute(conn)?;
+            let user_messages_edit_disabled: Vec<ChatMessageRow> = diesel::update(
+                chat_messages::table,
+            )
+            .filter(chat_messages::chat_session_id.eq(session_id))
+            .filter(chat_messages::role.eq(ChatSessionRoleType::User))
+            .filter(chat_messages::is_edit_disabled_due_to_production_release.eq(false))
+            .filter(
+                chat_messages::created_at
+                    .lt(controller_at),
+            )
+            .set(chat_messages::is_edit_disabled_due_to_production_release.eq(true))
+            .returning(ChatMessageRow::as_returning())
+            .load(conn)?;
 
             Ok(ProdReleaseOutcome::Success(
                 inserted,
                 updated_row,
                 previous_prod_release_id,
                 reject_updated_row,
+                user_messages_edit_disabled,
             ))
         })
     })
@@ -1574,7 +1580,13 @@ pub async fn handle_create_production_release(
     };
 
     match outcome {
-        ProdReleaseOutcome::Success(release, row, previous_prod_release_id, reject_row_opt) => {
+        ProdReleaseOutcome::Success(
+            release,
+            row,
+            previous_prod_release_id,
+            reject_row_opt,
+            user_messages_edit_disabled,
+        ) => {
             let release_for_attach = release.clone();
             let release_for_response = match database::block_on_db(&context.pool, move |conn| {
                 attach_base_production_releases(conn, project_id, vec![release_for_attach])
@@ -1616,6 +1628,24 @@ pub async fn handle_create_production_release(
                     {
                         tracing::warn!(
                             "[handle_create_production_release] WS publish (reject box) failed: {}",
+                            e
+                        );
+                    }
+                }
+                for user_row in user_messages_edit_disabled {
+                    let message_user: ChatMessageResponse = user_row.into();
+                    let event_user =
+                        WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                            project_id,
+                            session_id,
+                            message: message_user,
+                        });
+                    if let Err(e) =
+                        publish_event_to_channel(&mut *guard, &user_channel(user_id), &event_user)
+                            .await
+                    {
+                        tracing::warn!(
+                            "[handle_create_production_release] WS publish (user edit flag) failed: {}",
                             e
                         );
                     }
