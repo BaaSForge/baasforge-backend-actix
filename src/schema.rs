@@ -59,6 +59,7 @@ diesel::table! {
         status -> ChatMessageStatus,
         invoking_message_id -> Nullable<Uuid>,
         agent -> Nullable<ChatAgentType>,
+        is_edit_disabled_due_to_production_release -> Bool,
     }
 }
 

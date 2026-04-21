@@ -349,6 +349,7 @@ pub struct ChatMessageRow {
     pub invoking_message_id: Option<Uuid>,
     /// Set only for AI role messages; NULL for user messages.
     pub agent: Option<ChatAgentType>,
+    pub is_edit_disabled_due_to_production_release: bool,
 }
 
 impl From<ChatMessageRow> for ChatMessageResponse {
@@ -372,6 +373,7 @@ impl From<ChatMessageRow> for ChatMessageResponse {
             created_at: row.created_at,
             invoking_message_id: row.invoking_message_id,
             agent: row.agent,
+            is_edit_disabled_due_to_production_release: row.is_edit_disabled_due_to_production_release,
         }
     }
 }
@@ -394,6 +396,8 @@ pub struct ChatMessageResponse {
     pub invoking_message_id: Option<Uuid>,
     /// Present only for AI role messages.
     pub agent: Option<ChatAgentType>,
+    #[serde(default)]
+    pub is_edit_disabled_due_to_production_release: bool,
 }
 
 #[derive(Serialize)]
@@ -427,4 +431,5 @@ pub struct ChatMessageInsert {
     pub status: ChatMessageStatus,
     /// Set only for AI role; None for user messages.
     pub agent: Option<ChatAgentType>,
+    pub is_edit_disabled_due_to_production_release: bool,
 }

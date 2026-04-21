@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod chat_session_truncate;
 pub mod chat_worker;
 pub mod message_queue;
 pub mod runtime_nats;

@@ -49,6 +49,9 @@ use crate::services::releases::{
 };
 use crate::services::chat_worker::release_controller_box::apply_is_disabled_due_to_reject_on_matching_release_box;
 use crate::services::chat_worker::reject_controller_box::apply_disabled_due_to_production_release_on_matching_reject_box;
+use crate::services::chat_session_truncate::{
+    truncate_session_from_user_message, TruncateSessionFromMessageOutcome,
+};
 use crate::services::stage_release_from_controller::{
     transaction_create_stage_release_from_controller, StageReleaseFromControllerError,
 };
@@ -396,6 +399,7 @@ pub async fn handle_create_chat_session_message(
         payload: body.payload.clone(),
         status: ChatMessageStatus::Completed,
         agent: None, // user message; agent is only set for AI role
+        is_edit_disabled_due_to_production_release: false,
     };
 
     let (message, is_first) = match database::block_on_db(&context.pool, move |conn| {
@@ -1982,5 +1986,83 @@ pub async fn handle_confirm_reject_controller(
             "Reject controller must be the latest message in the chat session",
             json!({}),
         )),
+    }
+}
+
+pub async fn handle_truncate_chat_session_from_user_message(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid, Uuid)>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist");
+    let user_id = access_payload.user_id;
+    let (project_id, session_id, user_message_id) = path.into_inner();
+
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        truncate_session_from_user_message(
+            conn,
+            user_id,
+            project_id,
+            session_id,
+            user_message_id,
+        )
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::error!("[handle_truncate_chat_session_from_user_message] DB error: {}", e);
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    match outcome {
+        TruncateSessionFromMessageOutcome::Success {
+            removed_message_ids,
+            stage_runtime_nats,
+        } => {
+            if let Some(ref nats) = context.runtime_nats_publisher {
+                if !stage_runtime_nats.is_empty() {
+                    let subject = context.settings.runtime_nats_subject_release.as_str();
+                    for (runtime_id, cleared_stage_release_id) in stage_runtime_nats {
+                        if let Err(e) = nats
+                            .publish_stage_release_cleared(
+                                subject,
+                                project_id,
+                                runtime_id,
+                                Some(cleared_stage_release_id),
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                "[handle_truncate_chat_session_from_user_message] NATS publish failed: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+
+            HttpResponse::Ok().json(api_success(
+                "Chat truncated",
+                json!({ "removed_message_ids": removed_message_ids }),
+            ))
+        }
+        TruncateSessionFromMessageOutcome::SessionNotFound => HttpResponse::NotFound()
+            .json(api_error("Chat session not found", json!({}))),
+        TruncateSessionFromMessageOutcome::AnchorNotFound => {
+            HttpResponse::NotFound().json(api_error("Message not found", json!({})))
+        }
+        TruncateSessionFromMessageOutcome::AnchorNotUserMessage => HttpResponse::BadRequest()
+            .json(api_error("Message is not a user message", json!({}))),
+        TruncateSessionFromMessageOutcome::HasProductionReleaseOnSession => HttpResponse::BadRequest()
+            .json(api_error(
+                "Cannot truncate: a production release exists on a release controller in this session",
+                json!({}),
+            )),
     }
 }
