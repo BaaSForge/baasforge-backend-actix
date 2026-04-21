@@ -18,7 +18,7 @@ pub enum TruncateSessionFromMessageOutcome {
     SessionNotFound,
     AnchorNotFound,
     AnchorNotUserMessage,
-    HasProductionReleaseOnSession,
+    HasProductionReleaseAfterAnchor,
 }
 
 pub fn truncate_session_from_user_message(
@@ -41,23 +41,6 @@ pub fn truncate_session_from_user_message(
             return Ok(TruncateSessionFromMessageOutcome::SessionNotFound);
         }
 
-        let release_controller_rows: Vec<ChatMessageRow> = chat_messages::table
-            .filter(chat_messages::chat_session_id.eq(session_id))
-            .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
-            .select(ChatMessageRow::as_select())
-            .load(conn)?;
-
-        for row in release_controller_rows {
-            let Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) =
-                ChatMessagePayload::from_value(&row.type_, row.payload.clone())
-            else {
-                continue;
-            };
-            if p.prod_release.is_some() {
-                return Ok(TruncateSessionFromMessageOutcome::HasProductionReleaseOnSession);
-            }
-        }
-
         let anchor: Option<ChatMessageRow> = chat_messages::table
             .filter(chat_messages::id.eq(user_message_id))
             .filter(chat_messages::chat_session_id.eq(session_id))
@@ -70,6 +53,27 @@ pub fn truncate_session_from_user_message(
         };
         if anchor.role != ChatSessionRoleType::User {
             return Ok(TruncateSessionFromMessageOutcome::AnchorNotUserMessage);
+        }
+
+        let release_controllers_after_anchor: Vec<ChatMessageRow> = chat_messages::table
+            .filter(chat_messages::chat_session_id.eq(session_id))
+            .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
+            .filter(
+                chat_messages::created_at
+                    .gt(anchor.created_at),
+            )
+            .select(ChatMessageRow::as_select())
+            .load(conn)?;
+
+        for row in release_controllers_after_anchor {
+            let Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) =
+                ChatMessagePayload::from_value(&row.type_, row.payload.clone())
+            else {
+                continue;
+            };
+            if p.prod_release.is_some() {
+                return Ok(TruncateSessionFromMessageOutcome::HasProductionReleaseAfterAnchor);
+            }
         }
 
         let to_delete: Vec<ChatMessageRow> = chat_messages::table

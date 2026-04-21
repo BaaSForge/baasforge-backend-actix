@@ -1544,6 +1544,17 @@ pub async fn handle_create_production_release(
                 None => None,
             };
 
+            let controller_at = msg_row.created_at;
+            diesel::update(chat_messages::table)
+                .filter(chat_messages::chat_session_id.eq(session_id))
+                .filter(chat_messages::role.eq(ChatSessionRoleType::User))
+                .filter(
+                    chat_messages::created_at
+                        .lt(controller_at),
+                )
+                .set(chat_messages::is_edit_disabled_due_to_production_release.eq(true))
+                .execute(conn)?;
+
             Ok(ProdReleaseOutcome::Success(
                 inserted,
                 updated_row,
@@ -2059,10 +2070,11 @@ pub async fn handle_truncate_chat_session_from_user_message(
         }
         TruncateSessionFromMessageOutcome::AnchorNotUserMessage => HttpResponse::BadRequest()
             .json(api_error("Message is not a user message", json!({}))),
-        TruncateSessionFromMessageOutcome::HasProductionReleaseOnSession => HttpResponse::BadRequest()
-            .json(api_error(
-                "Cannot truncate: a production release exists on a release controller in this session",
+        TruncateSessionFromMessageOutcome::HasProductionReleaseAfterAnchor => {
+            HttpResponse::BadRequest().json(api_error(
+                "Cannot truncate: a production release exists on a release controller after this message",
                 json!({}),
-            )),
+            ))
+        }
     }
 }
