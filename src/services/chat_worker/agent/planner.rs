@@ -46,6 +46,10 @@ pub fn load_history(
                         .eq(Some(ChatAgentType::Planner))
                         .or(chat_messages::agent.is_null()),
                 ),
+            ).or(
+                chat_messages::role
+                    .eq(ChatSessionRoleType::System)
+                    .and(chat_messages::agent.is_null()),
             ),
         )
         .order(chat_messages::id.desc())
