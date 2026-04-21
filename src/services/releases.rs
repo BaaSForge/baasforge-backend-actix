@@ -10,7 +10,7 @@ use crate::models::projects::{
     ProjectUnitType,
 };
 use crate::schema::{chat_messages, chat_sessions, project_releases, project_runtimes};
-use crate::services::chat_worker::db::load_project_units_by_keys;
+use crate::services::chat_worker::db::{load_project_units_by_keys, load_units_from_latest_production_metadata};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::Integer;
@@ -596,34 +596,24 @@ pub fn enrich_chat_message_response_releases(
     Ok(msg)
 }
 
-/// `(chat_session_id, unit_id)` refs present in the latest production release combined snapshot.
-pub fn released_unit_refs_set_from_latest_production(
-    conn: &mut PooledConn,
-    project_id: Uuid,
-) -> Result<HashSet<(Uuid, String)>, diesel::result::Error> {
-    Ok(
-        load_latest_production_release_for_project(conn, project_id)?
-            .and_then(|r| r.units_metadata)
-            .map(|m| {
-                m.combined_unit_refs
-                    .into_iter()
-                    .map(|r| (r.chat_session_id, r.unit_id))
-                    .collect()
-            })
-            .unwrap_or_default(),
-    )
-}
-
-/// Sets [`ProjectUnitResponse::is_draft`] per unit: `false` if the ref appears in the latest
-/// production combined metadata, otherwise `true`.
+/// Sets [`ProjectUnitResponse::is_draft`] per unit: `false` when this row’s [`ProjectUnitRow::revision`]
+/// matches the released revision for the same logical unit in the latest production combined snapshot
+/// ([`logical_unit_key`]); otherwise `true`. Uses logical path + revision, not `(chat_session_id, id)`,
+/// so a unit promoted from another session still compares correctly to the current session’s tip row.
 pub fn attach_is_draft_flags_from_latest_production(
     conn: &mut PooledConn,
     project_id: Uuid,
     mut units: Vec<ProjectUnitResponse>,
 ) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
-    let released = released_unit_refs_set_from_latest_production(conn, project_id)?;
+    let prod_units = load_units_from_latest_production_metadata(conn, project_id)?;
+    let prod_rev_by_key: HashMap<LogicalUnitKey, i32> = prod_units
+        .iter()
+        .map(|u| (logical_unit_key(u), u.revision))
+        .collect();
     for u in units.iter_mut() {
-        u.is_draft = Some(!released.contains(&(u.chat_session_id, u.id.clone())));
+        let k = logical_unit_key(u);
+        let released_rev = prod_rev_by_key.get(&k).copied();
+        u.is_draft = Some(released_rev != Some(u.revision));
     }
     Ok(units)
 }

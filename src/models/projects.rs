@@ -175,8 +175,9 @@ impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
 /// JSON is a single flat object (`row` fields + `latest_revision`, optional `is_draft`). Use [`Deref`] to access row
 /// fields as `unit.revision`, `unit.context_slug`, etc.
 ///
-/// `is_draft` is only set on project **units** HTTP responses: `true` when this unit’s ref is not in
-/// the latest production release metadata. Chat/tool payloads omit it (treated as in-session work).
+/// `is_draft` is set on project **units** HTTP responses: `false` when this row’s `revision` matches
+/// the latest production combined snapshot for the same logical unit (`context_slug`, `module_slug`,
+/// `unit_type`, `unit_name_slug`); otherwise `true`. Chat/tool payloads may omit it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(from = "ProjectUnitResponseDe")]
 pub struct ProjectUnitResponse {

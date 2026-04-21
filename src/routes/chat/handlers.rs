@@ -40,10 +40,11 @@ use crate::services::chat_worker::db::{
     DraftUnitsAsOfReleaseControllerError,
 };
 use crate::services::releases::{
-    attach_base_production_releases, enrich_chat_message_response_releases,
-    enrich_owned_releases_by_session_map, insert_production_release_from_stage_row,
-    live_release_id_from_production_runtime, prod_live_release_source_chat_session,
-    production_release_id_for_live_runtimes, stale_base_release_from_baseline,
+    attach_base_production_releases, attach_is_draft_flags_from_latest_production,
+    enrich_chat_message_response_releases, enrich_owned_releases_by_session_map,
+    insert_production_release_from_stage_row, live_release_id_from_production_runtime,
+    prod_live_release_source_chat_session, production_release_id_for_live_runtimes,
+    stale_base_release_from_baseline,
 };
 use crate::services::stage_release_from_controller::{
     transaction_create_stage_release_from_controller, StageReleaseFromControllerError,
@@ -673,14 +674,14 @@ pub async fn handle_list_chat_session_draft_units(
         if session_exists.is_none() {
             return Err(diesel::result::Error::NotFound);
         }
-        load_chat_session_unit_tips_for_merge(conn, project_id, session_id).map(|mut units| {
+        load_chat_session_unit_tips_for_merge(conn, project_id, session_id).and_then(|mut units| {
             units.sort_by(|a, b| {
                 a.context_slug
                     .cmp(&b.context_slug)
                     .then_with(|| a.module_slug.cmp(&b.module_slug))
                     .then_with(|| a.unit_name_slug.cmp(&b.unit_name_slug))
             });
-            units
+            attach_is_draft_flags_from_latest_production(conn, project_id, units)
         })
     })
     .await
@@ -728,12 +729,18 @@ pub async fn handle_list_chat_session_draft_units_as_of_release_controller_messa
         if session_exists.is_none() {
             return Err(diesel::result::Error::NotFound);
         }
-        load_chat_session_draft_units_as_of_release_controller_message(
+        match load_chat_session_draft_units_as_of_release_controller_message(
             conn,
             project_id,
             session_id,
             release_controller_message_id,
-        )
+        )? {
+            Ok(units) => {
+                let units = attach_is_draft_flags_from_latest_production(conn, project_id, units)?;
+                Ok(Ok(units))
+            }
+            Err(e) => Ok(Err(e)),
+        }
     })
     .await
     {
