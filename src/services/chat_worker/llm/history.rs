@@ -7,7 +7,8 @@
 //! Types listed in [`UPSTREAM_EXCLUDED_MESSAGE_TYPES`] are stripped in
 //! [`filter_session_messages_for_upstream_llm`] (called from [`crate::services::chat_worker::agent::load_history_for_agent`])
 //! and skipped again in [`session_messages_to_upstream_entries`] as a safeguard.
-//! [`ChatMessageType::RejectControllerBox`] is included upstream as [`UpstreamHistoryEntry::System`] when `is_rejected` is true.
+//! [`ChatMessageType::RejectControllerBox`] is included upstream as [`UpstreamHistoryEntry::System`]:
+//! rejection notice when `is_rejected` is true, or implicit-acceptance notice when it is false.
 
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload, ThinkingBlock,
@@ -460,18 +461,18 @@ fn reject_controller_box_upstream_notice(payload: &Option<Value>) -> Option<Stri
     let ChatMessagePayload::RejectControllerBox(box_payload) = p else {
         return None;
     };
-    if !box_payload.is_rejected {
-        return None;
-    }
     let ids: Vec<String> = box_payload.unit_changes.iter().map(|u| u.id.clone()).collect();
-    if ids.is_empty() {
-        return Some(
-            "The user rejected the changes from your last assistant turn. No affected unit ids were recorded."
-                .to_string(),
-        );
+
+    if box_payload.is_rejected {
+        return Some(format!(
+            "The user rejected the changes from your last assistant turn. Removed units: {}.",
+            ids.join(", ")
+        ));
     }
+
     Some(format!(
-        "The user rejected the changes from your last assistant turn. Reverted or removed units: {}.",
+        "The user has accepted the changes from your last assistant turn for these units: {}. \
+This is not a stage or production release and implies nothing about shipping—it only means the user did not reject those edits, so on your next turn you may treat these units as the ones to rely on and build something upon them.",
         ids.join(", ")
     ))
 }
