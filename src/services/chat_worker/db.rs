@@ -1,11 +1,15 @@
 use crate::database::PooledConn;
 use crate::libs::unit_slug::UnitPath;
-use crate::models::chat_messages::{ChatMessagePayload, ChatMessageStatus, ChatMessageType};
+use crate::models::chat_messages::{
+    ChatMessagePayload, ChatMessageRow, ChatMessageStatus, ChatMessageType,
+};
 use crate::models::projects::{
     PlatformEnvironmentType, ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitRow,
     ProjectUnitType,
 };
-use crate::schema::{chat_messages, chat_sessions, project_releases, project_runtimes, project_units};
+use crate::schema::{
+    chat_messages, chat_sessions, project_releases, project_runtimes, project_units, projects,
+};
 use chrono::{DateTime, Utc};
 use diesel::dsl::{exists, max, min, not};
 use diesel::prelude::*;
@@ -20,6 +24,54 @@ use uuid::Uuid;
 pub enum DraftUnitsAsOfReleaseControllerError {
     MessageNotFound,
     NotReleaseControllerMessage,
+}
+
+pub enum LastReleaseControllerNotDisabledLookup {
+    SessionNotFound,
+    NoEligibleMessage,
+    Found(ChatMessageRow),
+}
+
+pub fn load_last_not_disabled_release_controller_for_session(
+    conn: &mut PooledConn,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> Result<LastReleaseControllerNotDisabledLookup, diesel::result::Error> {
+    let session_ok: Option<Uuid> = chat_sessions::table
+        .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(user_id))
+        .filter(chat_sessions::project_id.eq(project_id))
+        .filter(chat_sessions::id.eq(session_id))
+        .select(chat_sessions::id)
+        .first(conn)
+        .optional()?;
+    if session_ok.is_none() {
+        return Ok(LastReleaseControllerNotDisabledLookup::SessionNotFound);
+    }
+
+    let rows: Vec<ChatMessageRow> = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
+        .order((
+            chat_messages::created_at.desc(),
+            chat_messages::id.desc(),
+        ))
+        .select(ChatMessageRow::as_select())
+        .load(conn)?;
+
+    for row in rows {
+        let Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) =
+            ChatMessagePayload::from_value(&row.type_, row.payload.clone())
+        else {
+            continue;
+        };
+        if !p.is_disabled_due_to_reject {
+            return Ok(LastReleaseControllerNotDisabledLookup::Found(row));
+        }
+    }
+
+    Ok(LastReleaseControllerNotDisabledLookup::NoEligibleMessage)
 }
 
 type LogicalUnitKey = (String, String, ProjectUnitType, String);

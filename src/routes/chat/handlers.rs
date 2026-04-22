@@ -35,10 +35,11 @@ use crate::schema::projects;
 use crate::services::chat_worker::db::{
     load_chat_session_draft_units_as_of_release_controller_message,
     load_chat_session_unit_tips_for_merge, load_latest_revisions_by_unit_paths,
+    load_last_not_disabled_release_controller_for_session,
     load_owned_unit_tips_for_chat_sessions,
     load_owned_releases_by_chat_session, load_pre_chat_base_units_by_unit_paths,
     load_unit_tips_by_ids_for_chat_session, load_units_by_ids_for_chat_session,
-    DraftUnitsAsOfReleaseControllerError,
+    DraftUnitsAsOfReleaseControllerError, LastReleaseControllerNotDisabledLookup,
 };
 use crate::services::releases::{
     attach_base_production_releases, attach_is_draft_flags_from_latest_production,
@@ -314,6 +315,101 @@ pub async fn handle_list_chat_session_messages(
         "Chat session messages fetched successfully",
         json!(messages_with_first),
     ))
+}
+
+enum GetLastReleaseControllerNotDisabledOutcome {
+    SessionNotFound,
+    NoEligibleMessage,
+    Message(ChatMessageResponse),
+}
+
+fn strip_units_metadata_from_release_controller_response(mut msg: ChatMessageResponse) -> ChatMessageResponse {
+    let Some(ChatMessagePayload::ReleaseControllerBox(mut p)) = msg.payload.take() else {
+        return msg;
+    };
+    if let Some(s) = p.stage_release.as_mut() {
+        s.release.units_metadata = None;
+        if let Some(b) = s.base_production_release.as_mut() {
+            b.units_metadata = None;
+        }
+    }
+    if let Some(pr) = p.prod_release.as_mut() {
+        pr.release.units_metadata = None;
+        if let Some(b) = pr.base_production_release.as_mut() {
+            b.units_metadata = None;
+        }
+    }
+    msg.payload = Some(ChatMessagePayload::ReleaseControllerBox(p));
+    msg
+}
+
+pub async fn handle_get_last_release_controller_not_disabled(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid)>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to get last release controller message");
+
+    let (project_id, session_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        match load_last_not_disabled_release_controller_for_session(
+            conn,
+            user_id,
+            project_id,
+            session_id,
+        )? {
+            LastReleaseControllerNotDisabledLookup::SessionNotFound => {
+                Ok(GetLastReleaseControllerNotDisabledOutcome::SessionNotFound)
+            }
+            LastReleaseControllerNotDisabledLookup::NoEligibleMessage => {
+                Ok(GetLastReleaseControllerNotDisabledOutcome::NoEligibleMessage)
+            }
+            LastReleaseControllerNotDisabledLookup::Found(row) => {
+                let msg = enrich_chat_message_response_releases(
+                    conn,
+                    project_id,
+                    ChatMessageResponse::from(row),
+                )?;
+                Ok(GetLastReleaseControllerNotDisabledOutcome::Message(
+                    strip_units_metadata_from_release_controller_response(msg),
+                ))
+            }
+        }
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(database::BlockingDbError::Query(e)) => {
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            tracing::error!(
+                "[handle_get_last_release_controller_not_disabled] DB/block error"
+            );
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    match outcome {
+        GetLastReleaseControllerNotDisabledOutcome::SessionNotFound => {
+            HttpResponse::NotFound().json(api_error("Chat session not found", json!({})))
+        }
+        GetLastReleaseControllerNotDisabledOutcome::NoEligibleMessage => {
+            HttpResponse::Ok().json(api_success(
+                "No release controller message eligible in this session",
+                json!({ "message": serde_json::Value::Null }),
+            ))
+        }
+        GetLastReleaseControllerNotDisabledOutcome::Message(m) => HttpResponse::Ok().json(
+            api_success("Last eligible release controller message", json!({ "message": m })),
+        ),
+    }
 }
 
 pub async fn handle_create_chat_session_message(
