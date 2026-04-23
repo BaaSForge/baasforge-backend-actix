@@ -1397,8 +1397,8 @@ pub async fn handle_release_unit_previous_by_full_ids(
     ))
 }
 
-/// Distinct bounded-context slugs (`context_slug`) used by this release’s **new** units (`newUnitIDs`
-/// metadata), same scope as [`handle_list_project_release_units`].
+/// Distinct bounded-context slugs (`context_slug`) from this release’s full snapshot (`combinedUnitIDs`),
+/// same scope as [`handle_list_project_release_units_all`].
 pub async fn handle_list_project_release_contexts(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -1431,7 +1431,7 @@ pub async fn handle_list_project_release_contexts(
             .units_metadata
             .as_ref()
             .map(|m| {
-                m.new_unit_refs
+                m.combined_unit_refs
                     .iter()
                     .map(|r| (r.chat_session_id, r.unit_id.clone()))
                     .collect()
@@ -1477,8 +1477,8 @@ pub struct ModulesByContextsBody {
     pub context_slugs: Vec<String>,
 }
 
-/// For each requested bounded-context slug, distinct `module_slug` values from this release’s
-/// **new** units (`newUnitIDs` metadata), same scope as [`handle_list_project_release_contexts`].
+/// For each requested bounded-context slug, distinct `module_slug` values from this release’s full
+/// snapshot (`combinedUnitIDs`), same scope as [`handle_list_project_release_contexts`].
 pub async fn handle_list_project_release_modules_by_contexts(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -1525,7 +1525,7 @@ pub async fn handle_list_project_release_modules_by_contexts(
             .units_metadata
             .as_ref()
             .map(|m| {
-                m.new_unit_refs
+                m.combined_unit_refs
                     .iter()
                     .map(|r| (r.chat_session_id, r.unit_id.clone()))
                     .collect()
