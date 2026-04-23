@@ -465,6 +465,18 @@ pub fn modules_by_context_slugs_visible_tip_units(
     Ok(modules_by_context_from_pairs(ordered, pairs))
 }
 
+pub fn modules_by_context_slugs_from_units(
+    units: &[ProjectUnitResponse],
+    context_slugs: &[String],
+) -> Vec<(String, Vec<String>)> {
+    let ordered = dedup_ordered_context_slugs(context_slugs);
+    if ordered.is_empty() {
+        return vec![];
+    }
+    let pairs = context_module_pairs_from_units(units, &ordered);
+    modules_by_context_from_pairs(ordered, pairs)
+}
+
 /// Project-level variant: builds ordered module lists from the current live production release
 /// (not scoped to a chat session). Used by REST APIs that operate outside a session context.
 pub fn modules_by_context_slugs_latest_production(
@@ -477,8 +489,7 @@ pub fn modules_by_context_slugs_latest_production(
         return Ok(vec![]);
     }
     let units = load_units_from_latest_production_metadata(conn, project_id)?;
-    let pairs = context_module_pairs_from_units(&units, &ordered);
-    Ok(modules_by_context_from_pairs(ordered, pairs))
+    Ok(modules_by_context_slugs_from_units(&units, context_slugs))
 }
 
 /// Latest tip row per logical unit in `session_id` (no newer revision in that session for the same slugs).

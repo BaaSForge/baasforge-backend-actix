@@ -16,7 +16,7 @@ use crate::services::releases::{
 };
 use crate::services::chat_worker::db::{
     list_distinct_context_slugs_from_units, load_project_units_by_keys,
-    load_units_from_latest_production_metadata, modules_by_context_slugs_latest_production,
+    load_units_from_latest_production_metadata, modules_by_context_slugs_from_units,
 };
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
@@ -1477,12 +1477,12 @@ pub struct ModulesByContextsBody {
     pub context_slugs: Vec<String>,
 }
 
-/// For each requested bounded-context slug, distinct `module_slug` values used by units in the
-/// **latest production release** snapshot (same rules as the `list_modules_for_unit_contexts` tool).
-pub async fn handle_list_project_modules_by_contexts(
+/// For each requested bounded-context slug, distinct `module_slug` values from this release’s
+/// **new** units (`newUnitIDs` metadata), same scope as [`handle_list_project_release_contexts`].
+pub async fn handle_list_project_release_modules_by_contexts(
     context: web::Data<AppContext>,
     req: HttpRequest,
-    path: web::Path<Uuid>,
+    path: web::Path<(Uuid, Uuid)>,
     body: web::Json<ModulesByContextsBody>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
@@ -1491,7 +1491,7 @@ pub async fn handle_list_project_modules_by_contexts(
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to list modules by contexts");
 
-    let project_id = path.into_inner();
+    let (project_id, release_id) = path.into_inner();
     let user_id = access_payload.user_id;
 
     let has_slugs = body
@@ -1508,19 +1508,37 @@ pub async fn handle_list_project_modules_by_contexts(
     let slugs = body.context_slugs.clone();
 
     let by_context = match database::block_on_db(&context.pool, move |conn| {
-        let project_ok: bool = projects::table
-            .filter(projects::id.eq(project_id))
+        let release: Option<ProjectReleaseResponse> = project_releases::table
+            .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
-            .select(projects::id)
-            .first::<Uuid>(conn)
-            .optional()?
-            .is_some();
+            .filter(project_releases::project_id.eq(project_id))
+            .filter(project_releases::id.eq(release_id))
+            .select(ProjectReleaseResponse::as_select())
+            .first(conn)
+            .optional()?;
 
-        if !project_ok {
+        let Some(release) = release else {
             return Ok::<_, diesel::result::Error>(None);
-        }
+        };
 
-        let rows = modules_by_context_slugs_latest_production(conn, project_id, &slugs)?;
+        let keys: Vec<(Uuid, String)> = release
+            .units_metadata
+            .as_ref()
+            .map(|m| {
+                m.new_unit_refs
+                    .iter()
+                    .map(|r| (r.chat_session_id, r.unit_id.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let units = if keys.is_empty() {
+            vec![]
+        } else {
+            load_project_units_by_keys(conn, project_id, &keys)?
+        };
+
+        let rows = modules_by_context_slugs_from_units(&units, &slugs);
         let by_context: Vec<ContextModulesApiRow> = rows
             .into_iter()
             .map(|(context_slug, module_slugs)| ContextModulesApiRow {
@@ -1535,20 +1553,20 @@ pub async fn handle_list_project_modules_by_contexts(
         Ok(o) => o,
         Err(database::BlockingDbError::Query(e)) => {
             log::error!(
-                "[handle_list_project_modules_by_contexts] Failed to load: {:?}",
+                "[handle_list_project_release_modules_by_contexts] Failed to load: {:?}",
                 e
             );
             return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
         }
         Err(_) => {
-            log::error!("[handle_list_project_modules_by_contexts] DB/block error");
+            log::error!("[handle_list_project_release_modules_by_contexts] DB/block error");
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }
     };
 
     let Some(by_context) = by_context else {
-        return HttpResponse::NotFound().json(api_error("Project not found", json!({})));
+        return HttpResponse::NotFound().json(api_error("Project release not found", json!({})));
     };
 
     HttpResponse::Ok().json(api_success(
