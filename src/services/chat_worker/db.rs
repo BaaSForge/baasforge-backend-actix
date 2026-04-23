@@ -11,7 +11,7 @@ use crate::schema::{
     chat_messages, chat_sessions, project_releases, project_runtimes, project_units, projects,
 };
 use chrono::{DateTime, Utc};
-use diesel::dsl::{exists, max, min, not};
+use diesel::dsl::{exists, max, not};
 use diesel::prelude::*;
 use diesel::OptionalExtension;
 use serde_json::Value;
@@ -869,10 +869,12 @@ pub fn load_latest_revisions_by_unit_paths(
     Ok(out)
 }
 
-/// For each [`UnitPath`], returns the unit row at revision `MIN(revision) - 1` in this chat session
-/// (the revision that was current before the first new revision in the session). If there is no row
-/// for the path, or the minimum revision is `1`, returns `None`. Rows are wrapped with
-/// [`project_units_with_latest_revision`] like other session unit loaders.
+/// For each [`UnitPath`], returns the unit row from this chat session’s baseline production release
+/// (`chat_sessions.live_production_release_id`): the snapshot row in that release’s
+/// `combinedUnitIDs` for the same logical unit (same slugs and type), with `latest_revision` filled
+/// like [`load_project_units_by_keys`]. `None` when the session has no baseline, the baseline row is
+/// missing or not a production release, the release has no combined snapshot, or the path is not in
+/// that snapshot.
 pub fn load_pre_chat_base_units_by_unit_paths(
     conn: &mut PooledConn,
     project_id: Uuid,
@@ -883,51 +885,56 @@ pub fn load_pre_chat_base_units_by_unit_paths(
         return Ok(vec![]);
     }
 
-    let mut indexed: Vec<(usize, ProjectUnitRow)> = Vec::new();
-    for (i, path) in paths.iter().enumerate() {
-        let min_rev: Option<i32> = project_units::table
-            .filter(project_units::project_id.eq(project_id))
-            .filter(project_units::chat_session_id.eq(chat_session_id))
-            .filter(project_units::context_slug.eq(&path.context_slug))
-            .filter(project_units::module_slug.eq(&path.module_slug))
-            .filter(project_units::unit_type.eq(path.unit_type))
-            .filter(project_units::unit_name_slug.eq(&path.unit_name_slug))
-            .select(min(project_units::revision))
-            .first(conn)?;
+    let baseline_id: Option<Uuid> = chat_sessions::table
+        .filter(chat_sessions::id.eq(chat_session_id))
+        .filter(chat_sessions::project_id.eq(project_id))
+        .select(chat_sessions::live_production_release_id)
+        .first::<Option<Uuid>>(conn)?;
 
-        let Some(m) = min_rev else {
-            continue;
-        };
-        if m <= 1 {
-            continue;
-        }
-        let prev = m - 1;
-        let base: Option<ProjectUnitRow> = project_units::table
-            .filter(project_units::project_id.eq(project_id))
-            .filter(project_units::chat_session_id.eq(chat_session_id))
-            .filter(project_units::context_slug.eq(&path.context_slug))
-            .filter(project_units::module_slug.eq(&path.module_slug))
-            .filter(project_units::unit_type.eq(path.unit_type))
-            .filter(project_units::unit_name_slug.eq(&path.unit_name_slug))
-            .filter(project_units::revision.eq(prev))
-            .select(ProjectUnitRow::as_select())
-            .first(conn)
-            .optional()?;
-        if let Some(row) = base {
-            indexed.push((i, row));
-        }
-    }
-
-    if indexed.is_empty() {
+    let Some(release_id) = baseline_id else {
         return Ok(vec![None; paths.len()]);
+    };
+
+    let release_ok: Option<Uuid> = project_releases::table
+        .filter(project_releases::id.eq(release_id))
+        .filter(project_releases::project_id.eq(project_id))
+        .filter(project_releases::is_stage.eq(false))
+        .select(project_releases::id)
+        .first(conn)
+        .optional()?;
+
+    let Some(release_id) = release_ok else {
+        return Ok(vec![None; paths.len()]);
+    };
+
+    let baseline_units = load_units_from_release_metadata(conn, project_id, release_id)?;
+    let mut by_path: HashMap<(String, String, ProjectUnitType, String), ProjectUnitResponse> =
+        HashMap::new();
+    for u in baseline_units {
+        let key = (
+            u.context_slug.clone(),
+            u.module_slug.clone(),
+            u.unit_type,
+            u.unit_name_slug.clone(),
+        );
+        let replace = match by_path.get(&key) {
+            None => true,
+            Some(existing) => u.revision > existing.revision,
+        };
+        if replace {
+            by_path.insert(key, u);
+        }
     }
 
-    let rows_only: Vec<ProjectUnitRow> = indexed.iter().map(|(_, r)| r.clone()).collect();
-    let with_latest = project_units_with_latest_revision(conn, project_id, rows_only)?;
-
-    let mut out: Vec<Option<ProjectUnitResponse>> = vec![None; paths.len()];
-    for ((i, _), resp) in indexed.into_iter().zip(with_latest) {
-        out[i] = Some(resp);
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let key = (
+            path.context_slug.clone(),
+            path.module_slug.clone(),
+            path.unit_type,
+            path.unit_name_slug.clone(),
+        );
+        out.push(by_path.get(&key).cloned());
     }
     Ok(out)
 }

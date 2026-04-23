@@ -1111,13 +1111,13 @@ pub async fn handle_unit_latest_revisions_by_ids_for_chat_session(
 
 #[derive(Serialize)]
 struct UnitPreChatBaseByPathsResponse {
-    /// Same length and order as request `unit_paths`; `null` when the smallest revision in this
-    /// session is `1`, there is no row for that path, or revision `min - 1` is missing.
+    /// Same length and order as request `unit_paths`; `null` when the session has no baseline
+    /// production release, the baseline snapshot has no row for that path, or the baseline id is stale.
     units: Vec<Option<ProjectUnitResponse>>,
 }
 
-/// For each unit path, returns the row at revision `MIN(revision) - 1` in this session (state
-/// before the first in-session revision for that logical unit).
+/// For each unit path, returns the unit from this session’s baseline production release combined
+/// snapshot (same logical unit), with `latest_revision` for the owning session.
 pub async fn handle_unit_pre_chat_base_by_paths_for_chat_session(
     context: web::Data<AppContext>,
     req: HttpRequest,
