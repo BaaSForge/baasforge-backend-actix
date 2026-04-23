@@ -1,5 +1,5 @@
 use crate::database::PooledConn;
-use crate::libs::unit_slug::UnitPath;
+use crate::libs::unit_slug::{compose_unit_id, parse_unit_path, UnitPath};
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
@@ -937,4 +937,142 @@ pub fn load_pre_chat_base_units_by_unit_paths(
         out.push(by_path.get(&key).cloned());
     }
     Ok(out)
+}
+
+fn baseline_rows_with_id<'a>(
+    baseline_units: &'a [ProjectUnitResponse],
+    unit_id: &str,
+) -> Vec<&'a ProjectUnitResponse> {
+    baseline_units
+        .iter()
+        .filter(|u| u.id == unit_id)
+        .collect()
+}
+
+fn pick_baseline_unit_row_for_id(
+    baseline_units: &[ProjectUnitResponse],
+    unit_id: &str,
+    prefer_chat_session_id: Uuid,
+) -> Option<ProjectUnitRow> {
+    let cand = baseline_rows_with_id(baseline_units, unit_id);
+    match cand.len() {
+        0 => None,
+        1 => Some(cand[0].row.clone()),
+        _ => {
+            let same_session: Vec<_> = cand
+                .iter()
+                .copied()
+                .filter(|u| u.chat_session_id == prefer_chat_session_id)
+                .collect();
+            if same_session.len() == 1 {
+                Some(same_session[0].row.clone())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+pub fn load_unit_previous_revisions_by_full_ids_for_chat_session(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    chat_session_id: Uuid,
+    full_unit_ids: &[String],
+) -> Result<(Vec<Option<ProjectUnitResponse>>, Option<String>), diesel::result::Error> {
+    if full_unit_ids.is_empty() {
+        return Ok((vec![], None));
+    }
+
+    let baseline_id: Option<Uuid> = chat_sessions::table
+        .filter(chat_sessions::id.eq(chat_session_id))
+        .filter(chat_sessions::project_id.eq(project_id))
+        .select(chat_sessions::live_production_release_id)
+        .first::<Option<Uuid>>(conn)?;
+
+    let baseline_units: Vec<ProjectUnitResponse> = if let Some(rid) = baseline_id {
+        let release_ok: Option<Uuid> = project_releases::table
+            .filter(project_releases::id.eq(rid))
+            .filter(project_releases::project_id.eq(project_id))
+            .filter(project_releases::is_stage.eq(false))
+            .select(project_releases::id)
+            .first(conn)
+            .optional()?;
+        if let Some(rid) = release_ok {
+            load_units_from_release_metadata(conn, project_id, rid)?
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
+
+    let n = full_unit_ids.len();
+    let mut out = vec![None; n];
+    let mut rows_for_latest: Vec<ProjectUnitRow> = Vec::new();
+    let mut pending: Vec<usize> = Vec::new();
+
+    for (i, full_id) in full_unit_ids.iter().enumerate() {
+        let path: UnitPath = match parse_unit_path(full_id) {
+            Ok(p) => p,
+            Err(_) => {
+                return Ok((vec![], Some(full_id.clone())));
+            }
+        };
+        let parts: Vec<&str> = full_id.split('.').filter(|p| !p.is_empty()).collect();
+        let rev: i32 = match parts.get(4).and_then(|s| s.parse().ok()) {
+            Some(r) if r >= 1 => r,
+            _ => {
+                return Ok((vec![], Some(full_id.clone())));
+            }
+        };
+
+        if rev <= 1 {
+            continue;
+        }
+
+        let prev_id = compose_unit_id(
+            &path.context_slug,
+            &path.module_slug,
+            path.unit_type.as_slug(),
+            &path.unit_name_slug,
+            rev - 1,
+        );
+
+        let prev_row: Option<ProjectUnitRow> = project_units::table
+            .filter(project_units::project_id.eq(project_id))
+            .filter(project_units::chat_session_id.eq(chat_session_id))
+            .filter(project_units::id.eq(&prev_id))
+            .select(ProjectUnitRow::as_select())
+            .first(conn)
+            .optional()?;
+
+        if let Some(row) = prev_row {
+            pending.push(i);
+            rows_for_latest.push(row);
+            continue;
+        }
+
+        if let Some(row) = pick_baseline_unit_row_for_id(
+            &baseline_units,
+            &prev_id,
+            chat_session_id,
+        ) {
+            pending.push(i);
+            rows_for_latest.push(row);
+            continue;
+        }
+
+        return Ok((vec![], Some(full_id.clone())));
+    }
+
+    if rows_for_latest.is_empty() {
+        return Ok((out, None));
+    }
+
+    let with_latest = project_units_with_latest_revision(conn, project_id, rows_for_latest)?;
+    for (out_idx, resp) in pending.into_iter().zip(with_latest) {
+        out[out_idx] = Some(resp);
+    }
+
+    Ok((out, None))
 }

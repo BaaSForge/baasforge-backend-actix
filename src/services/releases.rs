@@ -4,13 +4,16 @@
 //! copies `units_metadata` (and session linkage) from that row. Unit diffs and merges run only when
 //! the stage release is created—not again at production time.
 use crate::database::PooledConn;
+use crate::libs::unit_slug::{compose_unit_id, parse_unit_path};
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageResponse, ChatMessageType};
 use crate::models::projects::{
     PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectUnitResponse,
-    ProjectUnitType,
+    ProjectUnitRow, ProjectUnitType,
 };
 use crate::schema::{chat_messages, chat_sessions, project_releases, project_runtimes};
-use crate::services::chat_worker::db::{load_project_units_by_keys, load_units_from_latest_production_metadata};
+use crate::services::chat_worker::db::{
+    load_project_units_by_keys, load_units_from_latest_production_metadata, project_units_with_latest_revision,
+};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::Integer;
@@ -133,6 +136,114 @@ pub fn project_unit_refs_from_responses(units: &[ProjectUnitResponse]) -> Vec<Re
             unit_id: u.id.clone(),
         })
         .collect()
+}
+
+fn loaded_unit_responses_with_id<'a>(
+    loaded: &'a [ProjectUnitResponse],
+    unit_id: &str,
+) -> Vec<&'a ProjectUnitResponse> {
+    loaded.iter().filter(|u| u.id == unit_id).collect()
+}
+
+fn pick_loaded_unit_response_for_id(
+    loaded: &[ProjectUnitResponse],
+    unit_id: &str,
+    prefer_chat_session_id: Uuid,
+) -> Option<ProjectUnitResponse> {
+    let cand = loaded_unit_responses_with_id(loaded, unit_id);
+    match cand.len() {
+        0 => None,
+        1 => Some((*cand[0]).clone()),
+        _ => {
+            let same: Vec<_> = cand
+                .iter()
+                .copied()
+                .filter(|u| u.chat_session_id == prefer_chat_session_id)
+                .collect();
+            if same.len() == 1 {
+                Some(same[0].clone())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+pub fn load_unit_previous_revisions_for_release(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    release: &ProjectReleaseResponse,
+    full_unit_ids: &[String],
+) -> Result<(Vec<Option<ProjectUnitResponse>>, Option<String>), diesel::result::Error> {
+    if full_unit_ids.is_empty() {
+        return Ok((vec![], None));
+    }
+
+    let Some(meta) = release.units_metadata.as_ref() else {
+        return Ok((vec![], Some(full_unit_ids[0].clone())));
+    };
+
+    let new_loaded = combined_rows_from_unit_refs(conn, project_id, &meta.new_unit_refs)?;
+    let prev_loaded = combined_rows_from_unit_refs(conn, project_id, &meta.previous_unit_refs)?;
+
+    let n = full_unit_ids.len();
+    let mut out = vec![None; n];
+    let mut rows_for_latest: Vec<ProjectUnitRow> = Vec::new();
+    let mut pending: Vec<usize> = Vec::new();
+
+    for (i, full_id) in full_unit_ids.iter().enumerate() {
+        let new_matches = loaded_unit_responses_with_id(&new_loaded, full_id);
+        if new_matches.len() != 1 {
+            return Ok((vec![], Some(full_id.clone())));
+        }
+        let anchor = new_matches[0];
+
+        let path = match parse_unit_path(full_id) {
+            Ok(p) => p,
+            Err(_) => {
+                return Ok((vec![], Some(full_id.clone())));
+            }
+        };
+        let parts: Vec<&str> = full_id.split('.').filter(|p| !p.is_empty()).collect();
+        let rev: i32 = match parts.get(4).and_then(|s| s.parse().ok()) {
+            Some(r) if r >= 1 => r,
+            _ => {
+                return Ok((vec![], Some(full_id.clone())));
+            }
+        };
+
+        if rev <= 1 {
+            continue;
+        }
+
+        let prev_id = compose_unit_id(
+            &path.context_slug,
+            &path.module_slug,
+            path.unit_type.as_slug(),
+            &path.unit_name_slug,
+            rev - 1,
+        );
+
+        if let Some(prev) = pick_loaded_unit_response_for_id(
+            &prev_loaded,
+            &prev_id,
+            anchor.chat_session_id,
+        ) {
+            pending.push(i);
+            rows_for_latest.push(prev.row.clone());
+        }
+    }
+
+    if rows_for_latest.is_empty() {
+        return Ok((out, None));
+    }
+
+    let with_latest = project_units_with_latest_revision(conn, project_id, rows_for_latest)?;
+    for (out_idx, resp) in pending.into_iter().zip(with_latest) {
+        out[out_idx] = Some(resp);
+    }
+
+    Ok((out, None))
 }
 
 struct ReleaseUnitDiff {

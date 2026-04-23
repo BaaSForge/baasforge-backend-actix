@@ -174,6 +174,7 @@ impl From<ProjectUnitResponseDe> for ProjectUnitResponse {
 /// or `POST .../units-by-ids` to keep the stored revision row but fill `latest_revision`.
 /// `POST .../unit-latest-revisions-by-ids` returns only the max `revision` per unit path without loading full rows.
 /// `POST .../unit-pre-chat-base-by-paths` returns the row per path from the session’s baseline production release combined snapshot.
+/// `POST .../chat-sessions/.../unit-previous-by-full-ids` returns the prior revision per full unit id (session row first, else baseline snapshot); the current id need not still exist (e.g. after reject). **404** only when `revision > 1` and that prior revision is missing from both places.
 ///
 /// JSON is a single flat object (`row` fields + `latest_revision`, optional `is_draft`, optional `is_rejected` on
 /// reject-controller `unit_changes`). Use [`Deref`] to access row fields as `unit.revision`, `unit.context_slug`, etc.
@@ -253,6 +254,7 @@ pub struct ReleaseUnitRef {
 }
 
 /// JSON stored in `project_releases.units_metadata` for stage/production releases from this API.
+/// `previousUnitIDs` is the full combined snapshot **before** this release; `POST .../releases/{release_id}/unit-previous-by-full-ids` resolves parents of `newUnitIDs` rows by matching the prior revision id inside that snapshot (see [`crate::services::releases::load_unit_previous_revisions_for_release`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseUnitsMetadata {

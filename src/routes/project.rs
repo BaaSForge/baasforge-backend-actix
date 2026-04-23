@@ -1,5 +1,6 @@
 use crate::database;
 use crate::libs::api_response::api_error;
+use crate::libs::unit_slug::validate_full_unit_id_for_tool;
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
@@ -10,7 +11,8 @@ use crate::models::projects::{
 };
 use crate::services::releases::{
     attach_base_production_releases, attach_is_draft_flags_from_latest_production,
-    project_release_id_for_revision_lane, ProjectReleaseRevisionLookup,
+    load_unit_previous_revisions_for_release, project_release_id_for_revision_lane,
+    ProjectReleaseRevisionLookup,
 };
 use crate::services::chat_worker::db::{
     list_distinct_context_slugs_from_units, load_project_units_by_keys,
@@ -1290,6 +1292,108 @@ pub async fn handle_list_project_release_units_all(
             "page": page,
             "page_size": page_size,
         }),
+    ))
+}
+
+const MAX_RELEASE_UNIT_PREVIOUS_BY_IDS: usize = 100;
+
+#[derive(Debug, Deserialize)]
+pub struct ReleaseUnitPreviousByFullIdsBody {
+    pub unit_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ReleaseUnitPreviousByFullIdsResponse {
+    units: Vec<Option<ProjectUnitResponse>>,
+}
+
+enum ReleaseUnitPreviousLookupErr {
+    ReleaseNotFound,
+    UnitNotInReleaseNewSet(String),
+}
+
+pub async fn handle_release_unit_previous_by_full_ids(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<ReleaseUnitPreviousByFullIdsBody>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to resolve release unit previous revisions");
+
+    let (project_id, release_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+    let unit_ids = &body.unit_ids;
+
+    if unit_ids.len() > MAX_RELEASE_UNIT_PREVIOUS_BY_IDS {
+        return HttpResponse::BadRequest().json(api_error(
+            "Too many unit ids in one request",
+            json!({ "max": MAX_RELEASE_UNIT_PREVIOUS_BY_IDS }),
+        ));
+    }
+
+    for id in unit_ids {
+        if let Err(msg) = validate_full_unit_id_for_tool(id) {
+            return HttpResponse::BadRequest().json(api_error(
+                "Invalid full unit id",
+                json!({ "unit_id": id, "detail": msg }),
+            ));
+        }
+    }
+
+    let response = match database::block_on_db(&context.pool, {
+        let unit_ids = unit_ids.clone();
+        move |conn| {
+            let release: Option<ProjectReleaseResponse> = project_releases::table
+                .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
+                .filter(projects::owner_user_id.eq(user_id))
+                .filter(project_releases::project_id.eq(project_id))
+                .filter(project_releases::id.eq(release_id))
+                .select(ProjectReleaseResponse::as_select())
+                .first(conn)
+                .optional()?;
+
+            let Some(release) = release else {
+                return Ok(Err(ReleaseUnitPreviousLookupErr::ReleaseNotFound));
+            };
+
+            let (units, missing) =
+                load_unit_previous_revisions_for_release(conn, project_id, &release, &unit_ids)?;
+            if let Some(id) = missing {
+                return Ok(Err(ReleaseUnitPreviousLookupErr::UnitNotInReleaseNewSet(id)));
+            }
+            Ok(Ok(ReleaseUnitPreviousByFullIdsResponse { units }))
+        }
+    })
+    .await
+    {
+        Ok(Ok(response)) => response,
+        Ok(Err(ReleaseUnitPreviousLookupErr::ReleaseNotFound)) => {
+            return HttpResponse::NotFound().json(api_error("Project release not found", json!({})));
+        }
+        Ok(Err(ReleaseUnitPreviousLookupErr::UnitNotInReleaseNewSet(unit_id))) => {
+            return HttpResponse::NotFound().json(api_error(
+                "Unit id is not exactly one row in this release new units metadata",
+                json!({ "unit_id": unit_id }),
+            ));
+        }
+        Err(database::BlockingDbError::Query(e)) => {
+            log::error!("[handle_release_unit_previous_by_full_ids] DB error: {:?}", e);
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            log::error!("[handle_release_unit_previous_by_full_ids] pool/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Release previous unit revisions resolved successfully",
+        json!(response),
     ))
 }
 

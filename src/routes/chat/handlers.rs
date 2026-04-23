@@ -2,7 +2,7 @@ use crate::database;
 use crate::libs::api_response::{api_error, api_success};
 use crate::libs::ids::new_uuid;
 use crate::libs::string::truncate_by_words;
-use crate::libs::unit_slug::{parse_unit_path, UnitPath};
+use crate::libs::unit_slug::{parse_unit_path, validate_full_unit_id_for_tool, UnitPath};
 use crate::middlewares::auth::AccessPayload;
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessageCreateBody, ChatMessageInsert, ChatMessagePayload, ChatMessageResponse,
@@ -38,7 +38,8 @@ use crate::services::chat_worker::db::{
     load_last_not_disabled_release_controller_for_session,
     load_owned_unit_tips_for_chat_sessions,
     load_owned_releases_by_chat_session, load_pre_chat_base_units_by_unit_paths,
-    load_unit_tips_by_ids_for_chat_session, load_units_by_ids_for_chat_session,
+    load_unit_previous_revisions_by_full_ids_for_chat_session, load_unit_tips_by_ids_for_chat_session,
+    load_units_by_ids_for_chat_session,
     DraftUnitsAsOfReleaseControllerError, LastReleaseControllerNotDisabledLookup,
 };
 use crate::services::releases::{
@@ -1191,6 +1192,111 @@ pub async fn handle_unit_pre_chat_base_by_paths_for_chat_session(
 
     HttpResponse::Ok().json(api_success(
         "Pre-chat base unit rows resolved successfully",
+        json!(response),
+    ))
+}
+
+#[derive(Serialize)]
+struct UnitPreviousByFullIdsResponse {
+    units: Vec<Option<ProjectUnitResponse>>,
+}
+
+pub async fn handle_unit_previous_revisions_by_full_ids_for_chat_session(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<UnitTipsByIdsBody>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to resolve unit previous revisions");
+
+    let (project_id, session_id) = path.into_inner();
+    let user_id = access_payload.user_id;
+    let unit_ids = &body.unit_ids;
+
+    if unit_ids.len() > MAX_UNIT_TIPS_BY_IDS {
+        return HttpResponse::BadRequest().json(api_error(
+            "Too many unit ids in one request",
+            json!({ "max": MAX_UNIT_TIPS_BY_IDS }),
+        ));
+    }
+
+    for id in unit_ids {
+        if let Err(msg) = validate_full_unit_id_for_tool(id) {
+            return HttpResponse::BadRequest().json(api_error(
+                "Invalid full unit id",
+                json!({ "unit_id": id, "detail": msg }),
+            ));
+        }
+    }
+
+    let session_ok = match database::block_on_db(&context.pool, move |conn| {
+        chat_sessions::table
+            .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(chat_sessions::id.eq(session_id))
+            .filter(chat_sessions::project_id.eq(project_id))
+            .select(chat_sessions::id)
+            .first::<Uuid>(conn)
+            .optional()
+            .map(|o| o.is_some())
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::error!(
+                "[handle_unit_previous_revisions_by_full_ids_for_chat_session] session check pool/block error"
+            );
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    if !session_ok {
+        return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
+    }
+
+    let response = match database::block_on_db(&context.pool, {
+        let unit_ids = unit_ids.clone();
+        move |conn| {
+            let (units, missing) =
+                load_unit_previous_revisions_by_full_ids_for_chat_session(conn, project_id, session_id, &unit_ids)?;
+            if let Some(id) = missing {
+                return Ok(Err(id));
+            }
+            Ok(Ok(UnitPreviousByFullIdsResponse { units }))
+        }
+    })
+    .await
+    {
+        Ok(Ok(response)) => response,
+        Ok(Err(unit_id)) => {
+            return HttpResponse::NotFound().json(api_error(
+                "Previous unit revision not found in this chat session or its baseline production release",
+                json!({ "unit_id": unit_id }),
+            ));
+        }
+        Err(database::BlockingDbError::Query(_)) => {
+            tracing::error!(
+                "[handle_unit_previous_revisions_by_full_ids_for_chat_session] DB/block error"
+            );
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+        Err(_) => {
+            tracing::error!(
+                "[handle_unit_previous_revisions_by_full_ids_for_chat_session] pool/block error"
+            );
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Previous unit revisions resolved successfully",
         json!(response),
     ))
 }
