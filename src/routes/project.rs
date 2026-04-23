@@ -304,6 +304,12 @@ pub async fn handle_create_project(
                     },
                     ProjectRuntimeInsert {
                         project_id: project.id,
+                        environment: PlatformEnvironmentType::Stage,
+                        name: Some("Stage 2".to_string()),
+                        slug: Some("stage-2".to_string()),
+                    },
+                    ProjectRuntimeInsert {
+                        project_id: project.id,
                         environment: PlatformEnvironmentType::Prod,
                         name: Some("Production".to_string()),
                         slug: Some("prod".to_string()),
