@@ -4,10 +4,10 @@ use crate::libs::unit_slug::validate_full_unit_id_for_tool;
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
-    PlatformEnvironmentType, ProjectInsert, ProjectReleaseResponse, ProjectResponse,
-    ProjectRuntimeInsert, ProjectRuntimeResponse, ProjectReleaseWithBaseline,
-    ProjectRuntimeWithLiveReleaseApi, ProjectRuntimeWithLiveReleaseResponse, ProjectUnitResponse,
-    ProjectUnitType,
+    PlatformEnvironmentType, ProjectDetailResponse, ProjectInsert, ProjectReleaseResponse,
+    ProjectResponse, ProjectRuntimesBaseUrls, ProjectRuntimeInsert, ProjectRuntimeResponse,
+    ProjectReleaseWithBaseline, ProjectRuntimeWithLiveReleaseApi,
+    ProjectRuntimeWithLiveReleaseResponse, ProjectUnitResponse, ProjectUnitType,
 };
 use crate::services::releases::{
     attach_base_production_releases, attach_is_draft_flags_from_latest_production,
@@ -370,7 +370,12 @@ pub async fn handle_get_project(
         }
     };
 
-    HttpResponse::Ok().json(api_success("Project fetched successfully", json!(project)))
+    let payload = ProjectDetailResponse {
+        project,
+        runtimes: ProjectRuntimesBaseUrls::uniform(&context.settings.base_runtime_endpoint),
+    };
+
+    HttpResponse::Ok().json(api_success("Project fetched successfully", json!(payload)))
 }
 
 #[derive(Deserialize)]

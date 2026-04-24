@@ -109,7 +109,7 @@ pub struct Settings {
     /// Set `UNIT_REVIEWER_SIMULATE_FAILURE=true` in .env.local; absent or `false` disables it.
     pub unit_reviewer_simulate_failure: bool,
     /// Base URL of the runtime, no trailing slash (e.g. `https://runtime.example.com`).
-    /// Injected into agent prompts so the LLM can construct API unit trigger URLs.
+    /// Injected into agent prompts and returned per unit type in `GET .../platform/projects/{id}` (`runtimes`).
     pub base_runtime_endpoint: String,
 }
 

@@ -120,6 +120,33 @@ pub struct ProjectResponse {
     pub slug: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProjectRuntimesBaseUrls {
+    pub api: String,
+    pub workflow: String,
+    pub actor: String,
+    pub queue_worker: String,
+}
+
+impl ProjectRuntimesBaseUrls {
+    pub fn uniform(base: &str) -> Self {
+        let b = base.to_string();
+        Self {
+            api: b.clone(),
+            workflow: b.clone(),
+            actor: b.clone(),
+            queue_worker: b,
+        }
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub struct ProjectDetailResponse {
+    #[serde(flatten)]
+    pub project: ProjectResponse,
+    pub runtimes: ProjectRuntimesBaseUrls,
+}
+
 /// Row mapped 1:1 to `project_units` (Diesel query/returning). Shared as the inner payload of
 /// [`ProjectUnitResponse`] so API/tool JSON stays a flat object via `#[serde(flatten)]`.
 #[derive(Debug, Clone, PartialEq, Queryable, Selectable, Serialize, Deserialize)]
