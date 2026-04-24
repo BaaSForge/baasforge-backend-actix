@@ -45,11 +45,22 @@ pub fn extract_queue_worker_type_metadata(
         json_schema: Some(String::new()),
     };
 
-    QueueWorkerUnitMetadata {
+    let mut meta = QueueWorkerUnitMetadata {
         input: pair(extract_single_type("Input", code, &vfs)),
         output: pair(extract_single_type("Output", code, &vfs)),
         batch_output: pair(extract_single_type("BatchOutput", code, &vfs)),
-    }
+    };
+    enrich_metadata_json_schema(&mut meta);
+    meta
+}
+
+#[cfg(feature = "unit_technical_reviewer")]
+fn enrich_metadata_json_schema(meta: &mut QueueWorkerUnitMetadata) {
+    use crate::services::units::typescript_json_schema::enrich_type_script_json_schema_pair;
+
+    enrich_type_script_json_schema_pair(&mut meta.input, None);
+    enrich_type_script_json_schema_pair(&mut meta.output, None);
+    enrich_type_script_json_schema_pair(&mut meta.batch_output, None);
 }
 
 #[cfg(not(feature = "unit_technical_reviewer"))]

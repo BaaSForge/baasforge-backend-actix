@@ -82,10 +82,25 @@ pub fn extract_actor_type_metadata(
         }
     }
 
-    ActorUnitMetadata {
+    let mut meta = ActorUnitMetadata {
         state: pair(extract_single_type("State", code, &vfs)),
         handler_inputs,
         handler_outputs,
+    };
+    enrich_metadata_json_schema(&mut meta);
+    meta
+}
+
+#[cfg(feature = "unit_technical_reviewer")]
+fn enrich_metadata_json_schema(meta: &mut ActorUnitMetadata) {
+    use crate::services::units::typescript_json_schema::enrich_type_script_json_schema_pair;
+
+    enrich_type_script_json_schema_pair(&mut meta.state, None);
+    for p in meta.handler_inputs.values_mut() {
+        enrich_type_script_json_schema_pair(p, None);
+    }
+    for p in meta.handler_outputs.values_mut() {
+        enrich_type_script_json_schema_pair(p, None);
     }
 }
 

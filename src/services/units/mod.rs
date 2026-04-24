@@ -3,6 +3,7 @@ pub mod api;
 pub mod queue_worker;
 pub mod workflow;
 pub mod type_extractor;
+pub mod typescript_json_schema;
 
 use serde::{Deserialize, Serialize};
 

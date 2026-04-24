@@ -65,12 +65,23 @@ pub fn extract_api_type_metadata(
         json_schema: Some(String::new()),
     };
 
-    ApiUnitMetadata {
+    let mut meta = ApiUnitMetadata {
         method: None,
         request_body: pair(extract_single_type("RequestBody", code, &vfs)),
         request_params: pair(extract_single_type("QueryParams", code, &vfs)),
         response_body: pair(extract_single_type("ResponseBody", code, &vfs)),
-    }
+    };
+    enrich_metadata_json_schema(&mut meta);
+    meta
+}
+
+#[cfg(feature = "unit_technical_reviewer")]
+fn enrich_metadata_json_schema(meta: &mut ApiUnitMetadata) {
+    use crate::services::units::typescript_json_schema::enrich_type_script_json_schema_pair;
+
+    enrich_type_script_json_schema_pair(&mut meta.request_body, None);
+    enrich_type_script_json_schema_pair(&mut meta.request_params, None);
+    enrich_type_script_json_schema_pair(&mut meta.response_body, None);
 }
 
 #[cfg(not(feature = "unit_technical_reviewer"))]

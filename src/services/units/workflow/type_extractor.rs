@@ -74,11 +74,27 @@ pub fn extract_workflow_type_metadata(
         }
     }
 
-    WorkflowUnitMetadata {
+    let mut meta = WorkflowUnitMetadata {
         input: pair(extract_single_type("Input", code, &vfs)),
         output: pair(extract_single_type("Output", code, &vfs)),
         handler_inputs,
         handler_outputs,
+    };
+    enrich_metadata_json_schema(&mut meta);
+    meta
+}
+
+#[cfg(feature = "unit_technical_reviewer")]
+fn enrich_metadata_json_schema(meta: &mut WorkflowUnitMetadata) {
+    use crate::services::units::typescript_json_schema::enrich_type_script_json_schema_pair;
+
+    enrich_type_script_json_schema_pair(&mut meta.input, None);
+    enrich_type_script_json_schema_pair(&mut meta.output, None);
+    for p in meta.handler_inputs.values_mut() {
+        enrich_type_script_json_schema_pair(p, None);
+    }
+    for p in meta.handler_outputs.values_mut() {
+        enrich_type_script_json_schema_pair(p, None);
     }
 }
 
