@@ -399,6 +399,7 @@ fn reference_schema(tr: &oxc_ast::ast::TSTypeReference, aliases: &HashMap<&str, 
 #[cfg(all(test, feature = "unit_technical_reviewer"))]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn object_and_ref() {
@@ -407,5 +408,98 @@ mod tests {
         let v: Value = serde_json::from_str(&s).unwrap();
         assert!(v.get("$defs").is_some());
         assert_eq!(v["$ref"].as_str(), Some("#/$defs/Root___B"));
+    }
+
+    #[test]
+    fn imported_style_flattened_aliases_generate_refs() {
+        let ts = "type Expenses_Drafts_Actor_Draft_Report___State = { employeeId: string; lineItems: Array<{ itemId: string; description: string; amount: number; category: string }>; lastUpdatedAt: string; }; type Expenses_Drafts_Actor_Draft_Report___UpdateItemOutput = { updated: boolean; draft: Expenses_Drafts_Actor_Draft_Report___State }; type Root___RequestBody = Expenses_Drafts_Actor_Draft_Report___UpdateItemOutput;";
+        let s = typescript_declarations_to_json_schema(ts, "Root___RequestBody").unwrap();
+        let v: Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["$ref"].as_str(), Some("#/$defs/Root___RequestBody"));
+        assert_eq!(
+            v["$defs"]["Root___RequestBody"]["$ref"].as_str(),
+            Some("#/$defs/Expenses_Drafts_Actor_Draft_Report___UpdateItemOutput")
+        );
+        assert_eq!(
+            v["$defs"]["Expenses_Drafts_Actor_Draft_Report___UpdateItemOutput"]["properties"]["draft"]
+                ["$ref"]
+                .as_str(),
+            Some("#/$defs/Expenses_Drafts_Actor_Draft_Report___State")
+        );
+        assert_eq!(
+            v["$defs"]["Expenses_Drafts_Actor_Draft_Report___State"]["properties"]["lineItems"]["items"]
+                ["type"]
+                .as_str(),
+            Some("object")
+        );
+    }
+
+    #[test]
+    fn utility_types_record_partial_and_alias_partial() {
+        let ts = "type Root___Base = { id: string; amount: number }; type Root___Map = Record<string, Root___Base>; type Root___InlinePartial = Partial<{ a: string; b: number }>; type Root___AliasPartial = Partial<Root___Base>; type Root___Request = { map: Root___Map; inline: Root___InlinePartial; aliasPartial: Root___AliasPartial };";
+        let s = typescript_declarations_to_json_schema(ts, "Root___Request").unwrap();
+        let v: Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(
+            v["$defs"]["Root___Map"]["additionalProperties"]["$ref"].as_str(),
+            Some("#/$defs/Root___Base")
+        );
+        assert!(
+            v["$defs"]["Root___InlinePartial"]["properties"]["a"]["anyOf"]
+                .as_array()
+                .is_some()
+        );
+        assert!(
+            v["$defs"]["Root___InlinePartial"].get("required").is_none()
+        );
+        assert_eq!(
+            v["$defs"]["Root___AliasPartial"]["allOf"][0]["$ref"].as_str(),
+            Some("#/$defs/Root___Base")
+        );
+    }
+
+    #[test]
+    fn tuple_union_intersection_and_index_signature_shape() {
+        let ts = "type Root___Tuple = [string, number?, ...boolean[]]; type Root___Extra = { c: boolean }; type Root___Obj = { a: string; b?: number } & Root___Extra; type Root___WithIndex = { fixed: string; [k: string]: number }; type Root___Request = { tuple: Root___Tuple; mixed: string | number | null; obj: Root___Obj; indexed: Root___WithIndex };";
+        let s = typescript_declarations_to_json_schema(ts, "Root___Request").unwrap();
+        let v: Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(
+            v["$defs"]["Root___Tuple"]["type"].as_str(),
+            Some("array")
+        );
+        assert_eq!(
+            v["$defs"]["Root___Tuple"]["prefixItems"]
+                .as_array()
+                .map(|x| x.len()),
+            Some(3)
+        );
+        assert!(
+            v["$defs"]["Root___Request"]["properties"]["mixed"]["anyOf"]
+                .as_array()
+                .map(|x| x.len())
+                .unwrap_or(0)
+                >= 2
+        );
+        assert_eq!(
+            v["$defs"]["Root___Obj"]["allOf"]
+                .as_array()
+                .map(|x| x.len()),
+            Some(2)
+        );
+        assert_eq!(
+            v["$defs"]["Root___WithIndex"]["additionalProperties"]["type"].as_str(),
+            Some("number")
+        );
+    }
+
+    #[test]
+    fn promise_alias_is_unwrapped_and_missing_root_returns_none() {
+        let ts = "type Root___Payload = { ok: true; count: number }; type Root___Result = Promise<Root___Payload>;";
+        let s = typescript_declarations_to_json_schema(ts, "Root___Result").unwrap();
+        let v: Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(
+            v["$defs"]["Root___Result"]["$ref"].as_str(),
+            Some("#/$defs/Root___Payload")
+        );
+        assert!(typescript_declarations_to_json_schema(ts, "Root___Missing").is_none());
     }
 }
