@@ -103,6 +103,10 @@ fn build_vfs(code: &str, units: &[ProjectUnitResponse]) -> HashMap<String, Strin
             "noUncheckedIndexedAccess": true,
             "exactOptionalPropertyTypes": true,
 
+            "verbatimModuleSyntax": true,
+            "noUncheckedSideEffectImports": true,
+            "erasableSyntaxOnly": true,
+
             "noUnusedLocals": true,
             "noUnusedParameters": true,
             "noImplicitReturns": true,
