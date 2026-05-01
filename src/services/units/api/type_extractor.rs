@@ -67,6 +67,7 @@ pub fn extract_api_type_metadata(
 
     let mut meta = ApiUnitMetadata {
         method: None,
+        timeout_seconds: None,
         request_body: pair(extract_single_type("RequestBody", code, &vfs)),
         request_params: pair(extract_single_type("QueryParams", code, &vfs)),
         response_body: pair(extract_single_type("ResponseBody", code, &vfs)),

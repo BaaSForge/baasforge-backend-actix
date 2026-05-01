@@ -128,6 +128,7 @@ pub async fn process_create_unit_rule_check(
             UnitMetadataBuildInput {
                 code: &payload.args.code,
                 api_method: payload.args.api_method.clone(),
+                api_timeout_seconds: payload.args.api_timeout_seconds,
             },
         )
         .await;

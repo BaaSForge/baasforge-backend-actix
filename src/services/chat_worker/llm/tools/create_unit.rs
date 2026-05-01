@@ -79,10 +79,16 @@ struct CreateUnitLlmArgs {
     code: String,
     #[schemars(description = units_definitions::UNIT_TYPE_ARG_DESCRIPTION)]
     unit_type: String,
-    /// HTTP method for API units (GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD).
-    /// Only set this when `unit_type` is `api`. Omit for all other unit types.
+    #[schemars(
+        description = "HTTP method for API units (GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD). Only set when unit_type is api; omit for all other unit types."
+    )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     api_method: Option<HttpMethod>,
+    #[schemars(
+        description = "Optional timeout in seconds for API units (handler execution limit). Only when unit_type is api; omit for other kinds or for platform default."
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_timeout_seconds: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -95,6 +101,8 @@ pub struct ToolCreateUnitArgs {
     pub unit_type: ProjectUnitType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_method: Option<HttpMethod>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_timeout_seconds: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -149,6 +157,7 @@ pub fn payload_from_args(
         code: raw.code,
         unit_type,
         api_method: raw.api_method,
+        api_timeout_seconds: raw.api_timeout_seconds,
     };
     Ok(ChatMessagePayload::ToolCreateUnit(ToolCreateUnitPayload {
         args,
@@ -180,6 +189,11 @@ fn params_schema() -> Value {
                 "type": "string",
                 "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
                 "description": "HTTP method for API units. Only set this when unit_type is api. Omit for all other unit types."
+            },
+            "api_timeout_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional timeout in seconds for API units (how long the handler may run). Only set when unit_type is api. Omit to use the platform default."
             }
         },
         "required": ["context_slug", "module_slug", "unit_name_slug", "explanation", "code", "unit_type"]

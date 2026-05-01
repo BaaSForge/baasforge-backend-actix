@@ -44,11 +44,16 @@ struct ModifyUnitLlmArgs {
     explanation: String,
     #[schemars(description = ARG_CODE_DESCRIPTION)]
     code: String,
-    /// HTTP method for API units (GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD).
-    /// Only set when modifying an `api` unit and you want to change its HTTP method.
-    /// Omit to keep the existing method unchanged.
+    #[schemars(
+        description = "HTTP method for API units (GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD). Only when modifying an api unit to change the method; omit to leave unchanged."
+    )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     api_method: Option<HttpMethod>,
+    #[schemars(
+        description = "Optional timeout in seconds for API units. Only when modifying an api unit; omit to leave timeout unchanged."
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_timeout_seconds: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -58,6 +63,8 @@ pub struct ToolModifyUnitArgs {
     pub code: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_method: Option<HttpMethod>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_timeout_seconds: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -98,6 +105,7 @@ pub fn payload_from_args(
         explanation: raw.explanation,
         code: raw.code,
         api_method: raw.api_method,
+        api_timeout_seconds: raw.api_timeout_seconds,
     };
     Ok(ChatMessagePayload::ToolModifyUnit(ToolModifyUnitPayload {
         args,
@@ -122,6 +130,11 @@ fn params_schema() -> Value {
                 "type": "string",
                 "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
                 "description": "HTTP method for API units. Only set when modifying an api unit and you want to change its HTTP method. Omit to keep the existing method unchanged."
+            },
+            "api_timeout_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional timeout in seconds for API units. Only set when modifying an api unit to change the timeout. Omit to keep the existing value."
             }
         },
         "required": ["unit_id", "explanation", "code"]

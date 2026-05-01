@@ -115,6 +115,8 @@ pub struct UnitMetadataBuildInput<'a> {
     pub code: &'a str,
     /// HTTP method — relevant only for `Api` units.
     pub api_method: Option<HttpMethod>,
+    /// Request handling timeout in seconds — relevant only for `Api` units.
+    pub api_timeout_seconds: Option<u32>,
 }
 
 /// Build the persisted `UnitMetadata` for a unit after all checks pass.
@@ -138,6 +140,7 @@ pub async fn build_unit_metadata(
                 session_id,
                 input.code,
                 input.api_method,
+                input.api_timeout_seconds,
             )
             .await
         }
