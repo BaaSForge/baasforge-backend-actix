@@ -8,6 +8,7 @@ We use several specialized agents in chat, each with a distinct role:
 | **Current Architecture Analyzer** | Inspects and explains the existing system (structure, dependencies, behavior). |
 | **Solution Analyzer** | Evaluates approaches, trade-offs, and fit with constraints before implementation. |
 | **Programmer** | Implements or edits code according to the agreed plan. |
+| **Observability Analyzer** | Reads traces/logs/symptoms, pulls live unit definitions via the unit loader, and returns diagnostics (ranked hypotheses, evidence, next checks). |
 
 ## Why we split work across agents
 

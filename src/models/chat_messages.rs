@@ -9,10 +9,10 @@ use uuid::Uuid;
 
 use crate::models::projects::{ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectUnitResponse};
 use crate::services::chat_worker::llm::tools::{
-    ToolAnalyzeArchitecturePayload, ToolAnalyzeSolutionPayload, ToolCreateUnitPayload,
-    ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
+    ToolAnalyzeArchitecturePayload, ToolAnalyzeObservabilityPayload, ToolAnalyzeSolutionPayload,
+    ToolCreateUnitPayload, ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
     ToolFinishArchitectureAnalysisPayload, ToolFinishImplementationPayload,
-    ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload,
+    ToolFinishObservabilityAnalysisPayload, ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload,
     ToolListModulesForUnitContextsPayload, ToolListUnitContextsPayload, ToolModifyUnitPayload,
     ToolRemoveUnitPayload,
 };
@@ -144,6 +144,8 @@ pub enum ChatMessageType {
     ToolFinishArchitectureAnalysis,
     ToolAnalyzeSolution,
     ToolFinishSolutionAnalysis,
+    ToolAnalyzeObservability,
+    ToolFinishObservabilityAnalysis,
     ToolImplementSolution,
     ToolFinishImplementation,
     ToolCreateUnit,
@@ -172,6 +174,7 @@ pub enum ChatAgentType {
     ArchitectureAnalyzer,
     SolutionAnalyzer,
     Developer,
+    ObservabilityAnalyzer,
 }
 
 /// Chat message body. Serialized to JSON without a type tag (`untagged`), so **never** deserialize
@@ -194,6 +197,8 @@ pub enum ChatMessagePayload {
     ToolFinishArchitectureAnalysis(ToolFinishArchitectureAnalysisPayload),
     ToolAnalyzeSolution(ToolAnalyzeSolutionPayload),
     ToolFinishSolutionAnalysis(ToolFinishSolutionAnalysisPayload),
+    ToolAnalyzeObservability(ToolAnalyzeObservabilityPayload),
+    ToolFinishObservabilityAnalysis(ToolFinishObservabilityAnalysisPayload),
     ToolImplementSolution(ToolImplementSolutionPayload),
     ToolFinishImplementation(ToolFinishImplementationPayload),
     ToolCreateUnit(ToolCreateUnitPayload),
@@ -217,6 +222,8 @@ impl ChatMessagePayload {
             ChatMessagePayload::ToolFinishArchitectureAnalysis(_) => "ToolFinishArchitectureAnalysis",
             ChatMessagePayload::ToolAnalyzeSolution(_) => "ToolAnalyzeSolution",
             ChatMessagePayload::ToolFinishSolutionAnalysis(_) => "ToolFinishSolutionAnalysis",
+            ChatMessagePayload::ToolAnalyzeObservability(_) => "ToolAnalyzeObservability",
+            ChatMessagePayload::ToolFinishObservabilityAnalysis(_) => "ToolFinishObservabilityAnalysis",
             ChatMessagePayload::ToolImplementSolution(_) => "ToolImplementSolution",
             ChatMessagePayload::ToolFinishImplementation(_) => "ToolFinishImplementation",
             ChatMessagePayload::ToolListUnitContexts(_) => "ToolListUnitContexts",
@@ -282,6 +289,14 @@ impl ChatMessagePayload {
             ChatMessageType::ToolFinishSolutionAnalysis => {
                 let p = serde_json::from_value::<ToolFinishSolutionAnalysisPayload>(v)?;
                 ChatMessagePayload::ToolFinishSolutionAnalysis(p)
+            }
+            ChatMessageType::ToolAnalyzeObservability => {
+                let p = serde_json::from_value::<ToolAnalyzeObservabilityPayload>(v)?;
+                ChatMessagePayload::ToolAnalyzeObservability(p)
+            }
+            ChatMessageType::ToolFinishObservabilityAnalysis => {
+                let p = serde_json::from_value::<ToolFinishObservabilityAnalysisPayload>(v)?;
+                ChatMessagePayload::ToolFinishObservabilityAnalysis(p)
             }
             ChatMessageType::ToolImplementSolution => {
                 let p = serde_json::from_value::<ToolImplementSolutionPayload>(v)?;

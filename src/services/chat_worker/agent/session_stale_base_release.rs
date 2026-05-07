@@ -11,7 +11,8 @@ use std::borrow::Cow;
 use uuid::Uuid;
 
 use super::{
-    architecture_analyzer, developer, planner, solution_analyzer, tool_names_for_agent,
+    architecture_analyzer, developer, observability_analyzer, planner, solution_analyzer,
+    tool_names_for_agent,
 };
 
 const PLANNER_STALE_BASE_APPENDIX: &str = r#"
@@ -38,6 +39,7 @@ pub fn system_prompt_for_agent(
         ChatAgentType::ArchitectureAnalyzer => *architecture_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
         ChatAgentType::SolutionAnalyzer => *solution_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
         ChatAgentType::Developer => *developer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
+        ChatAgentType::ObservabilityAnalyzer => *observability_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
     };
 
     let needs_trigger_url = matches!(agent, ChatAgentType::Planner | ChatAgentType::Developer);

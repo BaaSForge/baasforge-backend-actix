@@ -291,6 +291,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             agent,
                             ChatAgentType::ArchitectureAnalyzer
                                 | ChatAgentType::SolutionAnalyzer
+                                | ChatAgentType::ObservabilityAnalyzer
                                 | ChatAgentType::Developer
                         )
                         && matches!(

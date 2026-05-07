@@ -20,10 +20,12 @@
 //! mark the tool row failed and run [`maybe_complete_invoking_message`] so the parent AI message can unblock.
 
 pub mod analyze_architecture_tool;
+pub mod analyze_observability_tool;
 pub mod analyze_solution_tool;
 pub mod create_unit;
 pub mod finish_architecture_analysis;
 pub mod finish_implementation;
+pub mod finish_observability_analysis;
 pub mod finish_solution_analysis;
 pub mod implement_solution_tool;
 pub mod list_modules_for_unit_contexts;
@@ -35,10 +37,12 @@ pub mod remove_unit;
 
 /// Re-exported for use in [`crate::models::chat_messages::ChatMessagePayload`].
 pub use analyze_architecture_tool::ToolAnalyzeArchitecturePayload;
+pub use analyze_observability_tool::ToolAnalyzeObservabilityPayload;
 pub use analyze_solution_tool::ToolAnalyzeSolutionPayload;
 pub use create_unit::ToolCreateUnitPayload;
 pub use finish_architecture_analysis::ToolFinishArchitectureAnalysisPayload;
 pub use finish_implementation::ToolFinishImplementationPayload;
+pub use finish_observability_analysis::ToolFinishObservabilityAnalysisPayload;
 pub use finish_solution_analysis::ToolFinishSolutionAnalysisPayload;
 pub use implement_solution_tool::ToolImplementSolutionPayload;
 pub use list_modules_for_unit_contexts::ToolListModulesForUnitContextsPayload;
@@ -176,6 +180,16 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             finish_solution_analysis::payload_from_args,
         ),
         (
+            analyze_observability_tool::TOOL_NAME,
+            analyze_observability_tool::MESSAGE_TYPE,
+            analyze_observability_tool::payload_from_args,
+        ),
+        (
+            finish_observability_analysis::TOOL_NAME,
+            finish_observability_analysis::MESSAGE_TYPE,
+            finish_observability_analysis::payload_from_args,
+        ),
+        (
             implement_solution_tool::TOOL_NAME,
             implement_solution_tool::MESSAGE_TYPE,
             implement_solution_tool::payload_from_args,
@@ -226,7 +240,7 @@ fn tool_queue_registry_for_agent(
 /// by that AI Text message” (not the session root, not the tool’s own id). [`maybe_complete_invoking_message`]
 /// is later called with **that AI Text message’s id** to complete the turn once all those tool rows finish.
 ///
-/// Special case: async tools like [`analyze_architecture_tool`], [`analyze_solution_tool`], and [`implement_solution_tool`] publish a **separate** queue
+/// Special case: async tools like [`analyze_architecture_tool`], [`analyze_solution_tool`], [`analyze_observability_tool`], and [`implement_solution_tool`] publish a **separate** queue
 /// message for a sub-agent run; that message sets `invoking_message_id` to the **tool row** id so
 /// the sub-agent’s `Text` output is nested under the tool (see `ChatSessionQueueMessage` docs).
 /// `agent` is stored on the queue message so the worker can set it on the created message row.
@@ -400,6 +414,8 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
         finish_architecture_analysis::spec(),
         analyze_solution_tool::spec(),
         finish_solution_analysis::spec(),
+        analyze_observability_tool::spec(),
+        finish_observability_analysis::spec(),
         implement_solution_tool::spec(),
         finish_implementation::spec(),
         create_unit::spec(),
@@ -574,6 +590,8 @@ pub fn tool_message_type_skips_generic_invoker_completion(type_: &ChatMessageTyp
         ChatMessageType::ToolAnalyzeArchitecture | ChatMessageType::ToolFinishArchitectureAnalysis
             | ChatMessageType::ToolAnalyzeSolution
             | ChatMessageType::ToolFinishSolutionAnalysis
+            | ChatMessageType::ToolAnalyzeObservability
+            | ChatMessageType::ToolFinishObservabilityAnalysis
             | ChatMessageType::ToolImplementSolution
             | ChatMessageType::ToolFinishImplementation
             | ChatMessageType::ToolCreateUnit
@@ -650,6 +668,14 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                 (
                     finish_solution_analysis::MESSAGE_TYPE,
                     wrap_handler_with_payload(finish_solution_analysis::handler),
+                ),
+                (
+                    analyze_observability_tool::MESSAGE_TYPE,
+                    wrap_handler_with_payload(analyze_observability_tool::handler),
+                ),
+                (
+                    finish_observability_analysis::MESSAGE_TYPE,
+                    wrap_handler_with_payload(finish_observability_analysis::handler),
                 ),
                 (
                     implement_solution_tool::MESSAGE_TYPE,

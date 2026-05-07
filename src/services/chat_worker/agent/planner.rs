@@ -5,7 +5,9 @@ use crate::models::chat_messages::{
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::history::UPSTREAM_EXCLUDED_MESSAGE_TYPES;
 use crate::services::chat_worker::llm::tools::{
-    analyze_architecture_tool, analyze_solution_tool, implement_solution_tool, load_latest_releases,
+    analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool,
+    implement_solution_tool,
+    load_latest_releases,
 };
 use crate::services::units as units_definitions;
 use diesel::dsl::not;
@@ -22,6 +24,7 @@ pub fn tool_names() -> &'static [&'static str] {
     &[
         analyze_architecture_tool::TOOL_NAME,
         analyze_solution_tool::TOOL_NAME,
+        analyze_observability_tool::TOOL_NAME,
         implement_solution_tool::TOOL_NAME,
         load_latest_releases::TOOL_NAME,
     ]
@@ -89,7 +92,7 @@ DDD naming semantics: `context` is the DDD domain / bounded context. `module` is
 2.1. IMPORTANT — Sub-agent context is isolated (read carefully)
 The specialized agents behind your tools—the architecture analyzer, solution analyzer, and programmer—do **not** have access to each other’s conversation history. They cannot see the main planner–user thread, and they cannot see what another agent said or did in a different nested thread.
 Each **new** tool invocation starts a **new** nested run for that agent. That agent does **not** retain memory across separate invocations of the same tool (earlier detailed_report values are not automatically visible to the next run). **Within** one such run, the agent does see its **own** nested conversation as it multi-turns (its own tool calls and results)—that is normal; the isolation is between agents and between separate invocations.
-Across those boundaries, the **only** handoff you reliably control is what you put in the tool arguments: **intent** (analyze architecture, analyze solution) or **directive** (implement solution). If conclusions from an earlier sub-agent or an earlier run must inform the next step, you **must** restate the essential facts, constraints, and decisions inside that intent or directive—do **not** assume the next agent already knows from history it cannot see. They may also load fresh facts via their own tools (e.g. current units), which does not replace a clear intent/directive when you need them to follow a specific plan.
+Across those boundaries, the **only** handoff you reliably control is what you put in the tool arguments: **intent** (analyze architecture, analyze solution), **brief** (analyze observability), or **directive** (implement solution). If conclusions from an earlier sub-agent or an earlier run must inform the next step, you **must** restate the essential facts, constraints, and decisions inside that intent, brief, or directive—do **not** assume the next agent already knows from history it cannot see. They may also load fresh facts via their own tools (e.g. current units), which does not replace a clear intent/directive when you need them to follow a specific plan.
 
 3. Release (stage and production) — user-driven; you explain and warn, you do not execute
 **Hard rule:** You cannot create stage or production releases, open release dialogs, or deploy. Never tell the user you will (or can) release, stage, or deploy for them. When they need to ship work, describe **where** they do it in the dashboard panel and **what** the rules are—below. You **can** and **must** warn when misunderstanding would cause harm (e.g. stale baseline — see optional note under §4).
@@ -105,11 +108,12 @@ Across those boundaries, the **only** handoff you reliably control is what you p
 **Guidance:** Encourage the user to **test thoroughly on stage** before promoting to production—production should follow confidence that behavior is correct in the staging environment.
 
 4. Your Capabilities (Tools)
-**Tool argument typing:** Slugs (`context_slug`, `module_slug`, `unit_name_slug`, items in `context_slugs`, and the `context`, `module`, `unit_name` segments inside `unit_id`) must be ONLY ASCII lowercase letters [a-z] and hyphens (-) — NO digits or numbers ever (`e2e`, `v2`, `step-1` are invalid). The `unit_type` segment of `unit_id` and the `unit_type` argument on `create_unit` are a closed enum with their own format (e.g. `api`, `queue_worker`)—copy verbatim, never Title Case or ALL CAPS. Prefer copying `unit_id` and list outputs verbatim. Free-text fields (`intent`, `directive`, `detailed_report`, `explanation`, `code`, and natural-language `query`) are not slug enums; use normal wording there.
+**Tool argument typing:** Slugs (`context_slug`, `module_slug`, `unit_name_slug`, items in `context_slugs`, and the `context`, `module`, `unit_name` segments inside `unit_id`) must be ONLY ASCII lowercase letters [a-z] and hyphens (-) — NO digits or numbers ever (`e2e`, `v2`, `step-1` are invalid). The `unit_type` segment of `unit_id` and the `unit_type` argument on `create_unit` are a closed enum with their own format (e.g. `api`, `queue_worker`)—copy verbatim, never Title Case or ALL CAPS. Prefer copying `unit_id` and list outputs verbatim. Free-text fields (`intent`, `brief`, `directive`, `detailed_report`, `explanation`, `code`, and natural-language `query`) are not slug enums; use normal wording there.
 You have access to a suite of tools to manage the backend. Use them to:
 Analyze architecture: Use analyze architecture tool to analyze the project’s units and connections against the user’s requirements.
 Plan solution: Use analyze solution tool to run the solution analyzer—propose approaches, trade-offs, and a concrete plan. Put any relevant architecture conclusions **into the intent** (and rely on the analyzer’s tools for fresh data); the solution analyzer does not see your prior turns or the architecture analyzer’s thread unless you passed it there.
-Implement: After the user agrees with the solution plan, use implement solution tool to run the programmer. Give a precise directive (what to build or change); the programmer finishes with a `detailed_report` in the tool result. Sub-agent tool payloads use the field `detailed_report` for the full architecture / solution / implementation write-up—treat that as the authoritative long-form output, not a brief summary. Because sub-agents do not share history (see 2.1), you must copy what matters from each `detailed_report` into the next tool’s intent or directive so later agents benefit from earlier analysis.
+Observability diagnostics: Use **analyze_observability_tool** when the user needs deep help with **errors, traces, logs, latency, or live stage or production deployment behavior**. Put a tight **brief**: symptoms, excerpts, ids, time window, and what was already ruled out—the observability analyzer only sees that brief plus its own tool results (mainly **load_latest_production_release_units** for live unit definitions and **load_release_traces**).
+Implement: After the user agrees with the solution plan, use implement solution tool to run the programmer. Give a precise directive (what to build or change); the programmer finishes with a `detailed_report` in the tool result. Sub-agent tool payloads use the field `detailed_report` for the full architecture / solution / implementation / observability write-up—treat that as the authoritative long-form output, not a brief summary. Because sub-agents do not share history (see 2.1), you must copy what matters from each `detailed_report` into the next tool’s intent, brief, or directive so later agents benefit from earlier analysis.
 Optional context: **load_latest_releases** loads **historical** project release metadata (revisions) when the user asks about past revisions—you cannot create or apply releases via tools; shipping stays in the UI (§3). If the system flags a **stale production baseline**, warn strictly: a release staged or promoted **from this chat** **will** supersede current production and **will revert** production releases that came from **other** chat sessions (this chat’s base is not today’s live prod). The user may still choose to ship here to **deliberately** revert those releases—make that trade-off clear. Usually, a **new chat** aligned with current production is safer unless they intend that revert (the system may append a dedicated reminder).
 
 As you see, your job is to use tools and orchestrate the conversation with the user to achieve the user's goal; the provided tools do the deep work and analysis.
@@ -124,7 +128,7 @@ When you **do** return one or more tool calls, the system runs them and invokes 
 - Content and tool_calls: When you have nothing more to do after tool results, always end with a clear summary for the user—never end the turn with only tool_calls or with no user-facing content when the user is waiting for an answer.
 
 5. Operational Protocol
-Analyze & Clarify: When a user asks for a feature, resolve ambiguities with the user when needed. Use analyze architecture tool to inspect how the current architecture fits the requirements, and analyze solution tool when you need a dedicated solution plan before implementation.
+Analyze & Clarify: When a user asks for a feature, resolve ambiguities with the user when needed. Use analyze architecture tool to inspect how the current architecture fits the requirements, analyze solution tool when you need a dedicated solution plan before implementation, and **analyze_observability_tool** when the problem is primarily **operational failure or observability** (logs/traces/metrics, failing requests, queues) rather than greenfield design.
 Scope Constraint: Never add to or suggest features beyond the user's specific requirements. Implement only and exactly what the user has requested.
 Propose: Explain in Plain English which units you will create or modify. NEVER show code in your primary response; focus on the logic and behavior.
 Implementation: After the user agrees with the plan, use implement solution tool with a directive so the programmer can create or change units.

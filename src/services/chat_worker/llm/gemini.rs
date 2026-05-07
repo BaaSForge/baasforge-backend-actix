@@ -25,10 +25,11 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::tools::{
-    self, analyze_architecture_tool, analyze_solution_tool, create_unit, finish_architecture_analysis,
-    finish_implementation, finish_solution_analysis, implement_solution_tool,
-    list_modules_for_unit_contexts, list_unit_contexts, load_latest_production_release_units,
-    load_latest_releases, modify_unit, remove_unit,
+    self, analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool, create_unit,
+    finish_architecture_analysis, finish_implementation, finish_observability_analysis,
+    finish_solution_analysis, implement_solution_tool, list_modules_for_unit_contexts,
+    list_unit_contexts, load_latest_production_release_units, load_latest_releases, modify_unit,
+    remove_unit,
 };
 use super::{BoxError, GeminiThinkingEnv};
 use serde_json::Value;
@@ -69,6 +70,14 @@ fn gemini_declaration_fns_by_name() -> &'static [(
         (
             finish_solution_analysis::TOOL_NAME,
             finish_solution_analysis::gemini_declaration,
+        ),
+        (
+            analyze_observability_tool::TOOL_NAME,
+            analyze_observability_tool::gemini_declaration,
+        ),
+        (
+            finish_observability_analysis::TOOL_NAME,
+            finish_observability_analysis::gemini_declaration,
         ),
         (
             implement_solution_tool::TOOL_NAME,

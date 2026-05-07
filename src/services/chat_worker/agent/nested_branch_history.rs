@@ -1,5 +1,5 @@
 //! Shared history loading for nested sub-agents whose conversation hangs under an async tool row
-//! (e.g. `ToolAnalyzeArchitecture`, `ToolAnalyzeSolution`, `ToolImplementSolution`).
+//! (e.g. `ToolAnalyzeArchitecture`, `ToolAnalyzeSolution`, `ToolAnalyzeObservability`, `ToolImplementSolution`).
 //!
 //! These subtrees are **not** visible to the Planner’s other messages or to other agents’ subtrees;
 //! each invocation is a separate branch. The Planner must put carry-over context in **intent** /

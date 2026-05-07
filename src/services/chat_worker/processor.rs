@@ -39,7 +39,7 @@ pub async fn process_one(
     agent: ChatAgentType,
     // Same as `ChatSessionQueueMessage::invoking_message_id`: parent for the new AI Text row (None = main
     // thread; Some = nested under that id). For [`ChatAgentType::ArchitectureAnalyzer`],
-    // [`ChatAgentType::SolutionAnalyzer`], and [`ChatAgentType::Developer`] that parent is the corresponding
+    // [`ChatAgentType::SolutionAnalyzer`], [`ChatAgentType::ObservabilityAnalyzer`], and [`ChatAgentType::Developer`] that parent is the corresponding
     // async tool row id — used as history root for nested-only context.
     queue_invoking_message_id: Option<Uuid>,
 ) -> Result<GenerateOutcome, Box<dyn std::error::Error + Send + Sync>> {

@@ -2,6 +2,7 @@ mod architecture_analyzer;
 mod developer;
 mod nested_branch_history;
 mod planner;
+mod observability_analyzer;
 mod session_stale_base_release;
 mod solution_analyzer;
 
@@ -24,12 +25,13 @@ pub fn tool_names_for_agent(agent: &ChatAgentType) -> &'static [&'static str] {
         ChatAgentType::ArchitectureAnalyzer => architecture_analyzer::tool_names(),
         ChatAgentType::SolutionAnalyzer => solution_analyzer::tool_names(),
         ChatAgentType::Developer => developer::tool_names(),
+        ChatAgentType::ObservabilityAnalyzer => observability_analyzer::tool_names(),
     }
 }
 
 /// Fourth argument meaning depends on agent. For [`ChatAgentType::ArchitectureAnalyzer`],
-/// [`ChatAgentType::SolutionAnalyzer`], and [`ChatAgentType::Developer`] it **must** be the DB id of the
-/// corresponding tool row (`ToolAnalyzeArchitecture` / `ToolAnalyzeSolution` / `ToolImplementSolution`,
+/// [`ChatAgentType::SolutionAnalyzer`], [`ChatAgentType::ObservabilityAnalyzer`], and [`ChatAgentType::Developer`] it **must** be the DB id of the
+/// corresponding tool row (`ToolAnalyzeArchitecture` / `ToolAnalyzeSolution` / `ToolAnalyzeObservability` / `ToolImplementSolution`,
 /// same as queue `invoking_message_id` for that job); history is only that nested subtree. For other agents,
 /// see each `load_history` (Planner: unused; etc.).
 ///
@@ -58,6 +60,9 @@ pub fn load_history_for_agent(
         }
         ChatAgentType::Developer => {
             developer::load_history(conn, session_id, thread_anchor_message_id)
+        }
+        ChatAgentType::ObservabilityAnalyzer => {
+            observability_analyzer::load_history(conn, session_id, thread_anchor_message_id)
         }
     }?;
     messages = filter_session_messages_for_upstream_llm(messages);
