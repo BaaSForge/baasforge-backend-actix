@@ -2,12 +2,12 @@ use crate::configs::Settings;
 use crate::database::{block_on_db_tokio, establish_pool};
 use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessagePayload, ChatMessageResponse,
-    ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType, TextPayload,
+    ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus,
+    ChatMessageType, ChatSessionRoleType, TextPayload,
 };
 use crate::routes::chat::message_queue::{
-    self as chat_message_queue, ChatSessionQueueMessage, chat_dead_letter_spec, chat_retry_policy,
-    parse_chat_routing_key, MAX_SUB_AGENT_STUCK_CONTINUATIONS,
+    self as chat_message_queue, ChatSessionQueueMessage, MAX_SUB_AGENT_STUCK_CONTINUATIONS,
+    chat_dead_letter_spec, chat_retry_policy, parse_chat_routing_key,
 };
 use crate::routes::ws::events::{
     ChatSessionMessageCreatedPayload, ChatSessionMessageStatusChangePayload, WsServerEvent,
@@ -20,11 +20,11 @@ use crate::services::chat_worker::generation_lifecycle;
 use crate::services::chat_worker::llm::tools::{
     ToolMessageContext, cascade_sub_agent_ai_text_failure_to_planner, spawn_tool_message_handler,
 };
-use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::chat_worker::llm::{GenerateOutcome, build_llm_client};
 use crate::services::chat_worker::processor::process_one;
-use crate::services::chat_worker::release_controller_box;
 use crate::services::chat_worker::reject_controller_box;
+use crate::services::chat_worker::release_controller_box;
+use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::message_queue::{
     create_shared_publisher, publish_to_dead_letter, publish_to_retry_delay,
 };
@@ -454,7 +454,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                             dl_e
                                         );
                                     }
-                                    if delivery.acker.ack(BasicAckOptions::default()).await.is_err()
+                                    if delivery
+                                        .acker
+                                        .ack(BasicAckOptions::default())
+                                        .await
+                                        .is_err()
                                     {
                                         tracing::warn!("Failed to ack delivery");
                                     }
@@ -465,10 +469,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         let payload_bytes = match serde_json::to_vec(&payload_for_retry) {
                             Ok(b) => b,
                             Err(ser_e) => {
-                                tracing::error!(
-                                    "Failed to serialize message for retry: {}",
-                                    ser_e
-                                );
+                                tracing::error!("Failed to serialize message for retry: {}", ser_e);
                                 set_message_failed_and_notify(
                                     &pool,
                                     &redis_conn,
@@ -481,7 +482,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                     &ser_e.to_string(),
                                 )
                                 .await;
-                                if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {
+                                if delivery
+                                    .acker
+                                    .ack(BasicAckOptions::default())
+                                    .await
+                                    .is_err()
+                                {
                                     tracing::warn!("Failed to ack delivery");
                                 }
                                 continue 'consumer;
@@ -515,7 +521,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
             }
 
-            if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {
+            if delivery
+                .acker
+                .ack(BasicAckOptions::default())
+                .await
+                .is_err()
+            {
                 tracing::warn!("Failed to ack delivery");
             }
         } else if payload.type_ == ChatMessageType::ReleaseControllerBox {
@@ -541,7 +552,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     e
                 );
             }
-            if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {
+            if delivery
+                .acker
+                .ack(BasicAckOptions::default())
+                .await
+                .is_err()
+            {
                 tracing::warn!("Failed to ack delivery");
             }
         } else if payload.type_ == ChatMessageType::RejectControllerBox {
@@ -566,7 +582,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     e
                 );
             }
-            if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {
+            if delivery
+                .acker
+                .ack(BasicAckOptions::default())
+                .await
+                .is_err()
+            {
                 tracing::warn!("Failed to ack delivery");
             }
         } else {

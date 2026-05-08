@@ -9,23 +9,23 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
 use crate::services::chat_worker::db::load_units_from_latest_production_metadata;
-use crate::services::units::{self as units_definitions, HttpMethod};
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::queue::{
-    publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
+    UnitReviewerMessageType, UnitReviewerQueueMessage, publish_reviewer_message,
 };
+use crate::services::units::{self as units_definitions, HttpMethod};
 use diesel::dsl::exists;
 use diesel::prelude::*;
 use diesel::select;
 use gemini_rust::tools::model::FunctionDeclaration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::{maybe_complete_invoking_message, BoxError, ToolSpec, UnitSubTaskStatus};
+use super::{BoxError, ToolSpec, UnitSubTaskStatus, maybe_complete_invoking_message};
 
 /// Description for the `explanation` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_EXPLANATION_DESCRIPTION: &str =
@@ -33,12 +33,9 @@ pub const ARG_EXPLANATION_DESCRIPTION: &str =
 /// Description for the `code` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_CODE_DESCRIPTION: &str =
     "Implementation for this unit in TypeScript (Node.js environment).";
-pub const ARG_CONTEXT_SLUG_DESCRIPTION: &str =
-    "Bounded context slug: ONLY English lowercase letters [a-z] and hyphen (-). NO digits or numbers. e.g. inventory, order-management. WRONG: e2e, v2-api.";
-pub const ARG_MODULE_SLUG_DESCRIPTION: &str =
-    "Module slug within the context: ONLY English lowercase letters [a-z] and hyphen (-). NO digits or numbers. e.g. stock-levels, user-profile. WRONG: stock-v2, module-1.";
-pub const ARG_UNIT_NAME_SLUG_DESCRIPTION: &str =
-    "Unit name slug describing what this unit does: ONLY English lowercase letters [a-z] and hyphen (-). NO digits or numbers ever. e.g. adjust-levels, get-user. WRONG: e2e-test, run-v2, step-1.";
+pub const ARG_CONTEXT_SLUG_DESCRIPTION: &str = "Bounded context slug: ONLY English lowercase letters [a-z] and hyphen (-). NO digits or numbers. e.g. inventory, order-management. WRONG: e2e, v2-api.";
+pub const ARG_MODULE_SLUG_DESCRIPTION: &str = "Module slug within the context: ONLY English lowercase letters [a-z] and hyphen (-). NO digits or numbers. e.g. stock-levels, user-profile. WRONG: stock-v2, module-1.";
+pub const ARG_UNIT_NAME_SLUG_DESCRIPTION: &str = "Unit name slug describing what this unit does: ONLY English lowercase letters [a-z] and hyphen (-). NO digits or numbers ever. e.g. adjust-levels, get-user. WRONG: e2e-test, run-v2, step-1.";
 
 fn duplicate_unit_session_error_message(
     context_slug: &str,
@@ -262,11 +259,20 @@ pub async fn handler(
     let tool_name = Some(TOOL_NAME.to_string());
 
     let slug_error: Option<String> = if !is_valid_slug(&args.context_slug) {
-        Some("create_unit: context_slug must be only English lowercase letters and hyphens (-)".to_string())
+        Some(
+            "create_unit: context_slug must be only English lowercase letters and hyphens (-)"
+                .to_string(),
+        )
     } else if !is_valid_slug(&args.module_slug) {
-        Some("create_unit: module_slug must be only English lowercase letters and hyphens (-)".to_string())
+        Some(
+            "create_unit: module_slug must be only English lowercase letters and hyphens (-)"
+                .to_string(),
+        )
     } else if !is_valid_slug(&args.unit_name_slug) {
-        Some("create_unit: unit_name_slug must be only English lowercase letters and hyphens (-)".to_string())
+        Some(
+            "create_unit: unit_name_slug must be only English lowercase letters and hyphens (-)"
+                .to_string(),
+        )
     } else {
         None
     };
@@ -362,8 +368,9 @@ pub async fn handler(
             tool_call_id,
             tool_name,
         };
-        let payload_value = serde_json::to_value(&full_payload)
-            .map_err(|e| -> BoxError { format!("serialize create_unit pre_check failure: {}", e).into() })?;
+        let payload_value = serde_json::to_value(&full_payload).map_err(|e| -> BoxError {
+            format!("serialize create_unit pre_check failure: {}", e).into()
+        })?;
         let updated_row = block_on_db_tokio(&pool, move |conn| {
             diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
                 .set((
@@ -394,7 +401,14 @@ pub async fn handler(
         // explicitly here because the message is now Completed and the LLM must continue.
         if let (Some(inv_id), Some(ref publisher)) = (invoking_id, rabbit_publisher.as_ref()) {
             maybe_complete_invoking_message(
-                &pool, &redis_conn, Some(publisher), inv_id, user_id, project_id, session_id, true,
+                &pool,
+                &redis_conn,
+                Some(publisher),
+                inv_id,
+                user_id,
+                project_id,
+                session_id,
+                true,
             )
             .await;
         }
@@ -417,8 +431,9 @@ pub async fn handler(
         tool_call_id,
         tool_name,
     };
-    let payload_value = serde_json::to_value(&partial_payload)
-        .map_err(|e| -> BoxError { format!("serialize create_unit partial payload: {}", e).into() })?;
+    let payload_value = serde_json::to_value(&partial_payload).map_err(|e| -> BoxError {
+        format!("serialize create_unit partial payload: {}", e).into()
+    })?;
     let updated_row = block_on_db_tokio(&pool, move |conn| {
         diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
             .set((

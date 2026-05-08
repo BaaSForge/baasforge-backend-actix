@@ -5,7 +5,8 @@
 use crate::database::PooledConn;
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageRow, ChatMessageType};
 use crate::models::projects::{
-    PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectRuntimeResponse,
+    PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline,
+    ProjectRuntimeResponse,
 };
 use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
@@ -14,11 +15,10 @@ use crate::schema::project_runtimes;
 use crate::schema::projects;
 use crate::services::chat_worker::db::load_chat_session_draft_units_before_message_cutoff;
 use crate::services::releases::{
-    combined_units_from_release_metadata, compute_new_units,
+    ReleaseUnitsMetadata, combined_units_from_release_metadata, compute_new_units,
     load_baseline_production_release_for_chat_session, load_latest_production_release_for_project,
     merge_combined_units, project_unit_refs_from_responses, release_brief_note_markdown,
-    release_notes_markdown,
-    revision_for_chat_release_controller, ReleaseUnitsMetadata,
+    release_notes_markdown, revision_for_chat_release_controller,
 };
 use diesel::prelude::*;
 use uuid::Uuid;
@@ -74,29 +74,35 @@ pub fn transaction_create_stage_release_from_controller(
             return Ok(Err(StageReleaseFromControllerError::NotReleaseController));
         }
 
-        let mut box_payload = match ChatMessagePayload::from_value(
-            &msg_row.type_,
-            msg_row.payload.clone(),
-        ) {
-            Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) => p,
-            Ok(None) => return Ok(Err(StageReleaseFromControllerError::ReleaseControllerPayloadMissing)),
-            Ok(Some(other)) => {
-                tracing::warn!(
-                    message_id = %message_id,
-                    variant = other.variant_label(),
-                    "release_controller_box row has unexpected payload variant"
-                );
-                return Ok(Err(StageReleaseFromControllerError::ReleaseControllerPayloadInvalid));
-            }
-            Err(e) => {
-                tracing::warn!(
-                    message_id = %message_id,
-                    error = %e,
-                    "release_controller_box payload deserialize failed"
-                );
-                return Ok(Err(StageReleaseFromControllerError::ReleaseControllerPayloadInvalid));
-            }
-        };
+        let mut box_payload =
+            match ChatMessagePayload::from_value(&msg_row.type_, msg_row.payload.clone()) {
+                Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) => p,
+                Ok(None) => {
+                    return Ok(Err(
+                        StageReleaseFromControllerError::ReleaseControllerPayloadMissing,
+                    ));
+                }
+                Ok(Some(other)) => {
+                    tracing::warn!(
+                        message_id = %message_id,
+                        variant = other.variant_label(),
+                        "release_controller_box row has unexpected payload variant"
+                    );
+                    return Ok(Err(
+                        StageReleaseFromControllerError::ReleaseControllerPayloadInvalid,
+                    ));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        message_id = %message_id,
+                        error = %e,
+                        "release_controller_box payload deserialize failed"
+                    );
+                    return Ok(Err(
+                        StageReleaseFromControllerError::ReleaseControllerPayloadInvalid,
+                    ));
+                }
+            };
 
         let stage_rt: Option<ProjectRuntimeResponse> = project_runtimes::table
             .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
@@ -122,13 +128,19 @@ pub fn transaction_create_stage_release_from_controller(
             _ => None,
         };
         // Merge against the **current** live production snapshot (not the session baseline).
-        let previous_combined = match load_latest_production_release_for_project(conn, project_id)? {
+        let previous_combined = match load_latest_production_release_for_project(conn, project_id)?
+        {
             Some(r) if r.units_metadata.is_some() => {
-                match combined_units_from_release_metadata(conn, project_id, r.units_metadata.as_ref())
-                {
+                match combined_units_from_release_metadata(
+                    conn,
+                    project_id,
+                    r.units_metadata.as_ref(),
+                ) {
                     Ok(u) => u,
                     Err(e) => {
-                        return Ok(Err(StageReleaseFromControllerError::Metadata(e.to_string())));
+                        return Ok(Err(StageReleaseFromControllerError::Metadata(
+                            e.to_string(),
+                        )));
                     }
                 }
             }
@@ -153,7 +165,8 @@ pub fn transaction_create_stage_release_from_controller(
 
         let notes = release_notes_markdown(&previous_combined, &combined_units);
         let brief_note = release_brief_note_markdown(&previous_combined, &combined_units);
-        let revision = revision_for_chat_release_controller(conn, project_id, session_id, message_id, true)?;
+        let revision =
+            revision_for_chat_release_controller(conn, project_id, session_id, message_id, true)?;
         let inserted: ProjectReleaseResponse = diesel::insert_into(project_releases::table)
             .values((
                 project_releases::project_id.eq(project_id),
@@ -182,15 +195,18 @@ pub fn transaction_create_stage_release_from_controller(
         });
         let payload_json = match serde_json::to_value(&box_payload) {
             Ok(v) => v,
-            Err(e) => return Ok(Err(StageReleaseFromControllerError::Metadata(e.to_string()))),
+            Err(e) => {
+                return Ok(Err(StageReleaseFromControllerError::Metadata(
+                    e.to_string(),
+                )));
+            }
         };
 
-        let updated_row = diesel::update(
-            chat_messages::table.filter(chat_messages::id.eq(message_id)),
-        )
-        .set(chat_messages::payload.eq(Some(payload_json)))
-        .returning(ChatMessageRow::as_returning())
-        .get_result(conn)?;
+        let updated_row =
+            diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+                .set(chat_messages::payload.eq(Some(payload_json)))
+                .returning(ChatMessageRow::as_returning())
+                .get_result(conn)?;
 
         Ok(Ok((inserted, updated_row, previous_stage_release_id)))
     })

@@ -3,7 +3,9 @@ use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageRow, ChatMessageType, ChatSessionRoleType,
 };
 use crate::models::projects::PlatformEnvironmentType;
-use crate::schema::{chat_messages, chat_sessions, project_releases, project_runtimes, project_units, projects};
+use crate::schema::{
+    chat_messages, chat_sessions, project_releases, project_runtimes, project_units, projects,
+};
 use diesel::prelude::*;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -58,10 +60,7 @@ pub fn truncate_session_from_user_message(
         let release_controllers_after_anchor: Vec<ChatMessageRow> = chat_messages::table
             .filter(chat_messages::chat_session_id.eq(session_id))
             .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
-            .filter(
-                chat_messages::created_at
-                    .gt(anchor.created_at),
-            )
+            .filter(chat_messages::created_at.gt(anchor.created_at))
             .select(ChatMessageRow::as_select())
             .load(conn)?;
 
@@ -93,7 +92,8 @@ pub fn truncate_session_from_user_message(
         let mut unit_ids: HashSet<String> = HashSet::new();
 
         for row in &to_delete {
-            let Ok(payload_opt) = ChatMessagePayload::from_value(&row.type_, row.payload.clone()) else {
+            let Ok(payload_opt) = ChatMessagePayload::from_value(&row.type_, row.payload.clone())
+            else {
                 continue;
             };
             let Some(payload) = payload_opt else {

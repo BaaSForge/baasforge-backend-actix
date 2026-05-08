@@ -30,7 +30,7 @@ fn main() {
     );
 
     for (rel_path, include_path) in &entries {
-        // Using {:?} automatically wraps the string in quotes. 
+        // Using {:?} automatically wraps the string in quotes.
         // We no longer need the raw string (r"") because we force forward slashes below.
         code.push_str(&format!(
             "    ({:?}, include_str!({:?})),\n",
@@ -50,12 +50,13 @@ fn collect_dts_files(base: &Path, dir: &Path, entries: &mut Vec<(String, String)
 
     for entry in read_dir.flatten() {
         let path = entry.path();
-        
+
         if path.is_dir() {
             collect_dts_files(base, &path, entries);
         } else {
             // Check if the filename ends with ".d.ts"
-            let is_dts = path.file_name()
+            let is_dts = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .map_or(false, |s| s.ends_with(".d.ts"));
 
@@ -65,14 +66,14 @@ fn collect_dts_files(base: &Path, dir: &Path, entries: &mut Vec<(String, String)
                 }
 
                 if let Ok(rel) = path.strip_prefix(base) {
-                    // Force forward slashes. `include_str!` handles forward slashes 
+                    // Force forward slashes. `include_str!` handles forward slashes
                     // perfectly on both Windows and Unix systems.
                     let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    
+
                     // Since `node_modules_files.rs` is a sibling to the `node_modules` directory,
                     // the relative path to include the file is just "node_modules/..."
                     let include_path = format!("node_modules/{}", rel_str);
-                    
+
                     entries.push((rel_str, include_path));
                 }
             }

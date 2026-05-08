@@ -1,7 +1,7 @@
 use crate::database::DbPool;
 use crate::models::projects::ProjectUnitResponse;
-use crate::services::units::api::metadata::TypeScriptJsonSchemaPair;
 use crate::services::units::actor::metadata::ActorUnitMetadata;
+use crate::services::units::api::metadata::TypeScriptJsonSchemaPair;
 
 #[cfg(feature = "unit_technical_reviewer")]
 pub async fn build_actor_type_meta(
@@ -35,10 +35,7 @@ pub async fn build_actor_type_meta(
 const INTERNAL_HANDLER_PREFIXES: &[&str] = &["OnAlarm", "OnDeadLetter"];
 
 #[cfg(feature = "unit_technical_reviewer")]
-pub fn extract_actor_type_metadata(
-    code: &str,
-    units: &[ProjectUnitResponse],
-) -> ActorUnitMetadata {
+pub fn extract_actor_type_metadata(code: &str, units: &[ProjectUnitResponse]) -> ActorUnitMetadata {
     use crate::services::units::type_extractor::{
         build_units_vfs, extract_single_type, get_exported_type_names_from_source,
     };

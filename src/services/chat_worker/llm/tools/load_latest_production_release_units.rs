@@ -33,8 +33,8 @@ use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent}
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
-use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::chat_worker::db::load_units_for_latest_production_release;
+use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
 use serde_json::{Value, json};
 use std::sync::Arc;

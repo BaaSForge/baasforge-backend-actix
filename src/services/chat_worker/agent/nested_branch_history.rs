@@ -21,9 +21,9 @@ use crate::models::chat_messages::{
     ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
 };
 use crate::schema::chat_messages;
+use diesel::OptionalExtension;
 use diesel::prelude::*;
 use diesel::result::Error;
-use diesel::OptionalExtension;
 use serde_json::Value;
 use std::collections::HashSet;
 use uuid::Uuid;

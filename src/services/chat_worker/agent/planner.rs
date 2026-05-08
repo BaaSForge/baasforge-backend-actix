@@ -6,8 +6,7 @@ use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::history::UPSTREAM_EXCLUDED_MESSAGE_TYPES;
 use crate::services::chat_worker::llm::tools::{
     analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool,
-    implement_solution_tool,
-    load_latest_releases,
+    implement_solution_tool, load_latest_releases,
 };
 use crate::services::units as units_definitions;
 use diesel::dsl::not;
@@ -41,19 +40,20 @@ pub fn load_history(
     let rows = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))
         .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
-        .filter(not(chat_messages::type_.eq_any(UPSTREAM_EXCLUDED_MESSAGE_TYPES)))
+        .filter(not(
+            chat_messages::type_.eq_any(UPSTREAM_EXCLUDED_MESSAGE_TYPES)
+        ))
         .filter(
-            chat_messages::role.eq(ChatSessionRoleType::User).or(
-                chat_messages::role.eq(ChatSessionRoleType::Ai).and(
+            chat_messages::role
+                .eq(ChatSessionRoleType::User)
+                .or(chat_messages::role.eq(ChatSessionRoleType::Ai).and(
                     chat_messages::agent
                         .eq(Some(ChatAgentType::Planner))
                         .or(chat_messages::agent.is_null()),
-                ),
-            ).or(
-                chat_messages::role
+                ))
+                .or(chat_messages::role
                     .eq(ChatSessionRoleType::System)
-                    .and(chat_messages::agent.is_null()),
-            ),
+                    .and(chat_messages::agent.is_null())),
         )
         .order(chat_messages::id.desc())
         .limit(FETCH_LIMIT)

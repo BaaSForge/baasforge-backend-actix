@@ -6,9 +6,9 @@ use crate::services::chat_worker::llm::tools::{
     finish_observability_analysis, load_latest_production_release_units,
 };
 use crate::services::units as units_definitions;
+use diesel::OptionalExtension;
 use diesel::prelude::*;
 use diesel::result::Error;
-use diesel::OptionalExtension;
 use serde_json::Value;
 use std::sync::LazyLock;
 use uuid::Uuid;

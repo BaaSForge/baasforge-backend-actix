@@ -24,7 +24,7 @@ use tokio::sync::{Mutex, mpsc};
 
 use super::{BoxError, tools};
 use crate::services::chat_worker::llm::history::{
-    session_messages_to_upstream_entries, UpstreamHistoryEntry,
+    UpstreamHistoryEntry, session_messages_to_upstream_entries,
 };
 use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole, ToolCall, ToolCallFunction};
 use serde_json::Value;
@@ -90,10 +90,7 @@ fn entries_to_openai_messages(
     entries: &[UpstreamHistoryEntry],
     system_prompt: &str,
 ) -> Vec<ChatCompletionMessage> {
-    let mut messages = vec![openai_msg(
-        ChatCompletionMessageRole::System,
-        system_prompt,
-    )];
+    let mut messages = vec![openai_msg(ChatCompletionMessageRole::System, system_prompt)];
     for entry in entries {
         match entry {
             UpstreamHistoryEntry::User { text } => {
@@ -101,7 +98,9 @@ fn entries_to_openai_messages(
                     messages.push(openai_msg(ChatCompletionMessageRole::User, text.clone()));
                 }
             }
-            UpstreamHistoryEntry::Assistant { text, tool_calls, .. } => {
+            UpstreamHistoryEntry::Assistant {
+                text, tool_calls, ..
+            } => {
                 let content = if text.trim().is_empty() {
                     None
                 } else {
@@ -124,11 +123,7 @@ fn entries_to_openai_messages(
                             }
                         })
                         .collect();
-                    if v.is_empty() {
-                        None
-                    } else {
-                        Some(v)
-                    }
+                    if v.is_empty() { None } else { Some(v) }
                 });
                 if content.is_some() || tool_calls.is_some() {
                     messages.push(ChatCompletionMessage {
@@ -264,12 +259,13 @@ async fn stream_openai_tools(
         "tool_choice": "auto"
     });
     if let Some(effort) = reasoning_effort.map(str::trim).filter(|s| !s.is_empty())
-        && let Some(obj) = body.as_object_mut() {
-            obj.insert(
-                "reasoning_effort".to_string(),
-                Value::String(effort.to_string()),
-            );
-        }
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert(
+            "reasoning_effort".to_string(),
+            Value::String(effort.to_string()),
+        );
+    }
     let url = format!("{}chat/completions", credentials.base_url());
     let response = reqwest::Client::new()
         .post(&url)
@@ -343,18 +339,17 @@ pub async fn call_gpt_stream(
     base_runtime_endpoint: &str,
 ) -> Result<GenerateOutcome, BoxError> {
     let entries = session_messages_to_upstream_entries(session_messages, user_text);
-    let system_prompt = system_prompt_for_agent(&agent, stale_base_release, project_id, base_runtime_endpoint);
+    let system_prompt = system_prompt_for_agent(
+        &agent,
+        stale_base_release,
+        project_id,
+        base_runtime_endpoint,
+    );
     let messages = entries_to_openai_messages(&entries, system_prompt.as_ref());
     let functions = to_openai_functions_for_agent(&agent);
-    let mut rx = stream_openai_tools(
-        credentials,
-        model,
-        reasoning_effort,
-        messages,
-        &functions,
-    )
-    .await
-    .map_err(|e| format!("OpenAI stream: {}", e))?;
+    let mut rx = stream_openai_tools(credentials, model, reasoning_effort, messages, &functions)
+        .await
+        .map_err(|e| format!("OpenAI stream: {}", e))?;
 
     let mut full_text = String::new();
     let mut full_thinking = String::new();
@@ -403,32 +398,31 @@ pub async fn call_gpt_stream(
         }
         if let Some(c) = chunk.content.as_ref().filter(|s| !s.is_empty()) {
             full_text.push_str(c);
-            if !is_tool_response
-                && let Some(ref conn) = redis_conn {
-                    let mut guard = conn.lock().await;
-                    if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
-                        return Ok(GenerateOutcome::Stopped(TextPayload {
-                            text: full_text,
-                            requested_tool_calls: None,
-                            thinking_blocks: thinking_blocks_from_accumulated_reasoning(&full_thinking),
-                        }));
-                    }
-                    let payload = ChatSessionNewMessageChunkPayload::new(
-                        project_id,
-                        session_id,
-                        message_id,
-                        chunk_index,
-                        c.clone(),
-                        false,
-                    );
-                    let _ = publish_event_to_channel(
-                        &mut *guard,
-                        topic,
-                        &WsServerEvent::ChatSessionNewMessageChunk(payload),
-                    )
-                    .await;
-                    chunk_index += 1;
+            if !is_tool_response && let Some(ref conn) = redis_conn {
+                let mut guard = conn.lock().await;
+                if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                    return Ok(GenerateOutcome::Stopped(TextPayload {
+                        text: full_text,
+                        requested_tool_calls: None,
+                        thinking_blocks: thinking_blocks_from_accumulated_reasoning(&full_thinking),
+                    }));
                 }
+                let payload = ChatSessionNewMessageChunkPayload::new(
+                    project_id,
+                    session_id,
+                    message_id,
+                    chunk_index,
+                    c.clone(),
+                    false,
+                );
+                let _ = publish_event_to_channel(
+                    &mut *guard,
+                    topic,
+                    &WsServerEvent::ChatSessionNewMessageChunk(payload),
+                )
+                .await;
+                chunk_index += 1;
+            }
         }
         if let Some(ref tcs) = chunk.tool_calls {
             for (idx, id, name, args) in tcs {

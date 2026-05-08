@@ -13,7 +13,7 @@
 //! exist for release-specific code paths; do not use a release row to populate session-scoped tool
 //! payloads in new code.
 use crate::database::PooledConn;
-use crate::libs::unit_slug::{compose_unit_id, parse_unit_path, UnitPath};
+use crate::libs::unit_slug::{UnitPath, compose_unit_id, parse_unit_path};
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
@@ -25,9 +25,11 @@ use crate::schema::{
     chat_messages, chat_sessions, project_releases, project_runtimes, project_units, projects,
 };
 use chrono::{DateTime, Utc};
+use diesel::OptionalExtension;
+use diesel::QueryableByName;
 use diesel::dsl::{exists, max, not};
 use diesel::prelude::*;
-use diesel::OptionalExtension;
+use diesel::sql_types;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -67,10 +69,7 @@ pub fn load_last_not_disabled_release_controller_for_session(
     let rows: Vec<ChatMessageRow> = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))
         .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
-        .order((
-            chat_messages::created_at.desc(),
-            chat_messages::id.desc(),
-        ))
+        .order((chat_messages::created_at.desc(), chat_messages::id.desc()))
         .select(ChatMessageRow::as_select())
         .load(conn)?;
 
@@ -123,31 +122,25 @@ pub fn project_units_with_latest_revision(
         return Ok(vec![]);
     }
 
-    let aggregates: Vec<(
-        Uuid,
-        String,
-        String,
-        ProjectUnitType,
-        String,
-        Option<i32>,
-    )> = project_units::table
-        .filter(project_units::project_id.eq(project_id))
-        .group_by((
-            project_units::chat_session_id,
-            project_units::context_slug,
-            project_units::module_slug,
-            project_units::unit_type,
-            project_units::unit_name_slug,
-        ))
-        .select((
-            project_units::chat_session_id,
-            project_units::context_slug,
-            project_units::module_slug,
-            project_units::unit_type,
-            project_units::unit_name_slug,
-            max(project_units::revision),
-        ))
-        .load(conn)?;
+    let aggregates: Vec<(Uuid, String, String, ProjectUnitType, String, Option<i32>)> =
+        project_units::table
+            .filter(project_units::project_id.eq(project_id))
+            .group_by((
+                project_units::chat_session_id,
+                project_units::context_slug,
+                project_units::module_slug,
+                project_units::unit_type,
+                project_units::unit_name_slug,
+            ))
+            .select((
+                project_units::chat_session_id,
+                project_units::context_slug,
+                project_units::module_slug,
+                project_units::unit_type,
+                project_units::unit_name_slug,
+                max(project_units::revision),
+            ))
+            .load(conn)?;
 
     let mut map: HashMap<(Uuid, String, String, ProjectUnitType, String), i32> = HashMap::new();
     for (sid, ctx, module, utype, unit_name, max_rev) in aggregates {
@@ -296,7 +289,7 @@ pub fn load_units_from_release_metadata(
 /// session creation time) and load units from that release, then merge in draft unit tips from the
 /// session itself. This gives the "effective unit set" visible to tools inside a chat session:
 /// base release units overlaid with any creates/modifies/removes made in the session.
-/// 
+///
 /// TODO: Using this function is not a good idea as it loads all units,
 /// try to replace it with something which can handle 2000+ units like using dependency graph.
 pub fn load_effective_units_for_chat_session(
@@ -336,7 +329,8 @@ fn merge_base_with_draft_units(
         .map(|u| (logical_unit_key_from_row(&u.row), u))
         .collect();
 
-    let mut merged: Vec<ProjectUnitResponse> = Vec::with_capacity(base_units.len() + draft_tips.len());
+    let mut merged: Vec<ProjectUnitResponse> =
+        Vec::with_capacity(base_units.len() + draft_tips.len());
     let mut seen_keys: HashSet<LogicalUnitKey> = HashSet::new();
 
     for base in base_units {
@@ -481,7 +475,9 @@ pub fn modules_by_context_slugs_visible_tip_units(
     if ordered.is_empty() {
         return Ok(vec![]);
     }
-    let pairs = list_distinct_context_module_pairs_visible_tip_units(conn, project_id, session_id, &ordered)?;
+    let pairs = list_distinct_context_module_pairs_visible_tip_units(
+        conn, project_id, session_id, &ordered,
+    )?;
     Ok(modules_by_context_from_pairs(ordered, pairs))
 }
 
@@ -525,12 +521,20 @@ pub fn load_chat_session_unit_tips_for_merge(
 
     pu_outer
         .filter(pu_outer.field(project_units::project_id).eq(project_id))
-        .filter(pu_outer.field(project_units::chat_session_id).eq(session_id))
+        .filter(
+            pu_outer
+                .field(project_units::chat_session_id)
+                .eq(session_id),
+        )
         .filter(not(exists(
             pu_inner.filter(
                 inner_is_newer_same_unit!(pu_outer, pu_inner)
                     .and(pu_inner.field(project_units::project_id).eq(project_id))
-                    .and(pu_inner.field(project_units::chat_session_id).eq(session_id)),
+                    .and(
+                        pu_inner
+                            .field(project_units::chat_session_id)
+                            .eq(session_id),
+                    ),
             ),
         )))
         .select(select_project_unit_row!(pu_outer))
@@ -572,9 +576,9 @@ pub fn load_chat_session_draft_units_before_message_cutoff(
         .filter(
             chat_messages::created_at
                 .lt(cutoff_created_at)
-                .or(chat_messages::created_at.eq(cutoff_created_at).and(
-                    chat_messages::id.lt(cutoff_message_id),
-                )),
+                .or(chat_messages::created_at
+                    .eq(cutoff_created_at)
+                    .and(chat_messages::id.lt(cutoff_message_id))),
         )
         .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
         .order_by((chat_messages::created_at.asc(), chat_messages::id.asc()))
@@ -590,21 +594,24 @@ pub fn load_chat_session_draft_units_before_message_cutoff(
         match parsed {
             ChatMessagePayload::ToolCreateUnit(p) => {
                 if p.error.is_none()
-                    && let Some(u) = p.created_unit {
-                        tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
-                    }
+                    && let Some(u) = p.created_unit
+                {
+                    tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
+                }
             }
             ChatMessagePayload::ToolModifyUnit(p) => {
                 if p.error.is_none()
-                    && let Some(u) = p.revised_unit {
-                        tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
-                    }
+                    && let Some(u) = p.revised_unit
+                {
+                    tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
+                }
             }
             ChatMessagePayload::ToolRemoveUnit(p) => {
                 if p.error.is_none()
-                    && let Some(u) = p.removed_unit {
-                        tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
-                    }
+                    && let Some(u) = p.removed_unit
+                {
+                    tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
+                }
             }
             _ => {}
         }
@@ -715,10 +722,8 @@ pub fn load_related_units_for_chat_session_by_full_ids(
         return Ok(vec![]);
     }
     let effective = load_effective_units_for_chat_session(conn, project_id, session_id)?;
-    let by_id: HashMap<String, ProjectUnitResponse> = effective
-        .into_iter()
-        .map(|u| (u.id.clone(), u))
-        .collect();
+    let by_id: HashMap<String, ProjectUnitResponse> =
+        effective.into_iter().map(|u| (u.id.clone(), u)).collect();
     let mut out = Vec::new();
     for id in full_unit_ids {
         if let Some(u) = by_id.get(id) {
@@ -742,6 +747,133 @@ pub fn load_latest_releases(
         .load::<ProjectReleaseResponse>(conn)
 }
 
+#[derive(Debug, Clone)]
+pub struct ChatSessionListReleasePair {
+    pub env: PlatformEnvironmentType,
+    pub revision: f64,
+}
+
+#[derive(Debug, Clone)]
+pub enum ChatSessionListUnitFilter {
+    FullId(String),
+    Path(UnitPath),
+}
+
+fn pg_escape_literal(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "''")
+}
+
+fn chat_session_list_extra_where_sql(
+    release_pairs: &[ChatSessionListReleasePair],
+    unit_filters: &[ChatSessionListUnitFilter],
+) -> String {
+    let mut out = String::new();
+    if !release_pairs.is_empty() {
+        out.push_str(
+            " AND EXISTS (SELECT 1 FROM project_releases pr WHERE pr.project_id = cs.project_id AND pr.chat_session_id IS NOT DISTINCT FROM cs.id AND (",
+        );
+        for (i, p) in release_pairs.iter().enumerate() {
+            if i > 0 {
+                out.push_str(" OR ");
+            }
+            let is_stage = p.env == PlatformEnvironmentType::Stage;
+            let rev = if p.revision.is_finite() {
+                p.revision
+            } else {
+                0.0
+            };
+            out.push_str(&format!(
+                "(pr.is_stage = {} AND pr.revision = {})",
+                is_stage, rev
+            ));
+        }
+        out.push_str("))");
+    }
+    if !unit_filters.is_empty() {
+        out.push_str(
+            " AND EXISTS (SELECT 1 FROM project_units pu WHERE pu.project_id = cs.project_id AND pu.chat_session_id = cs.id AND (",
+        );
+        for (i, t) in unit_filters.iter().enumerate() {
+            if i > 0 {
+                out.push_str(" OR ");
+            }
+            match t {
+                ChatSessionListUnitFilter::FullId(id) => {
+                    out.push_str(&format!("pu.id = '{}'", pg_escape_literal(id)));
+                }
+                ChatSessionListUnitFilter::Path(p) => {
+                    out.push_str(&format!(
+                        "(pu.context_slug = '{}' AND pu.module_slug = '{}' AND pu.unit_type = '{}'::project_unit_type AND pu.unit_name_slug = '{}')",
+                        pg_escape_literal(&p.context_slug),
+                        pg_escape_literal(&p.module_slug),
+                        p.unit_type.as_slug(),
+                        pg_escape_literal(&p.unit_name_slug),
+                    ));
+                }
+            }
+        }
+        out.push_str("))");
+    }
+    out
+}
+
+#[derive(QueryableByName)]
+struct ChatSessionListCountRow {
+    #[diesel(sql_type = sql_types::BigInt)]
+    count: i64,
+}
+
+#[derive(QueryableByName)]
+struct ChatSessionListIdRow {
+    #[diesel(sql_type = sql_types::Uuid)]
+    id: Uuid,
+}
+
+/// Same `project_releases` linkage as [`load_owned_releases_by_chat_session`] and session-scoped
+/// `project_units` rows as in list payloads (path filter = any revision for that logical unit).
+pub fn list_project_chat_sessions_page(
+    conn: &mut PooledConn,
+    user_id: Uuid,
+    project_id: Uuid,
+    release_pairs: &[ChatSessionListReleasePair],
+    unit_filters: &[ChatSessionListUnitFilter],
+    page: u32,
+    page_size: u32,
+) -> Result<(Vec<Uuid>, i64, u32, u32), diesel::result::Error> {
+    let page = page.max(1);
+    let page_size = page_size.clamp(1, 100);
+    let offset = (page.saturating_sub(1) as i64).saturating_mul(page_size as i64);
+    let extra = chat_session_list_extra_where_sql(release_pairs, unit_filters);
+
+    let count_sql = format!(
+        "SELECT COUNT(*)::bigint AS count FROM chat_sessions cs \
+         INNER JOIN projects p ON p.id = cs.project_id \
+         WHERE p.owner_user_id = $1 AND cs.project_id = $2{extra}"
+    );
+    let total = diesel::sql_query(&count_sql)
+        .bind::<sql_types::Uuid, _>(user_id)
+        .bind::<sql_types::Uuid, _>(project_id)
+        .get_result::<ChatSessionListCountRow>(conn)?
+        .count;
+
+    let list_sql = format!(
+        "SELECT cs.id AS id FROM chat_sessions cs \
+         INNER JOIN projects p ON p.id = cs.project_id \
+         WHERE p.owner_user_id = $1 AND cs.project_id = $2{extra} \
+         ORDER BY cs.created_at DESC, cs.id DESC \
+         LIMIT {page_size} OFFSET {offset}"
+    );
+    let ids: Vec<Uuid> = diesel::sql_query(&list_sql)
+        .bind::<sql_types::Uuid, _>(user_id)
+        .bind::<sql_types::Uuid, _>(project_id)
+        .load::<ChatSessionListIdRow>(conn)?
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+
+    Ok((ids, total, page, page_size))
+}
+
 /// Releases for `project_id` whose `chat_session_id` is in `session_ids`, grouped by session (newest first per group).
 pub fn load_owned_releases_by_chat_session(
     conn: &mut PooledConn,
@@ -758,16 +890,15 @@ pub fn load_owned_releases_by_chat_session(
         .select(ProjectReleaseResponse::as_select())
         .load(conn)?;
 
-    let mut map: HashMap<Uuid, Vec<ProjectReleaseResponse>> = session_ids
-        .iter()
-        .map(|&id| (id, Vec::new()))
-        .collect();
+    let mut map: HashMap<Uuid, Vec<ProjectReleaseResponse>> =
+        session_ids.iter().map(|&id| (id, Vec::new())).collect();
 
     for r in rows {
         if let Some(sid) = r.chat_session_id
-            && let Some(vec) = map.get_mut(&sid) {
-                vec.push(r);
-            }
+            && let Some(vec) = map.get_mut(&sid)
+        {
+            vec.push(r);
+        }
     }
     Ok(map)
 }
@@ -789,7 +920,11 @@ pub fn load_owned_unit_tips_for_chat_sessions(
 
     let rows: Vec<ProjectUnitRow> = pu_outer
         .filter(pu_outer.field(project_units::project_id).eq(project_id))
-        .filter(pu_outer.field(project_units::chat_session_id).eq_any(session_ids))
+        .filter(
+            pu_outer
+                .field(project_units::chat_session_id)
+                .eq_any(session_ids),
+        )
         .filter(not(exists(
             pu_inner.filter(
                 inner_is_newer_same_unit!(pu_outer, pu_inner)
@@ -851,11 +986,7 @@ pub fn load_unit_tips_by_ids_for_chat_session(
             out.push(None);
             continue;
         };
-        out.push(
-            tips_by_key
-                .get(&logical_unit_key_from_row(&a))
-                .cloned(),
-        );
+        out.push(tips_by_key.get(&logical_unit_key_from_row(&a)).cloned());
     }
     Ok(out)
 }
@@ -1000,10 +1131,7 @@ fn baseline_rows_with_id<'a>(
     baseline_units: &'a [ProjectUnitResponse],
     unit_id: &str,
 ) -> Vec<&'a ProjectUnitResponse> {
-    baseline_units
-        .iter()
-        .filter(|u| u.id == unit_id)
-        .collect()
+    baseline_units.iter().filter(|u| u.id == unit_id).collect()
 }
 
 fn pick_baseline_unit_row_for_id(
@@ -1109,11 +1237,8 @@ pub fn load_unit_previous_revisions_by_full_ids_for_chat_session(
             continue;
         }
 
-        if let Some(row) = pick_baseline_unit_row_for_id(
-            &baseline_units,
-            &prev_id,
-            chat_session_id,
-        ) {
+        if let Some(row) = pick_baseline_unit_row_for_id(&baseline_units, &prev_id, chat_session_id)
+        {
             pending.push(i);
             rows_for_latest.push(row);
             continue;

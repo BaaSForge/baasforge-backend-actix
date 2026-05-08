@@ -1,11 +1,11 @@
 use chrono::{DateTime, Utc};
+use diesel::Insertable;
+use diesel::Queryable;
+use diesel::Selectable;
 use diesel::deserialize::{self, FromSql};
 use diesel::pg::Pg;
 use diesel::serialize::{self, IsNull, Output, ToSql};
 use diesel::sql_types::Jsonb;
-use diesel::Insertable;
-use diesel::Queryable;
-use diesel::Selectable;
 use serde::Deserialize;
 use serde::Serialize;
 use std::io::Write;
@@ -31,7 +31,6 @@ impl ToSql<Jsonb, Pg> for UnitMetadata {
     }
 }
 
-
 #[derive(Debug, PartialEq, Eq, diesel_derive_enum::DbEnum, Serialize, Clone, Deserialize)]
 #[ExistingTypePath = "crate::schema::sql_types::PlatformEnvironmentType"]
 #[DbValueStyle = "snake_case"]
@@ -41,7 +40,9 @@ pub enum PlatformEnvironmentType {
     Prod,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, diesel_derive_enum::DbEnum, Serialize, Deserialize)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Hash, diesel_derive_enum::DbEnum, Serialize, Deserialize,
+)]
 #[ExistingTypePath = "crate::schema::sql_types::ProjectUnitType"]
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]

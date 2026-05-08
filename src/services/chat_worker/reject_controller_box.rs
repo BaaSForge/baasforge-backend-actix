@@ -1,7 +1,7 @@
 //! `publish_reject_controller_box_probe` runs from the release-controller queue consumer after the
 //! release row is written so the reject probe is always enqueued after that step.
 
-use crate::database::{block_on_db_tokio, DbPool, PooledConn};
+use crate::database::{DbPool, PooledConn, block_on_db_tokio};
 use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus,
@@ -14,7 +14,7 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::message_queue::SharedRabbitPublisher;
-use crate::services::releases::{logical_unit_key, LogicalUnitKey};
+use crate::services::releases::{LogicalUnitKey, logical_unit_key};
 use diesel::prelude::*;
 use redis::aio::MultiplexedConnection;
 use std::collections::HashMap;
@@ -118,9 +118,11 @@ pub async fn consume_reject_controller_box_queue_message(
             .optional()
     })
     .await
-    .map_err(|e: crate::database::BlockingDbError| -> Box<dyn std::error::Error + Send + Sync> {
-        Box::new(e)
-    })?;
+    .map_err(
+        |e: crate::database::BlockingDbError| -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(e)
+        },
+    )?;
 
     let Some(last_user) = last_user else {
         return Ok(());
@@ -130,11 +132,12 @@ pub async fn consume_reject_controller_box_queue_message(
     let last_user_id = last_user.id;
 
     let tool_rows = block_on_db_tokio(pool, move |conn| {
-        let after_user = chat_messages::created_at
-            .gt(last_user_created)
-            .or(chat_messages::created_at
-                .eq(last_user_created)
-                .and(chat_messages::id.gt(last_user_id)));
+        let after_user =
+            chat_messages::created_at
+                .gt(last_user_created)
+                .or(chat_messages::created_at
+                    .eq(last_user_created)
+                    .and(chat_messages::id.gt(last_user_id)));
 
         chat_messages::table
             .filter(chat_messages::chat_session_id.eq(session_id_db))
@@ -150,9 +153,11 @@ pub async fn consume_reject_controller_box_queue_message(
             .load::<ChatMessageRow>(conn)
     })
     .await
-    .map_err(|e: crate::database::BlockingDbError| -> Box<dyn std::error::Error + Send + Sync> {
-        Box::new(e)
-    })?;
+    .map_err(
+        |e: crate::database::BlockingDbError| -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(e)
+        },
+    )?;
 
     if tool_rows.is_empty() {
         return Ok(());
@@ -187,9 +192,11 @@ pub async fn consume_reject_controller_box_queue_message(
             .optional()
     })
     .await
-    .map_err(|e: crate::database::BlockingDbError| -> Box<dyn std::error::Error + Send + Sync> {
-        Box::new(e)
-    })?;
+    .map_err(
+        |e: crate::database::BlockingDbError| -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(e)
+        },
+    )?;
 
     let Some(row) = inserted else {
         return Ok(());
@@ -235,12 +242,10 @@ pub fn apply_disabled_due_to_production_release_on_matching_reject_box(
             Ok(v) => v,
             Err(_) => continue,
         };
-        let updated_row = diesel::update(
-            chat_messages::table.filter(chat_messages::id.eq(row.id)),
-        )
-        .set(chat_messages::payload.eq(Some(payload_json)))
-        .returning(ChatMessageRow::as_returning())
-        .get_result(conn)?;
+        let updated_row = diesel::update(chat_messages::table.filter(chat_messages::id.eq(row.id)))
+            .set(chat_messages::payload.eq(Some(payload_json)))
+            .returning(ChatMessageRow::as_returning())
+            .get_result(conn)?;
         return Ok(Some(updated_row));
     }
     Ok(None)

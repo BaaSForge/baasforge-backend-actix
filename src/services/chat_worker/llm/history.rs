@@ -13,12 +13,13 @@
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload, ThinkingBlock,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 
 /// [`ChatMessageType`] values that must never be sent to LLM APIs (UI/session metadata only).
 /// Extend this list when adding similar non-model rows.
-pub const UPSTREAM_EXCLUDED_MESSAGE_TYPES: &[ChatMessageType] = &[ChatMessageType::ReleaseControllerBox];
+pub const UPSTREAM_EXCLUDED_MESSAGE_TYPES: &[ChatMessageType] =
+    &[ChatMessageType::ReleaseControllerBox];
 
 #[inline]
 pub fn is_excluded_from_upstream_llm_history(type_: &ChatMessageType) -> bool {
@@ -49,7 +50,9 @@ pub struct UpstreamToolCall {
 /// One entry in the conversation history we send upstream.
 #[derive(Debug, Clone)]
 pub enum UpstreamHistoryEntry {
-    User { text: String },
+    User {
+        text: String,
+    },
     Assistant {
         text: String,
         tool_calls: Option<Vec<UpstreamToolCall>>,
@@ -62,7 +65,9 @@ pub enum UpstreamHistoryEntry {
         content: String,
     },
     /// Instructional notice (e.g. reject-controller); mapped to provider-specific roles (`system` or `user`).
-    System { text: String },
+    System {
+        text: String,
+    },
 }
 
 /// Tool message types that represent tool execution results (to be sent as tool/tool_result).
@@ -134,7 +139,9 @@ fn tool_result_from_payload(
     payload: &Option<Value>,
     fallback_id: &mut usize,
 ) -> (String, String, String) {
-    let typed = ChatMessagePayload::from_value(type_, payload.clone()).ok().flatten();
+    let typed = ChatMessagePayload::from_value(type_, payload.clone())
+        .ok()
+        .flatten();
     let (tool_use_id_opt, tool_name_opt, content) = match &typed {
         Some(ChatMessagePayload::ToolFetchRelevantUnits(p)) => (
             p.tool_call_id.clone(),
@@ -263,15 +270,16 @@ fn prefix_fallback_before_each_message(
             }
             (ChatSessionRoleType::Ai, ChatMessageType::Text) => {
                 if let Some(tp) = parse_text_payload(payload)
-                    && let Some(ref calls) = tp.requested_tool_calls {
-                        for tc in calls {
-                            let _ = tc.tool_call_id.clone().unwrap_or_else(|| {
-                                let id = format!("tool_{}", fallback);
-                                fallback += 1;
-                                id
-                            });
-                        }
+                    && let Some(ref calls) = tp.requested_tool_calls
+                {
+                    for tc in calls {
+                        let _ = tc.tool_call_id.clone().unwrap_or_else(|| {
+                            let id = format!("tool_{}", fallback);
+                            fallback += 1;
+                            id
+                        });
                     }
+                }
             }
             _ => {}
         }
@@ -279,11 +287,12 @@ fn prefix_fallback_before_each_message(
     prefix
 }
 
-fn resolved_tool_call_ids_for_text_payload(tp: &TextPayload, fb_before: usize) -> (Vec<String>, usize) {
+fn resolved_tool_call_ids_for_text_payload(
+    tp: &TextPayload,
+    fb_before: usize,
+) -> (Vec<String>, usize) {
     let mut fb = fb_before;
-    let calls = tp
-        .requested_tool_calls.as_deref()
-        .unwrap_or(&[]);
+    let calls = tp.requested_tool_calls.as_deref().unwrap_or(&[]);
     let mut ids = Vec::with_capacity(calls.len());
     for tc in calls {
         let id = tc.tool_call_id.clone().unwrap_or_else(|| {
@@ -356,7 +365,9 @@ pub fn remove_tool_result_messages_without_matching_assistant_tool_use(
             to_remove.push(i);
             continue;
         };
-        if messages[a_idx].0 != ChatSessionRoleType::Ai || messages[a_idx].1 != ChatMessageType::Text {
+        if messages[a_idx].0 != ChatSessionRoleType::Ai
+            || messages[a_idx].1 != ChatMessageType::Text
+        {
             to_remove.push(i);
             continue;
         }
@@ -437,8 +448,7 @@ pub fn trim_assistant_requested_tool_calls_to_match_following_tool_results(
             if r != ChatSessionRoleType::Ai || !is_tool_result_type(&t) {
                 break;
             }
-            let (tool_use_id, tool_name, _) =
-                tool_result_from_payload(&t, &payload_ref, &mut fb2);
+            let (tool_use_id, tool_name, _) = tool_result_from_payload(&t, &payload_ref, &mut fb2);
             if !tool_name.is_empty() {
                 fulfilled.insert(tool_use_id);
             }
@@ -464,16 +474,17 @@ pub fn trim_assistant_requested_tool_calls_to_match_following_tool_results(
 }
 
 fn reject_controller_box_upstream_notice(payload: &Option<Value>) -> Option<String> {
-    let p = ChatMessagePayload::from_value(
-        &ChatMessageType::RejectControllerBox,
-        payload.clone(),
-    )
-    .ok()
-    .flatten()?;
+    let p = ChatMessagePayload::from_value(&ChatMessageType::RejectControllerBox, payload.clone())
+        .ok()
+        .flatten()?;
     let ChatMessagePayload::RejectControllerBox(box_payload) = p else {
         return None;
     };
-    let ids: Vec<String> = box_payload.unit_changes.iter().map(|u| u.id.clone()).collect();
+    let ids: Vec<String> = box_payload
+        .unit_changes
+        .iter()
+        .map(|u| u.id.clone())
+        .collect();
 
     if box_payload.is_rejected {
         return Some(format!(
@@ -543,14 +554,11 @@ pub fn session_messages_to_upstream_entries(
                         .map(|c| {
                             c.iter()
                                 .map(|tc| {
-                                    let id = tc
-                                        .tool_call_id
-                                        .clone()
-                                        .unwrap_or_else(|| {
-                                            let id = format!("tool_{}", fallback_tool_id);
-                                            fallback_tool_id += 1;
-                                            id
-                                        });
+                                    let id = tc.tool_call_id.clone().unwrap_or_else(|| {
+                                        let id = format!("tool_{}", fallback_tool_id);
+                                        fallback_tool_id += 1;
+                                        id
+                                    });
                                     UpstreamToolCall {
                                         id,
                                         name: tc.tool_name.clone(),
@@ -560,14 +568,8 @@ pub fn session_messages_to_upstream_entries(
                                 })
                                 .collect()
                         });
-                    let thinking_blocks = tp
-                        .thinking_blocks
-                        .clone()
-                        .filter(|b| !b.is_empty());
-                    if !text.is_empty()
-                        || tool_calls.is_some()
-                        || thinking_blocks.is_some()
-                    {
+                    let thinking_blocks = tp.thinking_blocks.clone().filter(|b| !b.is_empty());
+                    if !text.is_empty() || tool_calls.is_some() || thinking_blocks.is_some() {
                         out.push(UpstreamHistoryEntry::Assistant {
                             text,
                             tool_calls,

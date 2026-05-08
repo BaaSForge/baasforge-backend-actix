@@ -36,8 +36,8 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
 
 #[cfg(feature = "unit_technical_reviewer")]
 use crate::services::unit_technical_reviewer::rule_checker::{
-    export_all_source, get_export_default_call_name, has_export_default, has_exported_type,
-    module_export_name_str, Declaration, Rule, RuleInput, Statement,
+    Declaration, Rule, RuleInput, Statement, export_all_source, get_export_default_call_name,
+    has_export_default, has_exported_type, module_export_name_str,
 };
 
 #[cfg(feature = "unit_technical_reviewer")]

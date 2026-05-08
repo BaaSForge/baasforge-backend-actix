@@ -10,10 +10,10 @@ use crate::routes::ws::events::{
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::services::chat_worker::ai_message;
-use crate::services::chat_worker::llm::history::{
-    session_messages_to_upstream_entries, UpstreamHistoryEntry,
-};
 use crate::services::chat_worker::llm::GenerateOutcome;
+use crate::services::chat_worker::llm::history::{
+    UpstreamHistoryEntry, session_messages_to_upstream_entries,
+};
 use futures::StreamExt;
 use redis::aio::MultiplexedConnection;
 use std::collections::HashMap;
@@ -21,8 +21,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::tools;
 use super::BoxError;
+use super::tools;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -47,10 +47,7 @@ const BETA_INTERLEAVED_THINKING: &str = "interleaved-thinking-2025-05-14";
 #[serde(tag = "type")]
 enum ClaudeContentBlock {
     #[serde(rename = "thinking")]
-    Thinking {
-        thinking: String,
-        signature: String,
-    },
+    Thinking { thinking: String, signature: String },
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "tool_use")]
@@ -189,18 +186,18 @@ fn build_request_body(
         "tools": tools_json,
     });
     if let Some(budget) = thinking_budget_tokens
-        && let Some(obj) = body.as_object_mut() {
-            obj.insert(
-                "thinking".to_string(),
-                serde_json::json!({
-                    "type": "enabled",
-                    "budget_tokens": budget,
-                }),
-            );
-        }
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert(
+            "thinking".to_string(),
+            serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": budget,
+            }),
+        );
+    }
     body
 }
-
 
 /// Build tools array for Claude Messages API. Each tool: name, description, input_schema (JSON Schema).
 /// Matches Anthropic format: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use
@@ -232,25 +229,11 @@ enum BlockStartKind {
 }
 
 enum StreamEvent {
-    BlockStart {
-        index: usize,
-        kind: BlockStartKind,
-    },
-    ThinkingDelta {
-        index: usize,
-        thinking: String,
-    },
-    TextDelta {
-        text: String,
-    },
-    SignatureDelta {
-        index: usize,
-        signature: String,
-    },
-    InputJsonDelta {
-        index: usize,
-        partial_json: String,
-    },
+    BlockStart { index: usize, kind: BlockStartKind },
+    ThinkingDelta { index: usize, thinking: String },
+    TextDelta { text: String },
+    SignatureDelta { index: usize, signature: String },
+    InputJsonDelta { index: usize, partial_json: String },
     MessageStop,
 }
 
@@ -429,7 +412,12 @@ pub async fn call_claude_stream(
     stale_base_release: bool,
     base_runtime_endpoint: &str,
 ) -> Result<GenerateOutcome, BoxError> {
-    let system_prompt = system_prompt_for_agent(&agent, stale_base_release, project_id, base_runtime_endpoint);
+    let system_prompt = system_prompt_for_agent(
+        &agent,
+        stale_base_release,
+        project_id,
+        base_runtime_endpoint,
+    );
     let tools_list = to_tools_json(&agent);
     let tool_count = tools_list.len();
 
@@ -484,7 +472,12 @@ pub async fn call_claude_stream(
     let mut thinking_buffers: HashMap<usize, String> = HashMap::new();
     let mut signature_buffers: HashMap<usize, String> = HashMap::new();
 
-    tracing::info!(tool_count, model, ?thinking_budget_tokens, "Claude: stream started with tools");
+    tracing::info!(
+        tool_count,
+        model,
+        ?thinking_budget_tokens,
+        "Claude: stream started with tools"
+    );
 
     loop {
         let event = match read_one_sse_event(&mut stream, &mut buf).await {
@@ -501,10 +494,7 @@ pub async fn call_claude_stream(
                     block_kinds.insert(index, BlockKind::Text);
                 }
                 BlockStartKind::ToolUse { id, name, input } => {
-                    block_kinds.insert(
-                        index,
-                        BlockKind::ToolUse { id, name, input },
-                    );
+                    block_kinds.insert(index, BlockKind::ToolUse { id, name, input });
                 }
             },
             StreamEvent::ThinkingDelta { index, thinking } => {

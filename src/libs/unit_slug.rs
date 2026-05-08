@@ -32,11 +32,7 @@ pub fn compose_unit_id(
 ) -> String {
     format!(
         "{}.{}.{}.{}.{}",
-        context_slug,
-        module_slug,
-        unit_type_slug,
-        unit_name_slug,
-        revision
+        context_slug, module_slug, unit_type_slug, unit_name_slug, revision
     )
 }
 
@@ -134,7 +130,10 @@ pub fn parse_unit_path(s: &str) -> Result<UnitPath, String> {
                 ));
             }
             let rev: i32 = rev_seg.parse().map_err(|_| {
-                format!("invalid unit path: revision `{}` is out of i32 range", rev_seg)
+                format!(
+                    "invalid unit path: revision `{}` is out of i32 range",
+                    rev_seg
+                )
             })?;
             if rev < 1 {
                 return Err(format!(
@@ -152,7 +151,11 @@ pub fn parse_unit_path(s: &str) -> Result<UnitPath, String> {
             ));
         }
     };
-    for (name, val) in [("context_slug", a), ("module_slug", b), ("unit_name_slug", d)] {
+    for (name, val) in [
+        ("context_slug", a),
+        ("module_slug", b),
+        ("unit_name_slug", d),
+    ] {
         if !is_valid_slug(val) {
             return Err(format!(
                 "invalid unit path: `{}` segment `{}` is not a valid slug (must match `{}`)",

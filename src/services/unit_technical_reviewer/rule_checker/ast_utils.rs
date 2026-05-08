@@ -11,7 +11,7 @@ use oxc_ast::ast::{
     Expression, Function, IdentifierReference, ImportDeclaration, ImportDeclarationSpecifier,
     ModuleExportName, Program, Statement, TSType, TSTypeName,
 };
-use oxc_ast_visit::{walk, Visit};
+use oxc_ast_visit::{Visit, walk};
 
 // ── Source-text utilities ─────────────────────────────────────────────────────────────────────
 
@@ -124,9 +124,7 @@ pub fn get_exported_type<'a>(program: &'a Program<'a>, name: &str) -> Option<&'a
 }
 
 /// Returns all top-level `ExportNamedDeclaration` nodes (type and value alike).
-pub fn get_export_named_decls<'a>(
-    program: &'a Program<'a>,
-) -> Vec<&'a ExportNamedDeclaration<'a>> {
+pub fn get_export_named_decls<'a>(program: &'a Program<'a>) -> Vec<&'a ExportNamedDeclaration<'a>> {
     program
         .body
         .iter()
@@ -266,27 +264,25 @@ pub fn get_node_module_import_sources<'a>(program: &'a Program<'a>) -> Vec<&'a s
 
 /// Returns `true` if the program contains a namespace import (`import * as x from source`).
 pub fn has_namespace_import_from(program: &Program, source: &str) -> bool {
-    get_imports_from_source(program, source)
-        .iter()
-        .any(|decl| {
-            decl.specifiers
-                .iter()
-                .flat_map(|v| v.iter())
-                .any(|spec| matches!(spec, ImportDeclarationSpecifier::ImportNamespaceSpecifier(_)))
+    get_imports_from_source(program, source).iter().any(|decl| {
+        decl.specifiers.iter().flat_map(|v| v.iter()).any(|spec| {
+            matches!(
+                spec,
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(_)
+            )
         })
+    })
 }
 
 /// Returns `true` if the program contains a default import from `source`
 /// (i.e. `import name from "source"`).
 pub fn has_default_import_from(program: &Program, source: &str) -> bool {
-    get_imports_from_source(program, source)
-        .iter()
-        .any(|decl| {
-            decl.specifiers
-                .iter()
-                .flat_map(|v| v.iter())
-                .any(|spec| matches!(spec, ImportDeclarationSpecifier::ImportDefaultSpecifier(_)))
-        })
+    get_imports_from_source(program, source).iter().any(|decl| {
+        decl.specifiers
+            .iter()
+            .flat_map(|v| v.iter())
+            .any(|spec| matches!(spec, ImportDeclarationSpecifier::ImportDefaultSpecifier(_)))
+    })
 }
 
 // ── Type annotation utilities ─────────────────────────────────────────────────────────────────
@@ -395,7 +391,11 @@ fn find_exported_function<'a>(program: &'a Program<'a>, name: &str) -> Option<&'
     program.body.iter().find_map(|stmt| {
         if let Statement::ExportNamedDeclaration(export) = stmt {
             if let Some(Declaration::FunctionDeclaration(func)) = &export.declaration {
-                if func.id.as_ref().map_or(false, |id| id.name.as_str() == name) {
+                if func
+                    .id
+                    .as_ref()
+                    .map_or(false, |id| id.name.as_str() == name)
+                {
                     return Some(func.as_ref());
                 }
             }

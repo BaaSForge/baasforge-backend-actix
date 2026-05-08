@@ -172,10 +172,7 @@ fn parse_file_info(source: &str) -> FileInfo {
 }
 
 #[cfg(feature = "unit_technical_reviewer")]
-fn extract_type_info(
-    alias: &oxc_ast::ast::TSTypeAliasDeclaration,
-    source: &str,
-) -> TypeInfo {
+fn extract_type_info(alias: &oxc_ast::ast::TSTypeAliasDeclaration, source: &str) -> TypeInfo {
     use oxc_span::GetSpan;
 
     let type_params_text = alias
@@ -196,8 +193,7 @@ fn extract_type_info(
         .unwrap_or_default();
 
     let ann_span = alias.type_annotation.span();
-    let annotation_text =
-        source[ann_span.start as usize..ann_span.end as usize].to_string();
+    let annotation_text = source[ann_span.start as usize..ann_span.end as usize].to_string();
 
     TypeInfo {
         type_params_text,
@@ -214,7 +210,7 @@ fn extract_type_info(
 fn collect_refs_in_annotation(annotation_text: &str) -> HashSet<String> {
     use oxc_allocator::Allocator;
     use oxc_ast::ast::{TSTypeName, TSTypeReference};
-    use oxc_ast_visit::{walk, Visit};
+    use oxc_ast_visit::{Visit, walk};
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 
@@ -276,9 +272,9 @@ fn make_prefix(vfs_key: &str) -> String {
         .split(|c: char| c == '.' || c == '-')
         .filter_map(|part| {
             let mut chars = part.chars();
-            chars.next().map(|first| {
-                first.to_uppercase().collect::<String>() + chars.as_str()
-            })
+            chars
+                .next()
+                .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
         })
         .collect();
 
@@ -315,7 +311,7 @@ fn rewrite_annotation(
 ) -> String {
     use oxc_allocator::Allocator;
     use oxc_ast::ast::{TSTypeName, TSTypeReference};
-    use oxc_ast_visit::{walk, Visit};
+    use oxc_ast_visit::{Visit, walk};
     use oxc_parser::Parser;
     use oxc_span::{GetSpan, SourceType};
 
@@ -341,8 +337,7 @@ fn rewrite_annotation(
         fn visit_ts_type_reference(&mut self, node: &TSTypeReference<'a>) {
             if let TSTypeName::IdentifierReference(id) = &node.type_name {
                 let name = id.name.as_str().to_string();
-                if !BUILTIN_TYPES.contains(&name.as_str())
-                    && !self.type_param_names.contains(&name)
+                if !BUILTIN_TYPES.contains(&name.as_str()) && !self.type_param_names.contains(&name)
                 {
                     let span = id.span();
                     self.spans.push((span.start, span.end, name));
@@ -418,7 +413,10 @@ impl Collector {
     /// for it and all transitive dependencies.
     fn collect(&mut self, vfs_key: &str, source_name: &str, source: &str) {
         // Cycle / duplicate guard: `HashSet::insert` returns false if already present.
-        if !self.visited.insert((vfs_key.to_string(), source_name.to_string())) {
+        if !self
+            .visited
+            .insert((vfs_key.to_string(), source_name.to_string()))
+        {
             return;
         }
 

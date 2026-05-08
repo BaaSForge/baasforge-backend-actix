@@ -62,14 +62,8 @@ impl RuntimeNatsPublisher {
         let server_addr: async_nats::ServerAddr = url.parse()?;
         let mut options = async_nats::ConnectOptions::new();
         if server_addr.has_user_pass() {
-            let user = server_addr
-                .username()
-                .map(String::from)
-                .unwrap_or_default();
-            let pass = server_addr
-                .password()
-                .map(String::from)
-                .unwrap_or_default();
+            let user = server_addr.username().map(String::from).unwrap_or_default();
+            let pass = server_addr.password().map(String::from).unwrap_or_default();
             options = async_nats::ConnectOptions::with_user_and_password(user, pass);
         } else {
             return Err(io::Error::new(

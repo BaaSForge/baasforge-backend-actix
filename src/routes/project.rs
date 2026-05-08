@@ -5,18 +5,13 @@ use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
     PlatformEnvironmentType, ProjectDetailResponse, ProjectInsert, ProjectReleaseResponse,
-    ProjectResponse, ProjectRuntimesBaseUrls, ProjectRuntimeInsert, ProjectRuntimeResponse,
-    ProjectReleaseWithBaseline, ProjectRuntimeWithLiveReleaseApi,
-    ProjectRuntimeWithLiveReleaseResponse, ProjectUnitResponse, ProjectUnitType,
+    ProjectReleaseWithBaseline, ProjectResponse, ProjectRuntimeInsert, ProjectRuntimeResponse,
+    ProjectRuntimeWithLiveReleaseApi, ProjectRuntimeWithLiveReleaseResponse,
+    ProjectRuntimesBaseUrls, ProjectUnitResponse, ProjectUnitType,
 };
-use crate::services::releases::{
-    attach_base_production_releases, attach_is_draft_flags_from_latest_production,
-    load_unit_previous_revisions_for_release, project_release_id_for_revision_lane,
-    ProjectReleaseRevisionLookup,
-};
-use crate::services::chat_worker::db::{
-    list_distinct_context_slugs_from_units, load_project_units_by_keys,
-    load_units_from_latest_production_metadata, modules_by_context_slugs_from_units,
+use crate::routes::chat::handlers::{
+    broadcast_production_live_release_changed, broadcast_stage_release_create_effects,
+    http_response_for_stage_release_from_controller_error,
 };
 use crate::routes::ws::events::{ProjectDeletedPayload, WsServerEvent};
 use crate::routes::ws::{publish_event_to_channel, user_channel};
@@ -26,8 +21,17 @@ use crate::schema::project_releases;
 use crate::schema::project_runtimes;
 use crate::schema::project_units;
 use crate::schema::projects;
+use crate::services::chat_worker::db::{
+    list_distinct_context_slugs_from_units, load_project_units_by_keys,
+    load_units_from_latest_production_metadata, modules_by_context_slugs_from_units,
+};
 use crate::services::payment::{
     PaidFeature, most_complete_needed_package, user_missing_paid_features,
+};
+use crate::services::releases::{
+    ProjectReleaseRevisionLookup, attach_base_production_releases,
+    attach_is_draft_flags_from_latest_production, load_unit_previous_revisions_for_release,
+    project_release_id_for_revision_lane,
 };
 use crate::services::stage_release_from_controller::transaction_create_stage_release_from_controller;
 use crate::services::stage_runtime_release::{
@@ -35,17 +39,13 @@ use crate::services::stage_runtime_release::{
     apply_release_deploy_to_runtime, apply_runtime_detach_live_release,
     apply_stage_release_deploy_to_runtime,
 };
-use crate::routes::chat::handlers::{
-    broadcast_production_live_release_changed, broadcast_stage_release_create_effects,
-    http_response_for_stage_release_from_controller_error,
-};
 use crate::{libs::api_response::api_success, routes::AppContext};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use diesel::prelude::*;
 use diesel::result::Error;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 #[derive(Clone, Deserialize)]
@@ -197,12 +197,7 @@ async fn notify_runtime_release(
                 if let Some(ref nats) = context.runtime_nats_publisher {
                     let subject = context.settings.runtime_nats_subject_release.as_str();
                     if let Err(e) = nats
-                        .publish_prod_release(
-                            subject,
-                            project_id,
-                            deployed_id,
-                            previous_release_id,
-                        )
+                        .publish_prod_release(subject, project_id, deployed_id, previous_release_id)
                         .await
                     {
                         tracing::warn!(
@@ -664,9 +659,8 @@ pub async fn handle_list_project_runtimes(
         let mut q = project_runtimes::table
             .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
             .left_join(
-                project_releases::table.on(
-                    project_runtimes::live_release_id.eq(project_releases::id.nullable()),
-                ),
+                project_releases::table
+                    .on(project_runtimes::live_release_id.eq(project_releases::id.nullable())),
             )
             .filter(projects::owner_user_id.eq(user_id))
             .filter(project_runtimes::project_id.eq(project_id))
@@ -679,15 +673,14 @@ pub async fn handle_list_project_runtimes(
             .load::<ProjectRuntimeWithLiveReleaseResponse>(conn)?;
         let to_enrich: Vec<ProjectReleaseResponse> =
             rows.iter().filter_map(|r| r.live_release.clone()).collect();
-        let by_id: HashMap<Uuid, ProjectReleaseWithBaseline> =
-            if to_enrich.is_empty() {
-                HashMap::new()
-            } else {
-                attach_base_production_releases(conn, project_id, to_enrich)?
-                    .into_iter()
-                    .map(|e| (e.release.id, e))
-                    .collect()
-            };
+        let by_id: HashMap<Uuid, ProjectReleaseWithBaseline> = if to_enrich.is_empty() {
+            HashMap::new()
+        } else {
+            attach_base_production_releases(conn, project_id, to_enrich)?
+                .into_iter()
+                .map(|e| (e.release.id, e))
+                .collect()
+        };
         Ok(rows
             .into_iter()
             .map(|r| {
@@ -828,9 +821,9 @@ async fn handle_detach_by_revision(
         Err(RuntimeDeployDenied::NotFound) => {
             HttpResponse::NotFound().json(api_error("Project runtime not found", json!({})))
         }
-        Err(RuntimeDeployDenied::EnvironmentMismatch) => HttpResponse::BadRequest().json(
-            api_error("Runtime environment mismatch", json!({})),
-        ),
+        Err(RuntimeDeployDenied::EnvironmentMismatch) => {
+            HttpResponse::BadRequest().json(api_error("Runtime environment mismatch", json!({})))
+        }
         Err(RuntimeDeployDenied::NoSuchRelease) => HttpResponse::BadRequest().json(api_error(
             &format!(
                 "No {} release with this revision exists for this project and chat session",
@@ -838,15 +831,13 @@ async fn handle_detach_by_revision(
             ),
             json!({}),
         )),
-        Err(RuntimeDeployDenied::AmbiguousRevision) => HttpResponse::BadRequest().json(
-            api_error(
-                &format!(
-                    "Multiple {} release rows match this project, chat session, and revision",
-                    env_label.to_lowercase()
-                ),
-                json!({}),
+        Err(RuntimeDeployDenied::AmbiguousRevision) => HttpResponse::BadRequest().json(api_error(
+            &format!(
+                "Multiple {} release rows match this project, chat session, and revision",
+                env_label.to_lowercase()
             ),
-        ),
+            json!({}),
+        )),
     }
 }
 
@@ -873,9 +864,7 @@ async fn handle_detach_by_controller(
     {
         Ok(o) => o,
         Err(_) => {
-            log::error!(
-                "[handle_detach_runtime_live_release] DB/block error (by controller)"
-            );
+            log::error!("[handle_detach_runtime_live_release] DB/block error (by controller)");
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }
@@ -931,9 +920,7 @@ async fn handle_detach_only(
     {
         Ok(o) => o,
         Err(_) => {
-            log::error!(
-                "[handle_detach_runtime_live_release] DB/block error (detach only)"
-            );
+            log::error!("[handle_detach_runtime_live_release] DB/block error (detach only)");
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }
@@ -960,10 +947,7 @@ async fn handle_detach_only(
                 "handle_detach_runtime_live_release",
             )
             .await;
-            HttpResponse::Ok().json(api_success(
-                "Runtime detached from live release",
-                json!(rt),
-            ))
+            HttpResponse::Ok().json(api_success("Runtime detached from live release", json!(rt)))
         }
         Err(RuntimeDetachDenied::NotFound) => {
             HttpResponse::NotFound().json(api_error("Project runtime not found", json!({})))
@@ -1161,7 +1145,12 @@ fn filter_sort_paginate_release_units(
     let pair_set: Option<HashSet<(String, String)>> = {
         let v: Vec<(String, String)> = context_module_pairs
             .iter()
-            .map(|p| (p.context_slug.trim().to_string(), p.module_slug.trim().to_string()))
+            .map(|p| {
+                (
+                    p.context_slug.trim().to_string(),
+                    p.module_slug.trim().to_string(),
+                )
+            })
             .filter(|(c, m)| !c.is_empty() && !m.is_empty())
             .collect();
         if v.is_empty() {
@@ -1173,17 +1162,20 @@ fn filter_sort_paginate_release_units(
 
     units.retain(|u| {
         if let Some(ref ts) = type_set
-            && !ts.contains(&u.unit_type) {
-                return false;
-            }
+            && !ts.contains(&u.unit_type)
+        {
+            return false;
+        }
         if let Some(ref cs) = ctx_set
-            && !cs.contains(u.context_slug.as_str()) {
-                return false;
-            }
+            && !cs.contains(u.context_slug.as_str())
+        {
+            return false;
+        }
         if let Some(ref ps) = pair_set
-            && !ps.contains(&(u.context_slug.clone(), u.module_slug.clone())) {
-                return false;
-            }
+            && !ps.contains(&(u.context_slug.clone(), u.module_slug.clone()))
+        {
+            return false;
+        }
         true
     });
 
@@ -1199,7 +1191,11 @@ fn filter_sort_paginate_release_units(
     let page = page.max(1);
     let page_size = page_size.clamp(1, 100);
     let offset = (page.saturating_sub(1) as usize).saturating_mul(page_size as usize);
-    let page_units: Vec<_> = units.into_iter().skip(offset).take(page_size as usize).collect();
+    let page_units: Vec<_> = units
+        .into_iter()
+        .skip(offset)
+        .take(page_size as usize)
+        .collect();
     (page_units, total, page, page_size)
 }
 
@@ -1368,7 +1364,9 @@ pub async fn handle_release_unit_previous_by_full_ids(
             let (units, missing) =
                 load_unit_previous_revisions_for_release(conn, project_id, &release, &unit_ids)?;
             if let Some(id) = missing {
-                return Ok(Err(ReleaseUnitPreviousLookupErr::UnitNotInReleaseNewSet(id)));
+                return Ok(Err(ReleaseUnitPreviousLookupErr::UnitNotInReleaseNewSet(
+                    id,
+                )));
             }
             Ok(Ok(ReleaseUnitPreviousByFullIdsResponse { units }))
         }
@@ -1377,7 +1375,8 @@ pub async fn handle_release_unit_previous_by_full_ids(
     {
         Ok(Ok(response)) => response,
         Ok(Err(ReleaseUnitPreviousLookupErr::ReleaseNotFound)) => {
-            return HttpResponse::NotFound().json(api_error("Project release not found", json!({})));
+            return HttpResponse::NotFound()
+                .json(api_error("Project release not found", json!({})));
         }
         Ok(Err(ReleaseUnitPreviousLookupErr::UnitNotInReleaseNewSet(unit_id))) => {
             return HttpResponse::NotFound().json(api_error(
@@ -1386,7 +1385,10 @@ pub async fn handle_release_unit_previous_by_full_ids(
             ));
         }
         Err(database::BlockingDbError::Query(e)) => {
-            log::error!("[handle_release_unit_previous_by_full_ids] DB error: {:?}", e);
+            log::error!(
+                "[handle_release_unit_previous_by_full_ids] DB error: {:?}",
+                e
+            );
             return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
         }
         Err(_) => {
@@ -1499,10 +1501,7 @@ pub async fn handle_list_project_release_modules_by_contexts(
     let (project_id, release_id) = path.into_inner();
     let user_id = access_payload.user_id;
 
-    let has_slugs = body
-        .context_slugs
-        .iter()
-        .any(|s| !s.trim().is_empty());
+    let has_slugs = body.context_slugs.iter().any(|s| !s.trim().is_empty());
     if !has_slugs {
         return HttpResponse::BadRequest().json(api_error(
             "context_slugs must contain at least one non-empty context slug",
@@ -1652,12 +1651,12 @@ pub async fn handle_deploy_stage_release(
             "No stage release with this revision exists for this project and chat session",
             json!({}),
         )),
-        Err(StageRuntimeDeployDenied::AmbiguousRevision) => HttpResponse::BadRequest().json(
-            api_error(
+        Err(StageRuntimeDeployDenied::AmbiguousRevision) => {
+            HttpResponse::BadRequest().json(api_error(
                 "Multiple stage release rows match this project, chat session, and revision",
                 json!({}),
-            ),
-        ),
+            ))
+        }
     }
 }
 
@@ -1769,7 +1768,10 @@ pub async fn handle_deploy_production_release(
                     )
                     .await
                 {
-                    tracing::warn!("[handle_deploy_production_release] NATS publish failed: {}", e);
+                    tracing::warn!(
+                        "[handle_deploy_production_release] NATS publish failed: {}",
+                        e
+                    );
                 }
             } else {
                 tracing::warn!(

@@ -1,21 +1,23 @@
 use crate::configs::Settings;
-use crate::database::{establish_pool, DbPool};
+use crate::database::{DbPool, establish_pool};
 use crate::services::message_queue::{
-    create_shared_publisher, publish_to_dead_letter, publish_to_retry_delay, SharedRabbitPublisher,
+    SharedRabbitPublisher, create_shared_publisher, publish_to_dead_letter, publish_to_retry_delay,
 };
 use crate::services::unit_technical_reviewer::handlers::{
     process_create_unit_compiler_check, process_create_unit_rule_check,
     process_modify_unit_compiler_check, process_modify_unit_rule_check,
     process_remove_unit_rule_check,
 };
-use crate::services::unit_technical_reviewer::helpers::{fail_tool_message_and_continue, BoxError, RedisConn};
-use crate::services::unit_technical_reviewer::queue::{
-    create_reviewer_work_consumer_on_connection, reviewer_dead_letter_spec, reviewer_retry_policy,
-    UnitReviewerMessageType, UnitReviewerQueueMessage, UNIT_REVIEWER_EXCHANGE,
-    UNIT_REVIEWER_ROUTING_KEY,
+use crate::services::unit_technical_reviewer::helpers::{
+    BoxError, RedisConn, fail_tool_message_and_continue,
 };
-use lapin::options::BasicAckOptions;
+use crate::services::unit_technical_reviewer::queue::{
+    UNIT_REVIEWER_EXCHANGE, UNIT_REVIEWER_ROUTING_KEY, UnitReviewerMessageType,
+    UnitReviewerQueueMessage, create_reviewer_work_consumer_on_connection,
+    reviewer_dead_letter_spec, reviewer_retry_policy,
+};
 use lapin::ConnectionProperties;
+use lapin::options::BasicAckOptions;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
@@ -24,8 +26,7 @@ use tracing::info;
 pub async fn run() -> Result<(), BoxError> {
     tracing_subscriber::fmt::init();
 
-    let settings = Settings::new()
-        .map_err(|e| -> BoxError { e.to_string().into() })?;
+    let settings = Settings::new().map_err(|e| -> BoxError { e.to_string().into() })?;
 
     let redis_client = redis::Client::open(settings.redis_url.as_str())?;
     let redis_conn = redis_client.get_multiplexed_async_connection().await?;
@@ -94,7 +95,14 @@ pub async fn run() -> Result<(), BoxError> {
         let retry_policy = reviewer_retry_policy();
         let dead_letter_spec = reviewer_dead_letter_spec();
 
-        let result = process_message(&pool, &redis_conn, &publisher, message.clone(), simulate_failure).await;
+        let result = process_message(
+            &pool,
+            &redis_conn,
+            &publisher,
+            message.clone(),
+            simulate_failure,
+        )
+        .await;
         if let Err(ref e) = result {
             if retry_policy.should_dead_letter(retry_num) {
                 tracing::error!(
@@ -126,7 +134,10 @@ pub async fn run() -> Result<(), BoxError> {
                 )
                 .await
                 {
-                    tracing::error!("Failed to publish reviewer message to dead letter: {}", dl_e);
+                    tracing::error!(
+                        "Failed to publish reviewer message to dead letter: {}",
+                        dl_e
+                    );
                 }
             } else {
                 let next_retry_num = retry_num + 1;
@@ -196,7 +207,12 @@ pub async fn run() -> Result<(), BoxError> {
             }
         }
 
-        if delivery.acker.ack(BasicAckOptions::default()).await.is_err() {
+        if delivery
+            .acker
+            .ack(BasicAckOptions::default())
+            .await
+            .is_err()
+        {
             tracing::warn!("Failed to ack delivery");
         }
     }

@@ -47,9 +47,9 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
 
 #[cfg(feature = "unit_technical_reviewer")]
 use crate::services::unit_technical_reviewer::rule_checker::{
-    export_all_source, get_exported_function_param_count, get_exported_function_param_type_name,
-    get_exported_type, has_exported_function, has_exported_type, has_import_from, is_never,
-    module_export_name_str, Declaration, Rule, RuleInput, Statement,
+    Declaration, Rule, RuleInput, Statement, export_all_source, get_exported_function_param_count,
+    get_exported_function_param_type_name, get_exported_type, has_exported_function,
+    has_exported_type, has_import_from, is_never, module_export_name_str,
 };
 
 #[cfg(feature = "unit_technical_reviewer")]
@@ -228,7 +228,10 @@ fn no_other_exports(input: &RuleInput) -> Vec<String> {
                             }
                         }
                         Declaration::FunctionDeclaration(func) => {
-                            let fn_name = func.id.as_ref().map_or("<anonymous>", |id| id.name.as_str());
+                            let fn_name = func
+                                .id
+                                .as_ref()
+                                .map_or("<anonymous>", |id| id.name.as_str());
                             if fn_name != ALLOWED_FN {
                                 errors.push(format!(
                                     "API unit must not export function `{fn_name}`; \
@@ -258,10 +261,8 @@ fn no_other_exports(input: &RuleInput) -> Vec<String> {
                 }
             }
 
-            Statement::ExportDefaultDeclaration(_) => errors.push(
-                "API unit must not have a default export (`export default …`)"
-                    .to_string(),
-            ),
+            Statement::ExportDefaultDeclaration(_) => errors
+                .push("API unit must not have a default export (`export default …`)".to_string()),
 
             Statement::ExportAllDeclaration(e) => errors.push(format!(
                 "API unit must not use `export * from '{}'`; \

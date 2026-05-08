@@ -36,10 +36,14 @@ pub fn system_prompt_for_agent(
 ) -> Cow<'static, str> {
     let base: &'static str = match agent {
         ChatAgentType::Planner => *planner::SYSTEM_PROMPT_WITH_UNIT_BRIEFS,
-        ChatAgentType::ArchitectureAnalyzer => *architecture_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
+        ChatAgentType::ArchitectureAnalyzer => {
+            *architecture_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS
+        }
         ChatAgentType::SolutionAnalyzer => *solution_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
         ChatAgentType::Developer => *developer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
-        ChatAgentType::ObservabilityAnalyzer => *observability_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS,
+        ChatAgentType::ObservabilityAnalyzer => {
+            *observability_analyzer::SYSTEM_PROMPT_WITH_UNIT_DETAILS
+        }
     };
 
     let needs_trigger_url = matches!(agent, ChatAgentType::Planner | ChatAgentType::Developer);

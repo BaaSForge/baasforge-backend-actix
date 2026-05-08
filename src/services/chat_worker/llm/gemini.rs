@@ -1,6 +1,7 @@
 // Gemini: streaming + tools via gemini-rust. Thinking / thought summaries:
 // https://ai.google.dev/gemini-api/docs/thinking
 // Crate: `with_thinking_budget` / `with_thinking_level`, `with_thoughts_included`, stream `text_with_thoughts()`.
+use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessageType, ChatSessionRoleType, RequestedToolCall, TextPayload,
     ThinkingBlock,
@@ -9,13 +10,12 @@ use crate::routes::ws::events::{
     ChatSessionNewMessageChunkPayload, ChatSessionNewThinkingChunkPayload, WsServerEvent,
 };
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
-use crate::libs::ids::new_uuid;
 use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::services::chat_worker::ai_message;
-use crate::services::chat_worker::llm::history::{
-    session_messages_to_upstream_entries, UpstreamHistoryEntry,
-};
 use crate::services::chat_worker::llm::GenerateOutcome;
+use crate::services::chat_worker::llm::history::{
+    UpstreamHistoryEntry, session_messages_to_upstream_entries,
+};
 use gemini_rust::client::GenerationStream;
 use gemini_rust::tools::model::{FunctionCall, FunctionCallingMode, FunctionDeclaration};
 use gemini_rust::{Content, Gemini, Message, Part, Role, ThinkingLevel};
@@ -25,11 +25,11 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::tools::{
-    self, analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool, create_unit,
-    finish_architecture_analysis, finish_implementation, finish_observability_analysis,
-    finish_solution_analysis, implement_solution_tool, list_modules_for_unit_contexts,
-    list_unit_contexts, load_latest_production_release_units, load_latest_releases, modify_unit,
-    remove_unit,
+    self, analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool,
+    create_unit, finish_architecture_analysis, finish_implementation,
+    finish_observability_analysis, finish_solution_analysis, implement_solution_tool,
+    list_modules_for_unit_contexts, list_unit_contexts, load_latest_production_release_units,
+    load_latest_releases, modify_unit, remove_unit,
 };
 use super::{BoxError, GeminiThinkingEnv};
 use serde_json::Value;
@@ -87,18 +87,9 @@ fn gemini_declaration_fns_by_name() -> &'static [(
             finish_implementation::TOOL_NAME,
             finish_implementation::gemini_declaration,
         ),
-        (
-            create_unit::TOOL_NAME,
-            create_unit::gemini_declaration,
-        ),
-        (
-            modify_unit::TOOL_NAME,
-            modify_unit::gemini_declaration,
-        ),
-        (
-            remove_unit::TOOL_NAME,
-            remove_unit::gemini_declaration,
-        ),
+        (create_unit::TOOL_NAME, create_unit::gemini_declaration),
+        (modify_unit::TOOL_NAME, modify_unit::gemini_declaration),
+        (remove_unit::TOOL_NAME, remove_unit::gemini_declaration),
     ]
 }
 
@@ -205,7 +196,12 @@ pub async fn call_gemini_stream(
     let client = Gemini::with_model(api_key, gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
 
-    let system_prompt = system_prompt_for_agent(&agent, stale_base_release, project_id, base_runtime_endpoint);
+    let system_prompt = system_prompt_for_agent(
+        &agent,
+        stale_base_release,
+        project_id,
+        base_runtime_endpoint,
+    );
     let declarations: Vec<FunctionDeclaration> = to_gemini_declarations_for_agent(&agent)
         .into_iter()
         .map(sanitize_gemini_function_declaration)
@@ -237,10 +233,7 @@ pub async fn call_gemini_stream(
                 if let Some(tbs) = thinking_blocks.as_ref() {
                     for tb in tbs {
                         let has_text = !tb.thinking.is_empty();
-                        let has_sig = tb
-                            .signature
-                            .as_ref()
-                            .is_some_and(|s| !s.is_empty());
+                        let has_sig = tb.signature.as_ref().is_some_and(|s| !s.is_empty());
                         if !has_text && !has_sig {
                             continue;
                         }
@@ -279,16 +272,15 @@ pub async fn call_gemini_stream(
                             continue;
                         }
                         let fc = FunctionCall::new(tc.name.clone(), tc.arguments.clone());
-                        let model_content =
-                            match tc
-                                .thought_signature
-                                .as_ref()
-                                .map(|s| s.trim())
-                                .filter(|s| !s.is_empty())
-                            {
-                                Some(sig) => Content::function_call_with_thought(fc, sig.to_string()),
-                                None => Content::function_call(fc),
-                            };
+                        let model_content = match tc
+                            .thought_signature
+                            .as_ref()
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                        {
+                            Some(sig) => Content::function_call_with_thought(fc, sig.to_string()),
+                            None => Content::function_call(fc),
+                        };
                         request = request.with_message(Message {
                             content: model_content,
                             role: Role::Model,
@@ -299,9 +291,7 @@ pub async fn call_gemini_stream(
                 }
             }
             UpstreamHistoryEntry::ToolResult {
-                tool_name,
-                content,
-                ..
+                tool_name, content, ..
             } => {
                 let response_value = match serde_json::from_str::<Value>(&content) {
                     Ok(v) => v,
@@ -506,7 +496,9 @@ pub async fn call_gemini_stream(
 
         for (req, (name, args, _thought_sig)) in requested.iter().zip(all_function_calls.iter()) {
             tracing::info!(tool = %name, args = ?args, "Gemini: executing tool");
-            if let Err(e) = tools::execute_tool_async(name, args.clone(), req.tool_call_id.clone()).await {
+            if let Err(e) =
+                tools::execute_tool_async(name, args.clone(), req.tool_call_id.clone()).await
+            {
                 tracing::warn!(
                     tool = %name,
                     "Tool arg validation failed (Failed row persisted); continuing remaining tool calls: {}",
@@ -539,7 +531,10 @@ pub async fn call_gemini_stream(
             )
             .await
             {
-                tracing::warn!("Failed to publish final Gemini thinking chunk to Redis: {}", e);
+                tracing::warn!(
+                    "Failed to publish final Gemini thinking chunk to Redis: {}",
+                    e
+                );
             }
         }
         let payload = ChatSessionNewMessageChunkPayload::new(
@@ -584,9 +579,9 @@ mod tests {
         let props = params
             .get("properties")
             .unwrap_or_else(|| panic!("{tool_name}: parameters has no `properties`: {params}"));
-        let field = props.get(property).unwrap_or_else(|| {
-            panic!("{tool_name}: properties is missing `{property}`: {props}")
-        });
+        let field = props
+            .get(property)
+            .unwrap_or_else(|| panic!("{tool_name}: properties is missing `{property}`: {props}"));
         let desc = field
             .get("description")
             .and_then(|v| v.as_str())
@@ -599,11 +594,8 @@ mod tests {
         );
     }
 
-    fn sanitized_declaration_json(
-        build: fn() -> FunctionDeclaration,
-    ) -> Value {
-        let decl = sanitize_gemini_function_declaration(build())
-            .expect("sanitize should succeed");
+    fn sanitized_declaration_json(build: fn() -> FunctionDeclaration) -> Value {
+        let decl = sanitize_gemini_function_declaration(build()).expect("sanitize should succeed");
         serde_json::to_value(&decl).expect("serialize sanitized declaration")
     }
 

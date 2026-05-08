@@ -6,8 +6,7 @@
 
 use crate::services::units::api::metadata::TypeScriptJsonSchemaPair;
 
-pub const JSON_SCHEMA_DRAFT_2020_12: &str =
-    "https://json-schema.org/draft/2020-12/schema";
+pub const JSON_SCHEMA_DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 
 #[cfg(feature = "unit_technical_reviewer")]
 use oxc_allocator::Allocator;
@@ -21,7 +20,7 @@ use oxc_parser::Parser;
 #[cfg(feature = "unit_technical_reviewer")]
 use oxc_span::SourceType;
 #[cfg(feature = "unit_technical_reviewer")]
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 #[cfg(feature = "unit_technical_reviewer")]
 use std::collections::HashMap;
 
@@ -112,9 +111,7 @@ pub fn enrich_type_script_json_schema_pair(
 #[cfg(feature = "unit_technical_reviewer")]
 fn materialize(ty: &TSType, aliases: &HashMap<&str, &TSType>) -> Value {
     match ty {
-        TSType::TSParenthesizedType(p) => {
-            materialize(&p.type_annotation, aliases)
-        }
+        TSType::TSParenthesizedType(p) => materialize(&p.type_annotation, aliases),
         TSType::TSAnyKeyword(_) | TSType::TSUnknownKeyword(_) => json!({}),
         TSType::TSNeverKeyword(_) => json!({ "not": {} }),
         TSType::TSStringKeyword(_) => json!({ "type": "string" }),
@@ -134,11 +131,7 @@ fn materialize(ty: &TSType, aliases: &HashMap<&str, &TSType>) -> Value {
             })
         }
         TSType::TSUnionType(u) => {
-            let parts: Vec<Value> = u
-                .types
-                .iter()
-                .map(|t| materialize(t, aliases))
-                .collect();
+            let parts: Vec<Value> = u.types.iter().map(|t| materialize(t, aliases)).collect();
             if parts.len() == 1 {
                 parts.into_iter().next().unwrap()
             } else {
@@ -146,11 +139,7 @@ fn materialize(ty: &TSType, aliases: &HashMap<&str, &TSType>) -> Value {
             }
         }
         TSType::TSIntersectionType(i) => {
-            let parts: Vec<Value> = i
-                .types
-                .iter()
-                .map(|t| materialize(t, aliases))
-                .collect();
+            let parts: Vec<Value> = i.types.iter().map(|t| materialize(t, aliases)).collect();
             json!({ "allOf": parts })
         }
         TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
@@ -159,9 +148,7 @@ fn materialize(ty: &TSType, aliases: &HashMap<&str, &TSType>) -> Value {
         TSType::TSTypeOperatorType(_) => json!({}),
         TSType::TSTypeLiteral(obj) => object_literal_schema(obj, aliases),
         TSType::TSTupleType(tup) => tuple_schema(tup, aliases),
-        TSType::TSTypeReference(tr) => {
-            reference_schema(tr, aliases)
-        }
+        TSType::TSTypeReference(tr) => reference_schema(tr, aliases),
         TSType::TSConditionalType(_)
         | TSType::TSConstructorType(_)
         | TSType::TSFunctionType(_)
@@ -187,7 +174,9 @@ fn literal_schema(lit: &TSLiteral) -> Value {
         TSLiteral::NumericLiteral(n) => json!({ "const": n.value }),
         TSLiteral::StringLiteral(s) => json!({ "const": s.value.as_str() }),
         TSLiteral::BigIntLiteral(b) => json!({ "const": b.value.as_str() }),
-        TSLiteral::TemplateLiteral(_) | TSLiteral::UnaryExpression(_) => json!({ "type": "string" }),
+        TSLiteral::TemplateLiteral(_) | TSLiteral::UnaryExpression(_) => {
+            json!({ "type": "string" })
+        }
     }
 }
 
@@ -201,7 +190,10 @@ fn property_key_json_name(key: &PropertyKey) -> Option<String> {
 }
 
 #[cfg(feature = "unit_technical_reviewer")]
-fn object_literal_schema(obj: &oxc_ast::ast::TSTypeLiteral, aliases: &HashMap<&str, &TSType>) -> Value {
+fn object_literal_schema(
+    obj: &oxc_ast::ast::TSTypeLiteral,
+    aliases: &HashMap<&str, &TSType>,
+) -> Value {
     let mut props = Map::new();
     let mut required = Vec::new();
     let mut additional: Option<Value> = None;
@@ -212,10 +204,7 @@ fn object_literal_schema(obj: &oxc_ast::ast::TSTypeLiteral, aliases: &HashMap<&s
                 let Some(name) = property_key_json_name(&sig.key) else {
                     continue;
                 };
-                let ann = sig
-                    .type_annotation
-                    .as_ref()
-                    .map(|a| &a.type_annotation);
+                let ann = sig.type_annotation.as_ref().map(|a| &a.type_annotation);
                 let Some(inner_ty) = ann else {
                     continue;
                 };
@@ -229,10 +218,7 @@ fn object_literal_schema(obj: &oxc_ast::ast::TSTypeLiteral, aliases: &HashMap<&s
                 props.insert(name, sch);
             }
             TSSignature::TSIndexSignature(idx) => {
-                additional = Some(materialize(
-                    &idx.type_annotation.type_annotation,
-                    aliases,
-                ));
+                additional = Some(materialize(&idx.type_annotation.type_annotation, aliases));
             }
             _ => {}
         }
@@ -346,10 +332,7 @@ fn reference_schema(tr: &oxc_ast::ast::TSTypeReference, aliases: &HashMap<&str, 
                             let Some(name) = property_key_json_name(&sig.key) else {
                                 continue;
                             };
-                            let ann = sig
-                                .type_annotation
-                                .as_ref()
-                                .map(|a| &a.type_annotation);
+                            let ann = sig.type_annotation.as_ref().map(|a| &a.type_annotation);
                             let Some(inner_ty) = ann else {
                                 continue;
                             };
@@ -448,9 +431,7 @@ mod tests {
                 .as_array()
                 .is_some()
         );
-        assert!(
-            v["$defs"]["Root___InlinePartial"].get("required").is_none()
-        );
+        assert!(v["$defs"]["Root___InlinePartial"].get("required").is_none());
         assert_eq!(
             v["$defs"]["Root___AliasPartial"]["allOf"][0]["$ref"].as_str(),
             Some("#/$defs/Root___Base")
@@ -462,10 +443,7 @@ mod tests {
         let ts = "type Root___Tuple = [string, number?, ...boolean[]]; type Root___Extra = { c: boolean }; type Root___Obj = { a: string; b?: number } & Root___Extra; type Root___WithIndex = { fixed: string; [k: string]: number }; type Root___Request = { tuple: Root___Tuple; mixed: string | number | null; obj: Root___Obj; indexed: Root___WithIndex };";
         let s = typescript_declarations_to_json_schema(ts, "Root___Request").unwrap();
         let v: Value = serde_json::from_str(&s).unwrap();
-        assert_eq!(
-            v["$defs"]["Root___Tuple"]["type"].as_str(),
-            Some("array")
-        );
+        assert_eq!(v["$defs"]["Root___Tuple"]["type"].as_str(), Some("array"));
         assert_eq!(
             v["$defs"]["Root___Tuple"]["prefixItems"]
                 .as_array()

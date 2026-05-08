@@ -119,14 +119,9 @@ pub async fn handler(
         assistant_turn_id: None,
     };
 
-    chat_message_queue::publish_with_publisher(
-        publisher,
-        project_id,
-        session_id,
-        &queue_message,
-    )
-    .await
-    .map_err(|e| -> BoxError { Box::new(e) })?;
+    chat_message_queue::publish_with_publisher(publisher, project_id, session_id, &queue_message)
+        .await
+        .map_err(|e| -> BoxError { Box::new(e) })?;
 
     Ok(())
 }

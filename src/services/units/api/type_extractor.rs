@@ -6,9 +6,9 @@
 // `build_api_type_meta` is the async entry point: it loads the session's
 // effective units from the database and then runs the synchronous extraction.
 
+use crate::database::DbPool;
 use crate::models::projects::ProjectUnitResponse;
 use crate::services::units::api::metadata::{ApiUnitMetadata, TypeScriptJsonSchemaPair};
-use crate::database::DbPool;
 
 // ── Async orchestration (loads units from DB) ─────────────────────────────────
 
@@ -53,10 +53,7 @@ pub async fn build_api_type_meta(
 /// Full implementation compiled only with the `unit_technical_reviewer` feature.
 /// Returns `ApiUnitMetadata::default()` otherwise.
 #[cfg(feature = "unit_technical_reviewer")]
-pub fn extract_api_type_metadata(
-    code: &str,
-    units: &[ProjectUnitResponse],
-) -> ApiUnitMetadata {
+pub fn extract_api_type_metadata(code: &str, units: &[ProjectUnitResponse]) -> ApiUnitMetadata {
     use crate::services::units::type_extractor::{build_units_vfs, extract_single_type};
 
     let vfs = build_units_vfs(units);
@@ -86,9 +83,6 @@ fn enrich_metadata_json_schema(meta: &mut ApiUnitMetadata) {
 }
 
 #[cfg(not(feature = "unit_technical_reviewer"))]
-pub fn extract_api_type_metadata(
-    _code: &str,
-    _units: &[ProjectUnitResponse],
-) -> ApiUnitMetadata {
+pub fn extract_api_type_metadata(_code: &str, _units: &[ProjectUnitResponse]) -> ApiUnitMetadata {
     ApiUnitMetadata::default()
 }

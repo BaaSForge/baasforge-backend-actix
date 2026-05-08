@@ -162,43 +162,33 @@ impl Settings {
             .filter(|s| !s.is_empty());
         let gemini_api_key = env::var("GEMINI_API_KEY").ok();
         let gemini_model = env::var("GEMINI_MODEL").expect("GEMINI_MODEL must be set");
-        let gemini_thinking_enabled_flag: Option<bool> =
-            match env::var("GEMINI_THINKING_ENABLED") {
-                Ok(s) if s.trim().is_empty() => None,
-                Ok(s) => match parse_env_bool(s.trim()) {
-                    Ok(b) => Some(b),
-                    Err(msg) => {
-                        return Err(
-                            format!("GEMINI_THINKING_ENABLED: {}", msg).into(),
-                        );
-                    }
-                },
-                Err(_) => None,
-            };
+        let gemini_thinking_enabled_flag: Option<bool> = match env::var("GEMINI_THINKING_ENABLED") {
+            Ok(s) if s.trim().is_empty() => None,
+            Ok(s) => match parse_env_bool(s.trim()) {
+                Ok(b) => Some(b),
+                Err(msg) => {
+                    return Err(format!("GEMINI_THINKING_ENABLED: {}", msg).into());
+                }
+            },
+            Err(_) => None,
+        };
         let gemini_thinking_explicitly_disabled = gemini_thinking_enabled_flag == Some(false);
         let gemini_thinking_level = env::var("GEMINI_THINKING_LEVEL")
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-        let gemini_thinking_budget = env::var("GEMINI_THINKING_BUDGET")
-            .ok()
-            .and_then(|s| {
-                let t = s.trim();
-                if t.is_empty() {
-                    None
-                } else {
-                    t.parse().ok()
-                }
-            });
+        let gemini_thinking_budget = env::var("GEMINI_THINKING_BUDGET").ok().and_then(|s| {
+            let t = s.trim();
+            if t.is_empty() { None } else { t.parse().ok() }
+        });
         let anthropic_api_key = env::var("ANTHROPIC_API_KEY").ok();
         let anthropic_model = env::var("ANTHROPIC_MODEL").expect("ANTHROPIC_MODEL must be set");
         let anthropic_thinking_enabled_flag: Option<bool> =
             match env::var("ANTHROPIC_THINKING_ENABLED") {
                 Ok(s) if s.trim().is_empty() => None,
                 Ok(s) => Some(
-                    parse_env_bool(s.trim()).map_err(|msg| {
-                        format!("ANTHROPIC_THINKING_ENABLED: {}", msg)
-                    })?,
+                    parse_env_bool(s.trim())
+                        .map_err(|msg| format!("ANTHROPIC_THINKING_ENABLED: {}", msg))?,
                 ),
                 Err(_) => None,
             };
@@ -222,8 +212,8 @@ impl Settings {
                 Some(t.to_string())
             }
         });
-        let runtime_nats_subject_release_raw =
-            env::var("RUNTIME_NATS_SUBJECT_RELEASE").expect("RUNTIME_NATS_SUBJECT_RELEASE must be set");
+        let runtime_nats_subject_release_raw = env::var("RUNTIME_NATS_SUBJECT_RELEASE")
+            .expect("RUNTIME_NATS_SUBJECT_RELEASE must be set");
         let runtime_nats_subject_release = runtime_nats_subject_release_raw.trim();
         if runtime_nats_subject_release.is_empty() {
             return Err("RUNTIME_NATS_SUBJECT_RELEASE must not be empty".into());
@@ -233,29 +223,32 @@ impl Settings {
         let runtime_nats_jetstream_stream_release_raw =
             env::var("RUNTIME_NATS_JETSTREAM_STREAM_RELEASE")
                 .expect("RUNTIME_NATS_JETSTREAM_STREAM_RELEASE must be set");
-        let runtime_nats_jetstream_stream_release = runtime_nats_jetstream_stream_release_raw.trim();
+        let runtime_nats_jetstream_stream_release =
+            runtime_nats_jetstream_stream_release_raw.trim();
         if runtime_nats_jetstream_stream_release.is_empty() {
             return Err("RUNTIME_NATS_JETSTREAM_STREAM_RELEASE must not be empty".into());
         }
-        let runtime_nats_jetstream_stream_release = runtime_nats_jetstream_stream_release.to_string();
+        let runtime_nats_jetstream_stream_release =
+            runtime_nats_jetstream_stream_release.to_string();
 
         let runtime_nats_jetstream_consumer_release_raw =
             env::var("RUNTIME_NATS_JETSTREAM_CONSUMER_RELEASE")
                 .expect("RUNTIME_NATS_JETSTREAM_CONSUMER_RELEASE must be set");
-        let runtime_nats_jetstream_consumer_release = runtime_nats_jetstream_consumer_release_raw.trim();
+        let runtime_nats_jetstream_consumer_release =
+            runtime_nats_jetstream_consumer_release_raw.trim();
         if runtime_nats_jetstream_consumer_release.is_empty() {
             return Err("RUNTIME_NATS_JETSTREAM_CONSUMER_RELEASE must not be empty".into());
         }
-        let runtime_nats_jetstream_consumer_release = runtime_nats_jetstream_consumer_release.to_string();
+        let runtime_nats_jetstream_consumer_release =
+            runtime_nats_jetstream_consumer_release.to_string();
 
-        let unit_reviewer_simulate_failure: bool =
-            match env::var("UNIT_REVIEWER_SIMULATE_FAILURE") {
-                Ok(s) if s.trim().is_empty() => false,
-                Ok(s) => parse_env_bool(s.trim()).map_err(|msg| {
-                    format!("UNIT_REVIEWER_SIMULATE_FAILURE: {}", msg)
-                })?,
-                Err(_) => false,
-            };
+        let unit_reviewer_simulate_failure: bool = match env::var("UNIT_REVIEWER_SIMULATE_FAILURE")
+        {
+            Ok(s) if s.trim().is_empty() => false,
+            Ok(s) => parse_env_bool(s.trim())
+                .map_err(|msg| format!("UNIT_REVIEWER_SIMULATE_FAILURE: {}", msg))?,
+            Err(_) => false,
+        };
 
         let base_runtime_endpoint = env::var("BASE_RUNTIME_ENDPOINT")
             .expect("BASE_RUNTIME_ENDPOINT must be set")

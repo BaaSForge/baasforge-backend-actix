@@ -22,8 +22,8 @@
 // OXC dependency) compiles for every binary including the chat_worker.  The OXC-dependent code
 // inside each file is individually gated with `#[cfg(feature = "unit_technical_reviewer")]`.
 
-mod generic_rules;
 mod create_rules;
+mod generic_rules;
 mod modify_rules;
 mod remove_rules;
 
@@ -34,13 +34,13 @@ pub mod ast_utils;
 
 #[cfg(feature = "unit_technical_reviewer")]
 pub use ast_utils::{
-    contains_word, export_all_source, get_export_named_decls, get_export_default_call_name,
-    get_exported_type, get_exported_type_names, get_import_declarations, get_imports_from_source,
-    get_named_imports_from_source, get_node_module_import_sources, get_non_type_alias_exports,
-    has_default_import_from, has_export_default, has_exported_function, has_exported_type,
-    has_identifier_reference, has_import_from, has_namespace_import_from,
+    contains_word, export_all_source, get_export_default_call_name, get_export_named_decls,
     get_exported_function_names, get_exported_function_param_count,
-    get_exported_function_param_type_name, is_never, is_object_type, module_export_name_str,
+    get_exported_function_param_type_name, get_exported_type, get_exported_type_names,
+    get_import_declarations, get_imports_from_source, get_named_imports_from_source,
+    get_node_module_import_sources, get_non_type_alias_exports, has_default_import_from,
+    has_export_default, has_exported_function, has_exported_type, has_identifier_reference,
+    has_import_from, has_namespace_import_from, is_never, is_object_type, module_export_name_str,
     ts_type_reference_name,
 };
 
@@ -87,8 +87,12 @@ pub fn compile_ts_to_js(ts_source: &str) -> Result<String, String> {
         .semantic
         .into_scoping();
 
-    let transform_ret = Transformer::new(&allocator, Path::new("module.ts"), &TransformOptions::default())
-        .build_with_scoping(scoping, &mut program);
+    let transform_ret = Transformer::new(
+        &allocator,
+        Path::new("module.ts"),
+        &TransformOptions::default(),
+    )
+    .build_with_scoping(scoping, &mut program);
 
     if !transform_ret.errors.is_empty() {
         let msg = transform_ret
@@ -227,13 +231,22 @@ pub fn rules_prompt() -> String {
     append_hints(&mut out, crate::services::units::api::rules::hint_entries());
 
     out.push_str("### Workflow Units\n\n");
-    append_hints(&mut out, crate::services::units::workflow::rules::hint_entries());
+    append_hints(
+        &mut out,
+        crate::services::units::workflow::rules::hint_entries(),
+    );
 
     out.push_str("### Actor Units\n\n");
-    append_hints(&mut out, crate::services::units::actor::rules::hint_entries());
+    append_hints(
+        &mut out,
+        crate::services::units::actor::rules::hint_entries(),
+    );
 
     out.push_str("### Queue Worker Units\n\n");
-    append_hints(&mut out, crate::services::units::queue_worker::rules::hint_entries());
+    append_hints(
+        &mut out,
+        crate::services::units::queue_worker::rules::hint_entries(),
+    );
 
     out
 }
@@ -281,7 +294,11 @@ pub fn run_rule_check(
         if !ret.errors.is_empty() {
             // The TypeScript compiler check should have caught these first; surface them here as
             // a safety net.
-            return ret.errors.iter().map(|e| format!("Parse error: {e}")).collect();
+            return ret
+                .errors
+                .iter()
+                .map(|e| format!("Parse error: {e}"))
+                .collect();
         }
         Some(ret)
     } else {

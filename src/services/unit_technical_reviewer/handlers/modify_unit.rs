@@ -1,4 +1,4 @@
-use crate::database::{block_on_db_tokio, DbPool};
+use crate::database::{DbPool, block_on_db_tokio};
 use crate::libs::unit_slug::compose_unit_id;
 use crate::models::chat_messages::ChatMessageStatus;
 use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow};
@@ -10,18 +10,17 @@ use crate::services::chat_worker::db::load_units_from_latest_production_metadata
 use crate::services::chat_worker::llm::tools::UnitSubTaskStatus;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::helpers::{
-    broadcast_message_updated, compile_ts_to_js, extract_modify_unit_payload,
-    extract_unit_dependencies, load_tool_message_row, run_rule_check, trigger_llm_continuation,
-    update_tool_message_payload, BoxError, RedisConn, UnitOperation,
+    BoxError, RedisConn, UnitOperation, broadcast_message_updated, compile_ts_to_js,
+    extract_modify_unit_payload, extract_unit_dependencies, load_tool_message_row, run_rule_check,
+    trigger_llm_continuation, update_tool_message_payload,
+};
+use crate::services::unit_technical_reviewer::queue::{
+    UnitReviewerMessageType, UnitReviewerQueueMessage, publish_reviewer_message,
 };
 use crate::services::unit_technical_reviewer::type_checker::run_typescript_check;
-use crate::services::unit_technical_reviewer::queue::{
-    publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
-};
-use crate::services::units::{build_unit_metadata, UnitMetadataBuildInput};
+use crate::services::units::{UnitMetadataBuildInput, build_unit_metadata};
 use diesel::prelude::*;
 use std::sync::Arc;
-
 
 pub async fn process_modify_unit_compiler_check(
     pool: &DbPool,
@@ -123,14 +122,21 @@ pub async fn process_modify_unit_rule_check(
             return Ok(Some(p));
         }
         let prod_units = load_units_from_latest_production_metadata(conn, pid)?;
-        Ok(prod_units.into_iter().find(|u| u.id == pk && !u.is_deleted).map(|u| u.row))
+        Ok(prod_units
+            .into_iter()
+            .find(|u| u.id == pk && !u.is_deleted)
+            .map(|u| u.row))
     })
     .await
     .map_err(|e| -> BoxError { e.to_string().into() })?;
 
     let old_code = parent_opt.as_ref().and_then(|p| p.code.as_deref());
-    let rule_errors =
-        run_rule_check(UnitOperation::Modify, &message.unit_type, &message.code, old_code);
+    let rule_errors = run_rule_check(
+        UnitOperation::Modify,
+        &message.unit_type,
+        &message.code,
+        old_code,
+    );
 
     if rule_errors.is_empty() {
         match parent_opt {
@@ -204,11 +210,12 @@ pub async fn process_modify_unit_rule_check(
                         )
                         .await;
                         let channel = user_channel(message.user_id);
-                        let unit_event = WsServerEvent::ProjectUnitModified(ProjectUnitEventPayload {
-                            project_id: message.project_id,
-                            session_id: message.session_id,
-                            unit: revised_unit,
-                        });
+                        let unit_event =
+                            WsServerEvent::ProjectUnitModified(ProjectUnitEventPayload {
+                                project_id: message.project_id,
+                                session_id: message.session_id,
+                                unit: revised_unit,
+                            });
                         let mut guard = redis_conn.lock().await;
                         if let Err(e) =
                             publish_event_to_channel(&mut *guard, &channel, &unit_event).await
@@ -226,8 +233,10 @@ pub async fn process_modify_unit_rule_check(
                             e
                         );
                         payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
-                        payload.error =
-                            Some(format!("Failed to persist revised unit after checks: {}", e));
+                        payload.error = Some(format!(
+                            "Failed to persist revised unit after checks: {}",
+                            e
+                        ));
                         let updated_row = update_tool_message_payload(
                             pool,
                             tool_message_id,
@@ -260,9 +269,13 @@ pub async fn process_modify_unit_rule_check(
             "Rule check failed. Fix the following violations:\n{}",
             rule_errors.join("\n")
         ));
-        let updated_row =
-            update_tool_message_payload(pool, tool_message_id, &payload, ChatMessageStatus::Completed)
-                .await?;
+        let updated_row = update_tool_message_payload(
+            pool,
+            tool_message_id,
+            &payload,
+            ChatMessageStatus::Completed,
+        )
+        .await?;
         broadcast_message_updated(
             redis_conn,
             message.user_id,

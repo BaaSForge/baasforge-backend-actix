@@ -67,8 +67,8 @@ pub enum UnitSubTaskStatus {
 use crate::database::{DbPool, block_on_db_tokio};
 use crate::libs::ids::new_uuid;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageStatus,
-    ChatMessageType, ChatSessionRoleType, TextPayload,
+    ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageStatus, ChatMessageType,
+    ChatSessionRoleType, TextPayload,
 };
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{
@@ -255,8 +255,7 @@ pub fn tool_context_for_chat_session(
     agent: ChatAgentType,
 ) -> ToolContext {
     let mut callbacks = HashMap::new();
-    for (name, message_type, payload_from_args) in tool_queue_registry_for_agent(&agent)
-    {
+    for (name, message_type, payload_from_args) in tool_queue_registry_for_agent(&agent) {
         let pool = pool.clone();
         let redis_conn = redis_conn.clone();
         let publisher = publisher.clone();
@@ -306,8 +305,9 @@ pub fn tool_context_for_chat_session(
                             return Err(e);
                         }
                     };
-                    let payload_json = serde_json::to_value(&payload)
-                        .map_err(|e| -> BoxError { format!("queue tool payload json: {}", e).into() })?;
+                    let payload_json = serde_json::to_value(&payload).map_err(|e| -> BoxError {
+                        format!("queue tool payload json: {}", e).into()
+                    })?;
                     let message = ChatSessionQueueMessage {
                         user_id,
                         role: ChatSessionRoleType::Ai,
@@ -473,10 +473,7 @@ pub async fn set_tool_message_failed(
         let new_payload = match maybe_payload {
             Some(mut v) if v.is_object() => {
                 if let Value::Object(ref mut map) = v {
-                    map.insert(
-                        "error".to_string(),
-                        Value::String(error_for_db.clone()),
-                    );
+                    map.insert("error".to_string(), Value::String(error_for_db.clone()));
                 }
                 v
             }
@@ -547,15 +544,15 @@ pub type ToolMessageHandler = Arc<
 fn wrap_handler_with_payload<F, Fut>(handler: F) -> ToolMessageHandler
 where
     F: Fn(
-        DbPool,
-        RedisConn,
-        Uuid,
-        Uuid,
-        Uuid,
-        Uuid,
-        Option<ChatMessagePayload>,
-        Option<Arc<SharedRabbitPublisher>>,
-    ) -> Fut
+            DbPool,
+            RedisConn,
+            Uuid,
+            Uuid,
+            Uuid,
+            Uuid,
+            Option<ChatMessagePayload>,
+            Option<Arc<SharedRabbitPublisher>>,
+        ) -> Fut
         + Send
         + Sync
         + 'static,
@@ -587,7 +584,8 @@ where
 pub fn tool_message_type_skips_generic_invoker_completion(type_: &ChatMessageType) -> bool {
     matches!(
         type_,
-        ChatMessageType::ToolAnalyzeArchitecture | ChatMessageType::ToolFinishArchitectureAnalysis
+        ChatMessageType::ToolAnalyzeArchitecture
+            | ChatMessageType::ToolFinishArchitectureAnalysis
             | ChatMessageType::ToolAnalyzeSolution
             | ChatMessageType::ToolFinishSolutionAnalysis
             | ChatMessageType::ToolAnalyzeObservability
@@ -783,9 +781,8 @@ pub async fn maybe_complete_invoking_message(
     let new_status_for_db = new_status.clone();
     let is_failed = failed_count > 0;
     let rows_updated = match block_on_db_tokio(pool, move |conn| {
-        let base = diesel::update(
-            chat_messages::table.filter(chat_messages::id.eq(invoking_message_id)),
-        );
+        let base =
+            diesel::update(chat_messages::table.filter(chat_messages::id.eq(invoking_message_id)));
         let rows = if is_failed {
             base.set(chat_messages::status.eq(new_status_for_db))
                 .execute(conn)?
@@ -832,36 +829,34 @@ pub async fn maybe_complete_invoking_message(
     // Publish to RabbitMQ so the worker runs process_one again and the LLM continues.
     // Read **the invoker AI Text row** (`invoking_message_id`): its `agent` and **column**
     // `invoking_message_id` (thread parent — main thread vs nested under a tool) go on the queue message.
-    let (queue_agent, queue_invoking_message_id) =
-        match block_on_db_tokio(pool, move |conn| {
-            chat_messages::table
-                .filter(chat_messages::id.eq(invoking_message_id))
-                .select((chat_messages::agent, chat_messages::invoking_message_id))
-                .first::<(Option<ChatAgentType>, Option<Uuid>)>(conn)
-                .optional()
-        })
-        .await
-        {
-            Ok(Some((agent, inv))) => (agent.unwrap_or(ChatAgentType::Planner), inv),
-            Ok(None) => {
-                tracing::warn!(
-                    %invoking_message_id,
-                    "maybe_complete_invoking_message: invoker row missing for queue routing; using Planner + no invoking id"
-                );
-                (ChatAgentType::Planner, None)
-            }
-            Err(e) => {
-                tracing::error!(
-                    %invoking_message_id,
-                    "maybe_complete_invoking_message: failed to load invoker row for queue routing: {}; using Planner + no invoking id",
-                    e
-                );
-                (ChatAgentType::Planner, None)
-            }
-        };
+    let (queue_agent, queue_invoking_message_id) = match block_on_db_tokio(pool, move |conn| {
+        chat_messages::table
+            .filter(chat_messages::id.eq(invoking_message_id))
+            .select((chat_messages::agent, chat_messages::invoking_message_id))
+            .first::<(Option<ChatAgentType>, Option<Uuid>)>(conn)
+            .optional()
+    })
+    .await
+    {
+        Ok(Some((agent, inv))) => (agent.unwrap_or(ChatAgentType::Planner), inv),
+        Ok(None) => {
+            tracing::warn!(
+                %invoking_message_id,
+                "maybe_complete_invoking_message: invoker row missing for queue routing; using Planner + no invoking id"
+            );
+            (ChatAgentType::Planner, None)
+        }
+        Err(e) => {
+            tracing::error!(
+                %invoking_message_id,
+                "maybe_complete_invoking_message: failed to load invoker row for queue routing: {}; using Planner + no invoking id",
+                e
+            );
+            (ChatAgentType::Planner, None)
+        }
+    };
 
-    if publish_queue_continuation
-        && let Some(publisher) = rabbit_publisher {
+    if publish_queue_continuation && let Some(publisher) = rabbit_publisher {
         let response_message_id = new_uuid();
         let continuation_payload = serde_json::to_value(ChatMessagePayload::Text(TextPayload {
             text: String::new(),
@@ -1051,11 +1046,7 @@ pub fn spawn_tool_message_handler(type_: ChatMessageType, ctx: ToolMessageContex
                             "Tool handler failed (agent/finish tool): {}",
                             e
                         );
-                        on_tool_message_finished(
-                            &ctx,
-                            Err(e.to_string().into()),
-                        )
-                        .await;
+                        on_tool_message_finished(&ctx, Err(e.to_string().into())).await;
                     }
                 }
                 return;

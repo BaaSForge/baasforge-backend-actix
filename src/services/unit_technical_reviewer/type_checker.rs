@@ -1,9 +1,9 @@
+use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
-use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
 
-use crate::database::{block_on_db_tokio, DbPool};
+use crate::database::{DbPool, block_on_db_tokio};
 use crate::models::projects::ProjectUnitResponse;
 use crate::services::chat_worker::db::load_effective_units_for_chat_session;
 use crate::tsgo::node_modules_files;
@@ -35,33 +35,52 @@ pub async fn run_typescript_check(
     let main_ts_path = format!("{VIRTUAL_ROOT}/main.ts");
 
     // 2. Snapshot Lifecycle
-    let snap_resp = client.call("updateSnapshot", json!({
-        "openProject": tsconfig_path,            
-        "fileChanges": { 
-            "invalidateAll": true, 
-            "changed": [], 
-            "created": [tsconfig_path, main_ts_path],   
-            "deleted": [] 
-        }
-    })).await?;
-    
-    let snapshot = snap_resp["snapshot"].as_str().ok_or("No snapshot handle")?.to_string();
+    let snap_resp = client
+        .call(
+            "updateSnapshot",
+            json!({
+                "openProject": tsconfig_path,
+                "fileChanges": {
+                    "invalidateAll": true,
+                    "changed": [],
+                    "created": [tsconfig_path, main_ts_path],
+                    "deleted": []
+                }
+            }),
+        )
+        .await?;
+
+    let snapshot = snap_resp["snapshot"]
+        .as_str()
+        .ok_or("No snapshot handle")?
+        .to_string();
 
     // 3. Resolve Project
-    let proj_resp = client.call("getDefaultProjectForFile", json!({
-        "snapshot": snapshot,
-        "file": main_ts_path
-    })).await?;
-    
-    let project = proj_resp["id"].as_str()
+    let proj_resp = client
+        .call(
+            "getDefaultProjectForFile",
+            json!({
+                "snapshot": snapshot,
+                "file": main_ts_path
+            }),
+        )
+        .await?;
+
+    let project = proj_resp["id"]
+        .as_str()
         .ok_or_else(|| format!("No project id in response: {}", proj_resp))?;
 
     // 4. Get Diagnostics
-    let diags = client.call("getSemanticDiagnostics", json!({
-        "snapshot": snapshot,
-        "project": project,
-        "file": main_ts_path
-    })).await?;
+    let diags = client
+        .call(
+            "getSemanticDiagnostics",
+            json!({
+                "snapshot": snapshot,
+                "project": project,
+                "file": main_ts_path
+            }),
+        )
+        .await?;
 
     let _ = client.call("release", json!({ "handle": snapshot })).await;
 
@@ -121,12 +140,19 @@ fn build_vfs(code: &str, units: &[ProjectUnitResponse]) -> HashMap<String, Strin
         },
         "files": ["main.ts"]
     });
-    vfs.insert(format!("{}/tsconfig.json", VIRTUAL_ROOT), tsconfig.to_string());
+    vfs.insert(
+        format!("{}/tsconfig.json", VIRTUAL_ROOT),
+        tsconfig.to_string(),
+    );
     vfs.insert(format!("{}/main.ts", VIRTUAL_ROOT), code.to_string());
-    vfs.insert(format!("{}/package.json", VIRTUAL_ROOT), json!({
-        "name": "virtual-project",
-        "type": "module"
-    }).to_string());
+    vfs.insert(
+        format!("{}/package.json", VIRTUAL_ROOT),
+        json!({
+            "name": "virtual-project",
+            "type": "module"
+        })
+        .to_string(),
+    );
 
     // Populate @units/* virtual files so TypeScript can resolve cross-unit type imports.
     // Each non-deleted unit with code becomes a `.ts` file at:
@@ -182,14 +208,14 @@ impl TsgoIpcClient {
             .stdout(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| e.to_string())?;
-    
+
         let writer = BufWriter::new(child.stdin.take().unwrap());
         let reader = BufReader::new(child.stdout.take().unwrap());
-    
+
         // Pre-compute directories for O(1) lookups during module resolution
         let mut vfs_dirs = HashSet::new();
         vfs_dirs.insert(VIRTUAL_ROOT.to_string()); // Explicit root fallback
-        
+
         for key in vfs.keys() {
             let mut current_path = Path::new(key).parent();
             while let Some(parent) = current_path {
@@ -202,8 +228,15 @@ impl TsgoIpcClient {
             }
         }
 
-        Ok(Self { child, writer, reader, vfs, vfs_dirs, next_id: 1 })
-    }    
+        Ok(Self {
+            child,
+            writer,
+            reader,
+            vfs,
+            vfs_dirs,
+            next_id: 1,
+        })
+    }
 
     // ---------- Public API ----------
     pub async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
@@ -247,8 +280,9 @@ impl TsgoIpcClient {
             Value::String(s) => Some(s.as_str()),
             Value::Array(arr) => arr.first().and_then(Value::as_str),
             _ => None,
-        }.unwrap_or("");
-    
+        }
+        .unwrap_or("");
+
         let full_path = if requested_path.starts_with('/') {
             requested_path.to_string()
         } else if requested_path.is_empty() {
@@ -259,7 +293,10 @@ impl TsgoIpcClient {
 
         let normalized = Path::new(&full_path).components().collect::<PathBuf>();
         // Trim any trailing slashes that tsgo might send for consistency
-        let full_path = normalized.to_string_lossy().trim_end_matches('/').to_string();
+        let full_path = normalized
+            .to_string_lossy()
+            .trim_end_matches('/')
+            .to_string();
 
         match method {
             "readFile" => {
@@ -288,8 +325,14 @@ impl TsgoIpcClient {
     async fn write_message(&mut self, msg: &Value) -> Result<(), String> {
         let body = msg.to_string();
         let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        self.writer.write_all(header.as_bytes()).await.map_err(|e| e.to_string())?;
-        self.writer.write_all(body.as_bytes()).await.map_err(|e| e.to_string())?;
+        self.writer
+            .write_all(header.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
+        self.writer
+            .write_all(body.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
         self.writer.flush().await.map_err(|e| e.to_string())
     }
 
@@ -297,17 +340,29 @@ impl TsgoIpcClient {
         let mut len = 0;
         loop {
             let mut line = String::new();
-            let bytes_read = self.reader.read_line(&mut line).await.map_err(|e| e.to_string())?;
+            let bytes_read = self
+                .reader
+                .read_line(&mut line)
+                .await
+                .map_err(|e| e.to_string())?;
             if bytes_read == 0 {
                 return Err("Connection closed by tsgo".to_string());
             }
-            if line.trim().is_empty() { break; }
+            if line.trim().is_empty() {
+                break;
+            }
             if line.starts_with("Content-Length: ") {
-                len = line["Content-Length: ".len()..].trim().parse().map_err(|_| "Invalid Content-Length")?;
+                len = line["Content-Length: ".len()..]
+                    .trim()
+                    .parse()
+                    .map_err(|_| "Invalid Content-Length")?;
             }
         }
         let mut body = vec![0u8; len];
-        self.reader.read_exact(&mut body).await.map_err(|e| e.to_string())?;
+        self.reader
+            .read_exact(&mut body)
+            .await
+            .map_err(|e| e.to_string())?;
         serde_json::from_slice(&body).map_err(|e| e.to_string())
     }
 }
@@ -315,18 +370,24 @@ impl TsgoIpcClient {
 /// Simplified binary locator.
 fn find_tsgo_bin() -> Result<String, String> {
     let rel = tsgo_bin_rel_path()?;
-    
+
     let p = PathBuf::from(&rel);
-    if p.exists() { return Ok(p.to_string_lossy().into_owned()); }
+    if p.exists() {
+        return Ok(p.to_string_lossy().into_owned());
+    }
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(root) = exe.parent() {
             let p = root.join(&rel);
-            if p.exists() { return Ok(p.to_string_lossy().into_owned()); }
+            if p.exists() {
+                return Ok(p.to_string_lossy().into_owned());
+            }
         }
     }
 
-    Err(format!("tsgo binary not found at {rel}. Run `cd tsgo && npm install`"))
+    Err(format!(
+        "tsgo binary not found at {rel}. Run `cd tsgo && npm install`"
+    ))
 }
 
 /// Platform-specific binary path.

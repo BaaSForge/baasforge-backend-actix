@@ -2,19 +2,23 @@ use crate::database;
 use crate::libs::api_response::{api_error, api_success};
 use crate::libs::ids::new_uuid;
 use crate::libs::string::truncate_by_words;
-use crate::libs::unit_slug::{parse_unit_path, validate_full_unit_id_for_tool, UnitPath};
+use crate::libs::unit_slug::{
+    UnitPath, normalize_full_unit_id_arg, parse_unit_path, validate_full_unit_id_for_tool,
+    validate_full_unit_id_revision_segment,
+};
 use crate::middlewares::auth::AccessPayload;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessageCreateBody, ChatMessageInsert, ChatMessagePayload, ChatMessageResponse,
-    ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatMessageWithFirstResponse,
-    ChatSessionRoleType,
+    ChatAgentType, ChatMessageCreateBody, ChatMessageInsert, ChatMessagePayload,
+    ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
+    ChatMessageWithFirstResponse, ChatSessionRoleType,
 };
 use crate::models::chat_sessions::{
     ChatSessionDetailResponse, ChatSessionInsert, ChatSessionResponse,
     ChatSessionWithLastMessageResponse,
 };
 use crate::models::projects::{
-    PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectUnitResponse,
+    PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline,
+    ProjectUnitResponse,
 };
 use crate::routes::AppContext;
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
@@ -32,16 +36,20 @@ use crate::schema::project_releases;
 use crate::schema::project_runtimes;
 use crate::schema::project_units;
 use crate::schema::projects;
-use crate::services::chat_worker::db::{
-    load_chat_session_draft_units_as_of_release_controller_message,
-    load_chat_session_unit_tips_for_merge, load_latest_revisions_by_unit_paths,
-    load_last_not_disabled_release_controller_for_session,
-    load_owned_unit_tips_for_chat_sessions,
-    load_owned_releases_by_chat_session, load_pre_chat_base_units_by_unit_paths,
-    load_unit_previous_revisions_by_full_ids_for_chat_session, load_unit_tips_by_ids_for_chat_session,
-    load_units_by_ids_for_chat_session,
-    DraftUnitsAsOfReleaseControllerError, LastReleaseControllerNotDisabledLookup,
+use crate::services::chat_session_truncate::{
+    TruncateSessionFromMessageOutcome, truncate_session_from_user_message,
 };
+use crate::services::chat_worker::db::{
+    ChatSessionListReleasePair, ChatSessionListUnitFilter, DraftUnitsAsOfReleaseControllerError,
+    LastReleaseControllerNotDisabledLookup, list_project_chat_sessions_page,
+    load_chat_session_draft_units_as_of_release_controller_message,
+    load_chat_session_unit_tips_for_merge, load_last_not_disabled_release_controller_for_session,
+    load_latest_revisions_by_unit_paths, load_owned_releases_by_chat_session,
+    load_owned_unit_tips_for_chat_sessions, load_pre_chat_base_units_by_unit_paths,
+    load_unit_previous_revisions_by_full_ids_for_chat_session,
+    load_unit_tips_by_ids_for_chat_session, load_units_by_ids_for_chat_session,
+};
+use crate::services::chat_worker::reject_controller_box::apply_disabled_due_to_production_release_on_matching_reject_box;
 use crate::services::releases::{
     attach_base_production_releases, attach_is_draft_flags_from_latest_production,
     enrich_chat_message_response_releases, enrich_owned_releases_by_session_map,
@@ -49,13 +57,8 @@ use crate::services::releases::{
     prod_live_release_source_chat_session, production_release_id_for_live_runtimes,
     stale_base_release_from_baseline,
 };
-use crate::services::chat_worker::release_controller_box::apply_is_disabled_due_to_reject_on_matching_release_box;
-use crate::services::chat_worker::reject_controller_box::apply_disabled_due_to_production_release_on_matching_reject_box;
-use crate::services::chat_session_truncate::{
-    truncate_session_from_user_message, TruncateSessionFromMessageOutcome,
-};
 use crate::services::stage_release_from_controller::{
-    transaction_create_stage_release_from_controller, StageReleaseFromControllerError,
+    StageReleaseFromControllerError, transaction_create_stage_release_from_controller,
 };
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 // use actix_ws::Message;
@@ -67,10 +70,95 @@ use std::collections::HashMap;
 use uuid::Uuid;
 // use tokio_stream::StreamExt as _;
 
+fn default_chat_sessions_list_page() -> u32 {
+    1
+}
+
+fn default_chat_sessions_list_page_size() -> u32 {
+    20
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListProjectChatSessionsQuery {
+    #[serde(default = "default_chat_sessions_list_page")]
+    pub page: u32,
+    #[serde(default = "default_chat_sessions_list_page_size")]
+    pub page_size: u32,
+    #[serde(default)]
+    pub release_filters: Option<String>,
+    #[serde(default)]
+    pub unit_filters: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatSessionReleaseFilterJson {
+    env: PlatformEnvironmentType,
+    revision: serde_json::Value,
+}
+
+fn parse_release_filters_json(
+    raw: &Option<String>,
+) -> Result<Vec<ChatSessionListReleasePair>, String> {
+    let Some(s) = raw.as_ref().map(|x| x.trim()).filter(|x| !x.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let items: Vec<ChatSessionReleaseFilterJson> =
+        serde_json::from_str(s).map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(items.len());
+    for it in items {
+        let revision = match &it.revision {
+            serde_json::Value::Number(n) => n
+                .as_f64()
+                .or_else(|| n.as_i64().map(|i| i as f64))
+                .ok_or_else(|| "release_filters: invalid revision number".to_string())?,
+            serde_json::Value::String(st) => st
+                .trim()
+                .parse::<f64>()
+                .map_err(|_| "release_filters: invalid revision string".to_string())?,
+            _ => {
+                return Err("release_filters: revision must be a JSON number or string".to_string());
+            }
+        };
+        if !revision.is_finite() {
+            return Err("release_filters: revision must be finite".to_string());
+        }
+        out.push(ChatSessionListReleasePair {
+            env: it.env,
+            revision,
+        });
+    }
+    Ok(out)
+}
+
+fn parse_unit_filters_json(raw: &Option<String>) -> Result<Vec<ChatSessionListUnitFilter>, String> {
+    let Some(s) = raw.as_ref().map(|x| x.trim()).filter(|x| !x.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let items: Vec<String> = serde_json::from_str(s).map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        out.push(parse_chat_session_list_unit_token(&item)?);
+    }
+    Ok(out)
+}
+
+fn parse_chat_session_list_unit_token(item: &str) -> Result<ChatSessionListUnitFilter, String> {
+    let s = normalize_full_unit_id_arg(item);
+    let parts: Vec<&str> = s.split('.').filter(|p| !p.is_empty()).collect();
+    if parts.len() == 5 && parts[4].chars().all(|c| c.is_ascii_digit()) {
+        validate_full_unit_id_revision_segment(&s).map_err(|e| e)?;
+        return Ok(ChatSessionListUnitFilter::FullId(s));
+    }
+    parse_unit_path(&s)
+        .map(ChatSessionListUnitFilter::Path)
+        .map_err(|e| e)
+}
+
 pub async fn handle_list_project_chat_sessions(
     context: web::Data<AppContext>,
     req: HttpRequest,
     path: web::Path<Uuid>,
+    query: web::Query<ListProjectChatSessionsQuery>,
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
@@ -80,24 +168,56 @@ pub async fn handle_list_project_chat_sessions(
 
     let project_id = path.into_inner();
     let user_id = access_payload.user_id;
+    let q = query.into_inner();
 
-    let sessions_with_last_message = match database::block_on_db(&context.pool, move |conn| {
-        let sessions = chat_sessions::table
-            .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
-            .filter(projects::owner_user_id.eq(user_id))
-            .filter(chat_sessions::project_id.eq(project_id))
-            .order(chat_sessions::created_at.desc())
-            .select(ChatSessionResponse::as_select())
-            .load::<ChatSessionResponse>(conn)?;
+    let release_pairs = match parse_release_filters_json(&q.release_filters) {
+        Ok(v) => v,
+        Err(msg) => {
+            return HttpResponse::BadRequest().json(api_error(&msg, json!({})));
+        }
+    };
+    let unit_filters = match parse_unit_filters_json(&q.unit_filters) {
+        Ok(v) => v,
+        Err(msg) => {
+            return HttpResponse::BadRequest().json(api_error(&msg, json!({})));
+        }
+    };
+
+    let page_req = q.page;
+    let page_size_req = q.page_size;
+
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        let (ids, total, page, page_size) = list_project_chat_sessions_page(
+            conn,
+            user_id,
+            project_id,
+            &release_pairs,
+            &unit_filters,
+            page_req,
+            page_size_req,
+        )?;
 
         let (current_live, live_source_session) =
             prod_live_release_source_chat_session(conn, project_id)?;
 
-        if sessions.is_empty() {
-            return Ok::<_, diesel::result::Error>(Vec::new());
+        if ids.is_empty() {
+            return Ok::<_, diesel::result::Error>((Vec::new(), total, page, page_size));
         }
 
-        let session_ids: Vec<Uuid> = sessions.iter().map(|s| s.id).collect();
+        let sessions: Vec<ChatSessionResponse> = chat_sessions::table
+            .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(chat_sessions::project_id.eq(project_id))
+            .filter(chat_sessions::id.eq_any(&ids))
+            .select(ChatSessionResponse::as_select())
+            .load::<ChatSessionResponse>(conn)?;
+
+        let mut by_id: HashMap<Uuid, ChatSessionResponse> =
+            sessions.into_iter().map(|s| (s.id, s)).collect();
+        let sessions_ordered: Vec<ChatSessionResponse> =
+            ids.iter().filter_map(|id| by_id.remove(id)).collect();
+
+        let session_ids: Vec<Uuid> = sessions_ordered.iter().map(|s| s.id).collect();
         let latest_message_rows = chat_messages::table
             .inner_join(
                 chat_sessions::table.on(chat_messages::chat_session_id.eq(chat_sessions::id)),
@@ -129,32 +249,32 @@ pub async fn handle_list_project_chat_sessions(
         let owned_units_by_session =
             load_owned_unit_tips_for_chat_sessions(conn, project_id, &session_ids)?;
 
-        Ok::<_, diesel::result::Error>(
-            sessions
-                .into_iter()
-                .map(|session| {
-                    let stale_base_release = stale_base_release_from_baseline(
-                        session.live_production_release_id,
-                        current_live,
-                        live_source_session,
-                        session.id,
-                    );
-                    ChatSessionWithLastMessageResponse {
-                        stale_base_release,
-                        last_message: latest_by_session_id.remove(&session.id),
-                        owned_units: owned_units_by_session
-                            .get(&session.id)
-                            .cloned()
-                            .unwrap_or_default(),
-                        owned_releases: owned_releases_by_session
-                            .get(&session.id)
-                            .cloned()
-                            .unwrap_or_default(),
-                        session,
-                    }
-                })
-                .collect(),
-        )
+        let sessions_with_last_message: Vec<ChatSessionWithLastMessageResponse> = sessions_ordered
+            .into_iter()
+            .map(|session| {
+                let stale_base_release = stale_base_release_from_baseline(
+                    session.live_production_release_id,
+                    current_live,
+                    live_source_session,
+                    session.id,
+                );
+                ChatSessionWithLastMessageResponse {
+                    stale_base_release,
+                    last_message: latest_by_session_id.remove(&session.id),
+                    owned_units: owned_units_by_session
+                        .get(&session.id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    owned_releases: owned_releases_by_session
+                        .get(&session.id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    session,
+                }
+            })
+            .collect();
+
+        Ok::<_, diesel::result::Error>((sessions_with_last_message, total, page, page_size))
     })
     .await
     {
@@ -166,9 +286,16 @@ pub async fn handle_list_project_chat_sessions(
         }
     };
 
+    let (sessions_with_last_message, total, page, page_size) = outcome;
+
     HttpResponse::Ok().json(api_success(
         "Project chat sessions fetched successfully",
-        json!(sessions_with_last_message),
+        json!({
+            "sessions": sessions_with_last_message,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }),
     ))
 }
 
@@ -225,7 +352,10 @@ pub async fn handle_get_project_chat_session(
         }
     };
 
-    HttpResponse::Ok().json(api_success("Chat session fetched successfully", json!(response)))
+    HttpResponse::Ok().json(api_success(
+        "Chat session fetched successfully",
+        json!(response),
+    ))
 }
 
 const DEFAULT_MESSAGES_PAGE_SIZE: i64 = 50;
@@ -324,7 +454,9 @@ enum GetLastReleaseControllerNotDisabledOutcome {
     Message(ChatMessageResponse),
 }
 
-fn strip_units_metadata_from_release_controller_response(mut msg: ChatMessageResponse) -> ChatMessageResponse {
+fn strip_units_metadata_from_release_controller_response(
+    mut msg: ChatMessageResponse,
+) -> ChatMessageResponse {
     let Some(ChatMessagePayload::ReleaseControllerBox(mut p)) = msg.payload.take() else {
         return msg;
     };
@@ -359,10 +491,7 @@ pub async fn handle_get_last_release_controller_not_disabled(
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
         match load_last_not_disabled_release_controller_for_session(
-            conn,
-            user_id,
-            project_id,
-            session_id,
+            conn, user_id, project_id, session_id,
         )? {
             LastReleaseControllerNotDisabledLookup::SessionNotFound => {
                 Ok(GetLastReleaseControllerNotDisabledOutcome::SessionNotFound)
@@ -389,9 +518,7 @@ pub async fn handle_get_last_release_controller_not_disabled(
             return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
         }
         Err(_) => {
-            tracing::error!(
-                "[handle_get_last_release_controller_not_disabled] DB/block error"
-            );
+            tracing::error!("[handle_get_last_release_controller_not_disabled] DB/block error");
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }
@@ -407,9 +534,12 @@ pub async fn handle_get_last_release_controller_not_disabled(
                 json!({ "message": serde_json::Value::Null }),
             ))
         }
-        GetLastReleaseControllerNotDisabledOutcome::Message(m) => HttpResponse::Ok().json(
-            api_success("Last eligible release controller message", json!({ "message": m })),
-        ),
+        GetLastReleaseControllerNotDisabledOutcome::Message(m) => {
+            HttpResponse::Ok().json(api_success(
+                "Last eligible release controller message",
+                json!({ "message": m }),
+            ))
+        }
     }
 }
 
@@ -815,9 +945,9 @@ pub async fn handle_list_chat_session_draft_units_as_of_release_controller_messa
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
-    let access_payload = extensions
-        .get::<AccessPayload>()
-        .expect("AccessPayload must exist to list chat session draft units as of release controller");
+    let access_payload = extensions.get::<AccessPayload>().expect(
+        "AccessPayload must exist to list chat session draft units as of release controller",
+    );
 
     let (project_id, session_id, release_controller_message_id) = path.into_inner();
     let user_id = access_payload.user_id;
@@ -937,7 +1067,8 @@ pub async fn handle_unit_tips_by_ids_for_chat_session(
             if session_exists.is_none() {
                 return Err(diesel::result::Error::NotFound);
             }
-            let units = load_unit_tips_by_ids_for_chat_session(conn, project_id, session_id, &unit_ids)?;
+            let units =
+                load_unit_tips_by_ids_for_chat_session(conn, project_id, session_id, &unit_ids)?;
             Ok::<_, diesel::result::Error>(UnitTipsByIdsResponse { units })
         }
     })
@@ -1004,7 +1135,8 @@ pub async fn handle_units_by_ids_for_chat_session(
             if session_exists.is_none() {
                 return Err(diesel::result::Error::NotFound);
             }
-            let units = load_units_by_ids_for_chat_session(conn, project_id, session_id, &unit_ids)?;
+            let units =
+                load_units_by_ids_for_chat_session(conn, project_id, session_id, &unit_ids)?;
             Ok::<_, diesel::result::Error>(UnitsByIdsResponse { units })
         }
     })
@@ -1093,12 +1225,16 @@ pub async fn handle_unit_latest_revisions_by_ids_for_chat_session(
             return HttpResponse::NotFound().json(api_error("Chat session not found", json!({})));
         }
         Err(database::BlockingDbError::Query(_)) => {
-            tracing::error!("[handle_unit_latest_revisions_by_ids_for_chat_session] DB/block error");
+            tracing::error!(
+                "[handle_unit_latest_revisions_by_ids_for_chat_session] DB/block error"
+            );
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }
         Err(_) => {
-            tracing::error!("[handle_unit_latest_revisions_by_ids_for_chat_session] pool/blocking error");
+            tracing::error!(
+                "[handle_unit_latest_revisions_by_ids_for_chat_session] pool/blocking error"
+            );
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }
@@ -1262,8 +1398,9 @@ pub async fn handle_unit_previous_revisions_by_full_ids_for_chat_session(
     let response = match database::block_on_db(&context.pool, {
         let unit_ids = unit_ids.clone();
         move |conn| {
-            let (units, missing) =
-                load_unit_previous_revisions_by_full_ids_for_chat_session(conn, project_id, session_id, &unit_ids)?;
+            let (units, missing) = load_unit_previous_revisions_by_full_ids_for_chat_session(
+                conn, project_id, session_id, &unit_ids,
+            )?;
             if let Some(id) = missing {
                 return Ok(Err(id));
             }
@@ -1303,7 +1440,7 @@ pub async fn handle_unit_previous_revisions_by_full_ids_for_chat_session(
 
 fn chat_session_title_from_string(preferredString: Option<String>) -> String {
     let fallback = || format!("New chat session {}", Utc::now().format("%H:%M"));
-    
+
     preferredString
         .and_then(|m| truncate_by_words(m, 15))
         .unwrap_or_else(fallback)
@@ -1326,8 +1463,7 @@ pub async fn handle_create_project_chat_session(
     let title = chat_session_title_from_string(body.into_inner().title);
 
     let chat_session = match database::block_on_db(&context.pool, move |conn| {
-        let live_production_release_id =
-            live_release_id_from_production_runtime(conn, project_id)?;
+        let live_production_release_id = live_release_id_from_production_runtime(conn, project_id)?;
         let chat_session = ChatSessionInsert {
             project_id,
             user_id,
@@ -1456,10 +1592,7 @@ pub async fn broadcast_production_live_release_changed(
             return;
         }
         Err(e) => {
-            tracing::warn!(
-                ?e,
-                "[broadcast_production_live_release_changed] DB failed"
-            );
+            tracing::warn!(?e, "[broadcast_production_live_release_changed] DB failed");
             return;
         }
     };
@@ -1468,7 +1601,8 @@ pub async fn broadcast_production_live_release_changed(
         project_id,
     });
     let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(owner_user_id), &event).await
+    if let Err(e) =
+        publish_event_to_channel(&mut *guard, &user_channel(owner_user_id), &event).await
     {
         tracing::warn!(
             "[broadcast_production_live_release_changed] WS publish failed: {}",
@@ -1498,7 +1632,10 @@ pub async fn broadcast_stage_release_create_effects(
         let mut guard = redis_conn.lock().await;
         if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
         {
-            tracing::warn!("[broadcast_stage_release_create_effects] WS publish failed: {}", e);
+            tracing::warn!(
+                "[broadcast_stage_release_create_effects] WS publish failed: {}",
+                e
+            );
         }
     }
     if let Some(ref nats) = context.runtime_nats_publisher {
@@ -1513,7 +1650,10 @@ pub async fn broadcast_stage_release_create_effects(
             )
             .await
         {
-            tracing::warn!("[broadcast_stage_release_create_effects] NATS publish failed: {}", e);
+            tracing::warn!(
+                "[broadcast_stage_release_create_effects] NATS publish failed: {}",
+                e
+            );
         }
     } else {
         tracing::warn!(
@@ -1575,7 +1715,9 @@ pub async fn handle_create_stage_release(
             {
                 Ok(mut v) => v.pop().expect("one release"),
                 Err(_) => {
-                    tracing::error!("[handle_create_stage_release] DB/block error (attach baseline)");
+                    tracing::error!(
+                        "[handle_create_stage_release] DB/block error (attach baseline)"
+                    );
                     return HttpResponse::ServiceUnavailable()
                         .json(api_error("Database temporarily unavailable", json!({})));
                 }
@@ -1645,29 +1787,27 @@ pub async fn handle_create_production_release(
                 return Ok(ProdReleaseOutcome::NotReleaseController);
             }
 
-            let mut box_payload = match ChatMessagePayload::from_value(
-                &msg_row.type_,
-                msg_row.payload.clone(),
-            ) {
-                Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) => p,
-                Ok(None) => return Ok(ProdReleaseOutcome::ReleaseControllerPayloadMissing),
-                Ok(Some(other)) => {
-                    tracing::warn!(
-                        message_id = %message_id,
-                        variant = other.variant_label(),
-                        "release_controller_box row has unexpected payload variant"
-                    );
-                    return Ok(ProdReleaseOutcome::ReleaseControllerPayloadInvalid);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        message_id = %message_id,
-                        error = %e,
-                        "release_controller_box payload deserialize failed"
-                    );
-                    return Ok(ProdReleaseOutcome::ReleaseControllerPayloadInvalid);
-                }
-            };
+            let mut box_payload =
+                match ChatMessagePayload::from_value(&msg_row.type_, msg_row.payload.clone()) {
+                    Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) => p,
+                    Ok(None) => return Ok(ProdReleaseOutcome::ReleaseControllerPayloadMissing),
+                    Ok(Some(other)) => {
+                        tracing::warn!(
+                            message_id = %message_id,
+                            variant = other.variant_label(),
+                            "release_controller_box row has unexpected payload variant"
+                        );
+                        return Ok(ProdReleaseOutcome::ReleaseControllerPayloadInvalid);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            message_id = %message_id,
+                            error = %e,
+                            "release_controller_box payload deserialize failed"
+                        );
+                        return Ok(ProdReleaseOutcome::ReleaseControllerPayloadInvalid);
+                    }
+                };
 
             let Some(stage_on_controller) = box_payload.stage_release.as_ref() else {
                 return Ok(ProdReleaseOutcome::NoStageRelease);
@@ -1676,9 +1816,10 @@ pub async fn handle_create_production_release(
                 return Ok(ProdReleaseOutcome::StageReleaseIdMismatch);
             }
             if let Some(cid) = stage_on_controller.release.chat_session_id
-                && cid != session_id {
-                    return Ok(ProdReleaseOutcome::StageReleaseNotFoundForSession);
-                }
+                && cid != session_id
+            {
+                return Ok(ProdReleaseOutcome::StageReleaseNotFoundForSession);
+            }
 
             // Stage must be a row for this project, this session, and stage lane (not another chat).
             let Some(stage) = project_releases::table
@@ -1693,14 +1834,11 @@ pub async fn handle_create_production_release(
                 return Ok(ProdReleaseOutcome::StageReleaseNotFoundForSession);
             };
 
-            let previous_prod_release_id = production_release_id_for_live_runtimes(conn, project_id)?;
+            let previous_prod_release_id =
+                production_release_id_for_live_runtimes(conn, project_id)?;
 
             let inserted = insert_production_release_from_stage_row(
-                conn,
-                project_id,
-                session_id,
-                message_id,
-                &stage,
+                conn, project_id, session_id, message_id, &stage,
             )?;
 
             let n = diesel::update(
@@ -1733,12 +1871,11 @@ pub async fn handle_create_production_release(
                 Err(e) => return Ok(ProdReleaseOutcome::Metadata(e.to_string())),
             };
 
-            let updated_row = diesel::update(
-                chat_messages::table.filter(chat_messages::id.eq(message_id)),
-            )
-            .set(chat_messages::payload.eq(Some(payload_json)))
-            .returning(ChatMessageRow::as_returning())
-            .get_result(conn)?;
+            let updated_row =
+                diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+                    .set(chat_messages::payload.eq(Some(payload_json)))
+                    .returning(ChatMessageRow::as_returning())
+                    .get_result(conn)?;
 
             let reject_updated_row = match box_payload.assistant_turn_id {
                 Some(tid) => apply_disabled_due_to_production_release_on_matching_reject_box(
@@ -1748,19 +1885,15 @@ pub async fn handle_create_production_release(
             };
 
             let controller_at = msg_row.created_at;
-            let user_messages_edit_disabled: Vec<ChatMessageRow> = diesel::update(
-                chat_messages::table,
-            )
-            .filter(chat_messages::chat_session_id.eq(session_id))
-            .filter(chat_messages::role.eq(ChatSessionRoleType::User))
-            .filter(chat_messages::is_edit_disabled_due_to_production_release.eq(false))
-            .filter(
-                chat_messages::created_at
-                    .lt(controller_at),
-            )
-            .set(chat_messages::is_edit_disabled_due_to_production_release.eq(true))
-            .returning(ChatMessageRow::as_returning())
-            .load(conn)?;
+            let user_messages_edit_disabled: Vec<ChatMessageRow> =
+                diesel::update(chat_messages::table)
+                    .filter(chat_messages::chat_session_id.eq(session_id))
+                    .filter(chat_messages::role.eq(ChatSessionRoleType::User))
+                    .filter(chat_messages::is_edit_disabled_due_to_production_release.eq(false))
+                    .filter(chat_messages::created_at.lt(controller_at))
+                    .set(chat_messages::is_edit_disabled_due_to_production_release.eq(true))
+                    .returning(ChatMessageRow::as_returning())
+                    .load(conn)?;
 
             Ok(ProdReleaseOutcome::Success(
                 inserted,
@@ -2153,26 +2286,33 @@ pub async fn handle_confirm_reject_controller(
         ) => {
             if let Some(ref redis_conn) = context.redis_conn {
                 let message: ChatMessageResponse = reject_row.into();
-                let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
-                    project_id,
-                    session_id,
-                    message,
-                });
+                let event =
+                    WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                        project_id,
+                        session_id,
+                        message,
+                    });
                 let mut guard = redis_conn.lock().await;
-                if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
+                if let Err(e) =
+                    publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
                 {
-                    tracing::warn!("[handle_confirm_reject_controller] WS publish (reject) failed: {}", e);
+                    tracing::warn!(
+                        "[handle_confirm_reject_controller] WS publish (reject) failed: {}",
+                        e
+                    );
                 }
                 if let Some(release_row) = release_row_opt {
                     let message_r: ChatMessageResponse = release_row.into();
-                    let event_r =
-                        WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                    let event_r = WsServerEvent::ChatSessionMessageUpdated(
+                        ChatSessionMessageUpdatedPayload {
                             project_id,
                             session_id,
                             message: message_r,
-                        });
+                        },
+                    );
                     if let Err(e) =
-                        publish_event_to_channel(&mut *guard, &user_channel(user_id), &event_r).await
+                        publish_event_to_channel(&mut *guard, &user_channel(user_id), &event_r)
+                            .await
                     {
                         tracing::warn!(
                             "[handle_confirm_reject_controller] WS publish (release) failed: {}",
@@ -2182,7 +2322,9 @@ pub async fn handle_confirm_reject_controller(
                 }
             }
 
-            if let (Some(stage_release_id), true) = (stage_release_id_opt, !stage_runtime_ids_cleared.is_empty()) {
+            if let (Some(stage_release_id), true) =
+                (stage_release_id_opt, !stage_runtime_ids_cleared.is_empty())
+            {
                 if let Some(ref nats) = context.runtime_nats_publisher {
                     let subject = context.settings.runtime_nats_subject_release.as_str();
                     for runtime_id in stage_runtime_ids_cleared {
@@ -2205,10 +2347,12 @@ pub async fn handle_confirm_reject_controller(
             }
             HttpResponse::Ok().json(api_success("Reject confirmed", json!({})))
         }
-        ConfirmRejectOutcome::SessionNotFound => HttpResponse::NotFound()
-            .json(api_error("Chat session not found", json!({}))),
-        ConfirmRejectOutcome::MessageNotFound => HttpResponse::NotFound()
-            .json(api_error("Message not found", json!({}))),
+        ConfirmRejectOutcome::SessionNotFound => {
+            HttpResponse::NotFound().json(api_error("Chat session not found", json!({})))
+        }
+        ConfirmRejectOutcome::MessageNotFound => {
+            HttpResponse::NotFound().json(api_error("Message not found", json!({})))
+        }
         ConfirmRejectOutcome::NotRejectController => HttpResponse::BadRequest().json(api_error(
             "Message is not a reject_controller_box row",
             json!({}),
@@ -2219,12 +2363,12 @@ pub async fn handle_confirm_reject_controller(
         )),
         ConfirmRejectOutcome::AlreadyRejected => HttpResponse::BadRequest()
             .json(api_error("Reject controller already confirmed", json!({}))),
-        ConfirmRejectOutcome::DisabledByProductionRelease => HttpResponse::BadRequest().json(
-            api_error(
+        ConfirmRejectOutcome::DisabledByProductionRelease => {
+            HttpResponse::BadRequest().json(api_error(
                 "Reject controller is disabled because a production release was created",
                 json!({}),
-            ),
-        ),
+            ))
+        }
         ConfirmRejectOutcome::NotLastMessage => HttpResponse::BadRequest().json(api_error(
             "Reject controller must be the latest message in the chat session",
             json!({}),
@@ -2245,19 +2389,16 @@ pub async fn handle_truncate_chat_session_from_user_message(
     let (project_id, session_id, user_message_id) = path.into_inner();
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
-        truncate_session_from_user_message(
-            conn,
-            user_id,
-            project_id,
-            session_id,
-            user_message_id,
-        )
+        truncate_session_from_user_message(conn, user_id, project_id, session_id, user_message_id)
     })
     .await
     {
         Ok(o) => o,
         Err(e) => {
-            tracing::error!("[handle_truncate_chat_session_from_user_message] DB error: {}", e);
+            tracing::error!(
+                "[handle_truncate_chat_session_from_user_message] DB error: {}",
+                e
+            );
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
         }

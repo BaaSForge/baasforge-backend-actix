@@ -1,18 +1,16 @@
 use crate::database::PooledConn;
-use crate::models::chat_messages::{
-    ChatMessageType, ChatSessionRoleType,
-};
+use crate::models::chat_messages::{ChatMessageType, ChatSessionRoleType};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::nested_branch_history::load_nested_branch_history;
 use crate::services::chat_worker::llm::tools::{
     create_unit, finish_implementation, list_modules_for_unit_contexts, list_unit_contexts,
     modify_unit, remove_unit,
 };
-use crate::services::units as units_definitions;
 use crate::services::unit_technical_reviewer::rule_checker;
+use crate::services::units as units_definitions;
+use diesel::OptionalExtension;
 use diesel::prelude::*;
 use diesel::result::Error;
-use diesel::OptionalExtension;
 use serde_json::Value;
 use std::sync::LazyLock;
 use uuid::Uuid;

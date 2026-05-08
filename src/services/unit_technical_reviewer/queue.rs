@@ -1,5 +1,5 @@
 use crate::services::message_queue::{
-    DeadLetterSpec, RetryPolicy, publish_with_channel, PublishError, SharedRabbitPublisher,
+    DeadLetterSpec, PublishError, RetryPolicy, SharedRabbitPublisher, publish_with_channel,
 };
 use lapin::{Connection, Consumer};
 use serde::{Deserialize, Serialize};

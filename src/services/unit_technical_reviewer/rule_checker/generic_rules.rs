@@ -49,11 +49,11 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
 // ── Linting rules (require the OXC parser) ────────────────────────────────────────────────────
 
 #[cfg(feature = "unit_technical_reviewer")]
-use super::ast_utils;
-#[cfg(feature = "unit_technical_reviewer")]
 use super::Rule;
 #[cfg(feature = "unit_technical_reviewer")]
 use super::RuleInput;
+#[cfg(feature = "unit_technical_reviewer")]
+use super::ast_utils;
 
 #[cfg(feature = "unit_technical_reviewer")]
 pub(super) fn rules() -> Vec<Rule> {
@@ -151,13 +151,13 @@ fn only_allowed_node_imports(input: &RuleInput) -> Vec<String> {
 
     for src in ast_utils::get_node_module_import_sources(program) {
         // Reject any node: module not in the allowlist.
-        let Some(allowed_names) = ALLOWED.iter().find_map(|(mod_src, names)| {
-            if *mod_src == src {
-                Some(*names)
-            } else {
-                None
-            }
-        }) else {
+        let Some(allowed_names) =
+            ALLOWED.iter().find_map(
+                |(mod_src, names)| {
+                    if *mod_src == src { Some(*names) } else { None }
+                },
+            )
+        else {
             errors.push(format!(
                 "Import from `{src}` is not supported in units; \
                  only node:http, node:querystring, node:stream/consumers, node:url, \

@@ -1,6 +1,6 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
 use crate::libs::unit_slug::{
-    normalize_full_unit_id_arg, validate_full_unit_id_for_tool, LLM_UNIT_ID_TOOL_DESCRIPTION,
+    LLM_UNIT_ID_TOOL_DESCRIPTION, normalize_full_unit_id_arg, validate_full_unit_id_for_tool,
 };
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
@@ -12,10 +12,10 @@ use crate::routes::ws::user_channel;
 use crate::schema::{chat_messages, project_units};
 use crate::services::chat_worker::db::load_units_from_latest_production_metadata;
 use crate::services::message_queue::SharedRabbitPublisher;
-use crate::services::units::HttpMethod;
 use crate::services::unit_technical_reviewer::queue::{
-    publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
+    UnitReviewerMessageType, UnitReviewerQueueMessage, publish_reviewer_message,
 };
+use crate::services::units::HttpMethod;
 use diesel::prelude::*;
 use gemini_rust::tools::model::FunctionDeclaration;
 use schemars::JsonSchema;
@@ -25,7 +25,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::{maybe_complete_invoking_message, BoxError, ToolSpec, UnitSubTaskStatus};
+use super::{BoxError, ToolSpec, UnitSubTaskStatus, maybe_complete_invoking_message};
 
 pub const ARG_UNIT_ID_DESCRIPTION: &str = LLM_UNIT_ID_TOOL_DESCRIPTION;
 /// Description for the `explanation` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
@@ -187,46 +187,50 @@ pub async fn handler(
     // Pre-check: validate unit_id format and find the parent row.
     // The actual project_units insert is NOT done here; it happens only after all reviewer checks
     // pass (in the reviewer's modify_unit_rule_check success branch).
-    let (parent_opt, pre_check_error): (Option<ProjectUnitRow>, Option<String>) =
-        if let Some(msg) = precheck_fmt_error {
-            pre_check_sub_task = UnitSubTaskStatus::Failed;
-            (None, Some(msg))
-        } else {
-            let pk = parent_key.clone();
-            match block_on_db_tokio(&pool, move |conn| {
-                let parent: Option<ProjectUnitRow> = project_units::table
-                    .filter(project_units::project_id.eq(project_id))
-                    .filter(project_units::chat_session_id.eq(session_id))
-                    .filter(project_units::id.eq(&pk))
-                    .select(ProjectUnitRow::as_select())
-                    .first(conn)
-                    .optional()?;
-                if let Some(p) = parent {
-                    return Ok(Some(p));
-                }
-                let prod_units = load_units_from_latest_production_metadata(conn, project_id)?;
-                Ok(prod_units.into_iter().find(|u| u.id == pk && !u.is_deleted).map(|u| u.row))
-            })
-            .await
-            {
-                Ok(Some(parent)) => {
-                    pre_check_sub_task = UnitSubTaskStatus::Succeeded;
-                    (Some(parent), None)
-                }
-                Ok(None) => {
-                    pre_check_sub_task = UnitSubTaskStatus::Failed;
-                    (
+    let (parent_opt, pre_check_error): (Option<ProjectUnitRow>, Option<String>) = if let Some(msg) =
+        precheck_fmt_error
+    {
+        pre_check_sub_task = UnitSubTaskStatus::Failed;
+        (None, Some(msg))
+    } else {
+        let pk = parent_key.clone();
+        match block_on_db_tokio(&pool, move |conn| {
+            let parent: Option<ProjectUnitRow> = project_units::table
+                .filter(project_units::project_id.eq(project_id))
+                .filter(project_units::chat_session_id.eq(session_id))
+                .filter(project_units::id.eq(&pk))
+                .select(ProjectUnitRow::as_select())
+                .first(conn)
+                .optional()?;
+            if let Some(p) = parent {
+                return Ok(Some(p));
+            }
+            let prod_units = load_units_from_latest_production_metadata(conn, project_id)?;
+            Ok(prod_units
+                .into_iter()
+                .find(|u| u.id == pk && !u.is_deleted)
+                .map(|u| u.row))
+        })
+        .await
+        {
+            Ok(Some(parent)) => {
+                pre_check_sub_task = UnitSubTaskStatus::Succeeded;
+                (Some(parent), None)
+            }
+            Ok(None) => {
+                pre_check_sub_task = UnitSubTaskStatus::Failed;
+                (
                         None,
                         Some("modify_unit: unit not found in this chat session or the live production release".to_string()),
                     )
-                }
-                Err(e) => {
-                    pre_check_sub_task = UnitSubTaskStatus::Failed;
-                    tracing::error!(%message_id, "modify_unit find parent: {}", e);
-                    (None, Some(e.to_string()))
-                }
             }
-        };
+            Err(e) => {
+                pre_check_sub_task = UnitSubTaskStatus::Failed;
+                tracing::error!(%message_id, "modify_unit find parent: {}", e);
+                (None, Some(e.to_string()))
+            }
+        }
+    };
 
     if pre_check_sub_task == UnitSubTaskStatus::Failed {
         // Pre-check failed: save Completed with the error and trigger LLM continuation.
@@ -240,8 +244,9 @@ pub async fn handler(
             tool_call_id,
             tool_name,
         };
-        let payload_value = serde_json::to_value(&full_payload)
-            .map_err(|e| -> BoxError { format!("serialize modify_unit pre_check failure: {}", e).into() })?;
+        let payload_value = serde_json::to_value(&full_payload).map_err(|e| -> BoxError {
+            format!("serialize modify_unit pre_check failure: {}", e).into()
+        })?;
         let updated_row = block_on_db_tokio(&pool, move |conn| {
             diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
                 .set((
@@ -271,7 +276,14 @@ pub async fn handler(
         // here explicitly because the message is Completed and the LLM must continue.
         if let (Some(inv_id), Some(ref publisher)) = (invoking_id, rabbit_publisher.as_ref()) {
             maybe_complete_invoking_message(
-                &pool, &redis_conn, Some(publisher), inv_id, user_id, project_id, session_id, true,
+                &pool,
+                &redis_conn,
+                Some(publisher),
+                inv_id,
+                user_id,
+                project_id,
+                session_id,
+                true,
             )
             .await;
         }
@@ -291,8 +303,9 @@ pub async fn handler(
         tool_call_id,
         tool_name,
     };
-    let payload_value = serde_json::to_value(&partial_payload)
-        .map_err(|e| -> BoxError { format!("serialize modify_unit partial payload: {}", e).into() })?;
+    let payload_value = serde_json::to_value(&partial_payload).map_err(|e| -> BoxError {
+        format!("serialize modify_unit partial payload: {}", e).into()
+    })?;
     let updated_row = block_on_db_tokio(&pool, move |conn| {
         diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
             .set((

@@ -1,4 +1,4 @@
-use crate::database::{block_on_db_tokio, DbPool};
+use crate::database::{DbPool, block_on_db_tokio};
 use crate::models::chat_messages::{ChatMessageResponse, ChatMessageRow, ChatMessageStatus};
 use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
@@ -7,7 +7,9 @@ use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::tools::create_unit::ToolCreateUnitPayload;
 use crate::services::chat_worker::llm::tools::modify_unit::ToolModifyUnitPayload;
 use crate::services::chat_worker::llm::tools::remove_unit::ToolRemoveUnitPayload;
-use crate::services::chat_worker::llm::tools::{maybe_complete_invoking_message, UnitSubTaskStatus};
+use crate::services::chat_worker::llm::tools::{
+    UnitSubTaskStatus, maybe_complete_invoking_message,
+};
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::queue::{
     UnitReviewerMessageType, UnitReviewerQueueMessage,
@@ -23,7 +25,9 @@ pub type RedisConn = Arc<Mutex<MultiplexedConnection>>;
 
 /// Re-exported for convenience so callers can import from `helpers` without knowing the module
 /// structure changed.
-pub use crate::services::unit_technical_reviewer::rule_checker::{compile_ts_to_js, extract_unit_dependencies, run_rule_check, UnitOperation};
+pub use crate::services::unit_technical_reviewer::rule_checker::{
+    UnitOperation, compile_ts_to_js, extract_unit_dependencies, run_rule_check,
+};
 
 pub async fn load_tool_message_row(
     pool: &DbPool,
@@ -39,7 +43,9 @@ pub async fn load_tool_message_row(
     .map_err(|e| -> BoxError { e.to_string().into() })
 }
 
-pub fn extract_create_unit_payload(row: &ChatMessageRow) -> Result<ToolCreateUnitPayload, BoxError> {
+pub fn extract_create_unit_payload(
+    row: &ChatMessageRow,
+) -> Result<ToolCreateUnitPayload, BoxError> {
     let value = row
         .payload
         .clone()
@@ -48,7 +54,9 @@ pub fn extract_create_unit_payload(row: &ChatMessageRow) -> Result<ToolCreateUni
         .map_err(|e| -> BoxError { format!("deserialize ToolCreateUnitPayload: {e}").into() })
 }
 
-pub fn extract_modify_unit_payload(row: &ChatMessageRow) -> Result<ToolModifyUnitPayload, BoxError> {
+pub fn extract_modify_unit_payload(
+    row: &ChatMessageRow,
+) -> Result<ToolModifyUnitPayload, BoxError> {
     let value = row
         .payload
         .clone()
@@ -57,7 +65,9 @@ pub fn extract_modify_unit_payload(row: &ChatMessageRow) -> Result<ToolModifyUni
         .map_err(|e| -> BoxError { format!("deserialize ToolModifyUnitPayload: {e}").into() })
 }
 
-pub fn extract_remove_unit_payload(row: &ChatMessageRow) -> Result<ToolRemoveUnitPayload, BoxError> {
+pub fn extract_remove_unit_payload(
+    row: &ChatMessageRow,
+) -> Result<ToolRemoveUnitPayload, BoxError> {
     let value = row
         .payload
         .clone()
@@ -103,7 +113,10 @@ pub async fn broadcast_message_updated(
     });
     let mut guard = redis_conn.lock().await;
     if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
-        tracing::warn!("unit reviewer: failed to broadcast ChatSessionMessageUpdated: {}", e);
+        tracing::warn!(
+            "unit reviewer: failed to broadcast ChatSessionMessageUpdated: {}",
+            e
+        );
     }
 }
 
@@ -149,67 +162,61 @@ pub async fn fail_tool_message_and_continue(
     // LLM sees an accurate picture of how far the checks got before the reviewer crashed.
     let updated_row = match message.message_type {
         UnitReviewerMessageType::CreateUnitCompilerCheck
-        | UnitReviewerMessageType::CreateUnitRuleCheck => {
-            match extract_create_unit_payload(&row) {
-                Ok(mut payload) => {
-                    if payload.compiler_check_sub_task == UnitSubTaskStatus::Waiting {
-                        payload.compiler_check_sub_task = UnitSubTaskStatus::Failed;
-                    }
-                    if payload.rule_check_sub_task == UnitSubTaskStatus::Waiting {
-                        payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
-                    }
-                    payload.error = Some(reason.to_string());
-                    update_tool_message_payload(
-                        pool,
-                        tool_message_id,
-                        &payload,
-                        ChatMessageStatus::Completed,
-                    )
-                    .await
+        | UnitReviewerMessageType::CreateUnitRuleCheck => match extract_create_unit_payload(&row) {
+            Ok(mut payload) => {
+                if payload.compiler_check_sub_task == UnitSubTaskStatus::Waiting {
+                    payload.compiler_check_sub_task = UnitSubTaskStatus::Failed;
                 }
-                Err(e) => Err(e),
+                if payload.rule_check_sub_task == UnitSubTaskStatus::Waiting {
+                    payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
+                }
+                payload.error = Some(reason.to_string());
+                update_tool_message_payload(
+                    pool,
+                    tool_message_id,
+                    &payload,
+                    ChatMessageStatus::Completed,
+                )
+                .await
             }
-        }
+            Err(e) => Err(e),
+        },
         UnitReviewerMessageType::ModifyUnitCompilerCheck
-        | UnitReviewerMessageType::ModifyUnitRuleCheck => {
-            match extract_modify_unit_payload(&row) {
-                Ok(mut payload) => {
-                    if payload.compiler_check_sub_task == UnitSubTaskStatus::Waiting {
-                        payload.compiler_check_sub_task = UnitSubTaskStatus::Failed;
-                    }
-                    if payload.rule_check_sub_task == UnitSubTaskStatus::Waiting {
-                        payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
-                    }
-                    payload.error = Some(reason.to_string());
-                    update_tool_message_payload(
-                        pool,
-                        tool_message_id,
-                        &payload,
-                        ChatMessageStatus::Completed,
-                    )
-                    .await
+        | UnitReviewerMessageType::ModifyUnitRuleCheck => match extract_modify_unit_payload(&row) {
+            Ok(mut payload) => {
+                if payload.compiler_check_sub_task == UnitSubTaskStatus::Waiting {
+                    payload.compiler_check_sub_task = UnitSubTaskStatus::Failed;
                 }
-                Err(e) => Err(e),
-            }
-        }
-        UnitReviewerMessageType::RemoveUnitRuleCheck => {
-            match extract_remove_unit_payload(&row) {
-                Ok(mut payload) => {
-                    if payload.rule_check_sub_task == UnitSubTaskStatus::Waiting {
-                        payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
-                    }
-                    payload.error = Some(reason.to_string());
-                    update_tool_message_payload(
-                        pool,
-                        tool_message_id,
-                        &payload,
-                        ChatMessageStatus::Completed,
-                    )
-                    .await
+                if payload.rule_check_sub_task == UnitSubTaskStatus::Waiting {
+                    payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
                 }
-                Err(e) => Err(e),
+                payload.error = Some(reason.to_string());
+                update_tool_message_payload(
+                    pool,
+                    tool_message_id,
+                    &payload,
+                    ChatMessageStatus::Completed,
+                )
+                .await
             }
-        }
+            Err(e) => Err(e),
+        },
+        UnitReviewerMessageType::RemoveUnitRuleCheck => match extract_remove_unit_payload(&row) {
+            Ok(mut payload) => {
+                if payload.rule_check_sub_task == UnitSubTaskStatus::Waiting {
+                    payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
+                }
+                payload.error = Some(reason.to_string());
+                update_tool_message_payload(
+                    pool,
+                    tool_message_id,
+                    &payload,
+                    ChatMessageStatus::Completed,
+                )
+                .await
+            }
+            Err(e) => Err(e),
+        },
     };
 
     match updated_row {

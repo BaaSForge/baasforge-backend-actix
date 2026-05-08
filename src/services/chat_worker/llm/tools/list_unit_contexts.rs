@@ -52,13 +52,15 @@ pub fn payload_from_args(
     tool_name: &str,
 ) -> Result<ChatMessagePayload, BoxError> {
     let args = serde_json::from_value::<ToolListUnitContextsArgs>(args).unwrap_or_default();
-    Ok(ChatMessagePayload::ToolListUnitContexts(ToolListUnitContextsPayload {
-        args,
-        context_slugs: vec![],
-        tool_call_id,
-        tool_name: Some(tool_name.to_string()),
-        error: None,
-    }))
+    Ok(ChatMessagePayload::ToolListUnitContexts(
+        ToolListUnitContextsPayload {
+            args,
+            context_slugs: vec![],
+            tool_call_id,
+            tool_name: Some(tool_name.to_string()),
+            error: None,
+        },
+    ))
 }
 
 fn params_schema() -> Value {

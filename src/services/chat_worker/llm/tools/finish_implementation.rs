@@ -1,3 +1,5 @@
+use super::implement_solution_tool;
+use super::{BoxError, ToolSpec, maybe_complete_invoking_message};
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus,
@@ -8,8 +10,6 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::tools::ToolImplementSolutionPayload;
-use super::implement_solution_tool;
-use super::{maybe_complete_invoking_message, BoxError, ToolSpec};
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
 use gemini_rust::tools::model::FunctionDeclaration;
@@ -31,8 +31,7 @@ pub struct ToolFinishImplementationPayload {
     pub error: Option<String>,
 }
 
-pub const ARG_DETAILED_REPORT_DESCRIPTION: &str =
-    "Complete implementation report for the planner and user: what was created, modified, or removed (unit identities and behavior), how it satisfies the directive, and any caveats—not a short recap. Write this only after all implementation tool calls are done; omit trial-and-error, exploration steps, and intermediate reasoning.";
+pub const ARG_DETAILED_REPORT_DESCRIPTION: &str = "Complete implementation report for the planner and user: what was created, modified, or removed (unit identities and behavior), how it satisfies the directive, and any caveats—not a short recap. Write this only after all implementation tool calls are done; omit trial-and-error, exploration steps, and intermediate reasoning.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFinishImplementationArgs {
@@ -177,24 +176,25 @@ pub async fn handler(
         error: None,
     };
 
-    let merged_json = serde_json::to_value(&merged)
-        .map_err(|e| -> BoxError { format!("serialize implement solution payload: {}", e).into() })?;
+    let merged_json = serde_json::to_value(&merged).map_err(|e| -> BoxError {
+        format!("serialize implement solution payload: {}", e).into()
+    })?;
 
     let (implement_updated, finish_updated) = block_on_db_tokio(&pool, move |conn| {
-        let implement_updated = diesel::update(
-            chat_messages::table.filter(chat_messages::id.eq(implement_tool_id)),
-        )
-        .set((
-            chat_messages::payload.eq(Some(merged_json)),
-            chat_messages::status.eq(ChatMessageStatus::Completed),
-        ))
-        .returning(ChatMessageRow::as_returning())
-        .get_result(conn)?;
+        let implement_updated =
+            diesel::update(chat_messages::table.filter(chat_messages::id.eq(implement_tool_id)))
+                .set((
+                    chat_messages::payload.eq(Some(merged_json)),
+                    chat_messages::status.eq(ChatMessageStatus::Completed),
+                ))
+                .returning(ChatMessageRow::as_returning())
+                .get_result(conn)?;
 
-        let finish_updated = diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
-            .set(chat_messages::status.eq(ChatMessageStatus::Completed))
-            .returning(ChatMessageRow::as_returning())
-            .get_result(conn)?;
+        let finish_updated =
+            diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+                .set(chat_messages::status.eq(ChatMessageStatus::Completed))
+                .returning(ChatMessageRow::as_returning())
+                .get_result(conn)?;
 
         Ok::<_, diesel::result::Error>((implement_updated, finish_updated))
     })

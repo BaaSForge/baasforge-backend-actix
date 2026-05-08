@@ -1,8 +1,8 @@
 mod architecture_analyzer;
 mod developer;
 mod nested_branch_history;
-mod planner;
 mod observability_analyzer;
+mod planner;
 mod session_stale_base_release;
 mod solution_analyzer;
 
@@ -47,14 +47,10 @@ pub fn load_history_for_agent(
     thread_anchor_message_id: Option<Uuid>,
 ) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
     let mut messages = match agent {
-        ChatAgentType::Planner => {
-            planner::load_history(conn, session_id, thread_anchor_message_id)
+        ChatAgentType::Planner => planner::load_history(conn, session_id, thread_anchor_message_id),
+        ChatAgentType::ArchitectureAnalyzer => {
+            architecture_analyzer::load_history(conn, session_id, thread_anchor_message_id)
         }
-        ChatAgentType::ArchitectureAnalyzer => architecture_analyzer::load_history(
-            conn,
-            session_id,
-            thread_anchor_message_id,
-        ),
         ChatAgentType::SolutionAnalyzer => {
             solution_analyzer::load_history(conn, session_id, thread_anchor_message_id)
         }

@@ -1,4 +1,5 @@
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
+use crate::libs::unit_slug::normalize_llm_slug_arg;
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
 };
@@ -6,7 +7,6 @@ use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent}
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
-use crate::libs::unit_slug::normalize_llm_slug_arg;
 use crate::services::chat_worker::db::modules_by_context_slugs_visible_tip_units;
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
@@ -20,8 +20,7 @@ use uuid::Uuid;
 
 use super::{BoxError, ToolSpec};
 
-pub const ARG_CONTEXT_SLUGS_DESCRIPTION: &str =
-    "Bounded context slugs to inspect (e.g. inventory-stocks, billing): ASCII lowercase letters and hyphens, matching list_unit_contexts output. Pass only contexts you care about; the tool returns distinct module slugs per context in the project. Must be a non-empty array.";
+pub const ARG_CONTEXT_SLUGS_DESCRIPTION: &str = "Bounded context slugs to inspect (e.g. inventory-stocks, billing): ASCII lowercase letters and hyphens, matching list_unit_contexts output. Pass only contexts you care about; the tool returns distinct module slugs per context in the project. Must be a non-empty array.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct ToolListModulesForUnitContextsArgs {
@@ -60,8 +59,10 @@ pub fn payload_from_args(
     tool_call_id: Option<String>,
     tool_name: &str,
 ) -> Result<ChatMessagePayload, BoxError> {
-    let mut args: ToolListModulesForUnitContextsArgs = serde_json::from_value(args)
-        .map_err(|e| -> BoxError { format!("list_modules_for_unit_contexts: invalid args: {}", e).into() })?;
+    let mut args: ToolListModulesForUnitContextsArgs =
+        serde_json::from_value(args).map_err(|e| -> BoxError {
+            format!("list_modules_for_unit_contexts: invalid args: {}", e).into()
+        })?;
     args.context_slugs = args
         .context_slugs
         .into_iter()
@@ -157,8 +158,9 @@ pub async fn handler(
         tool_name,
         error,
     };
-    let payload_value = serde_json::to_value(&full_payload)
-        .map_err(|e| -> BoxError { format!("serialize list_modules_for_unit_contexts: {}", e).into() })?;
+    let payload_value = serde_json::to_value(&full_payload).map_err(|e| -> BoxError {
+        format!("serialize list_modules_for_unit_contexts: {}", e).into()
+    })?;
     let updated_row = block_on_db_tokio(&pool, move |conn| {
         diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
             .set((

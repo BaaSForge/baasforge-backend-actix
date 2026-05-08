@@ -1,4 +1,10 @@
+use super::analyze_architecture_tool;
+use super::{BoxError, ToolAnalyzeArchitecturePayload, ToolSpec, maybe_complete_invoking_message};
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
+use crate::libs::unit_slug::{
+    LLM_FULL_UNIT_ID_ITEM_DESCRIPTION, LLM_RELEVANT_UNIT_IDS_DESCRIPTION,
+    normalize_full_unit_id_arg, validate_full_unit_id_for_tool,
+};
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus,
     ChatMessageType,
@@ -8,13 +14,7 @@ use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent}
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
-use crate::libs::unit_slug::{
-    normalize_full_unit_id_arg, validate_full_unit_id_for_tool, LLM_FULL_UNIT_ID_ITEM_DESCRIPTION,
-    LLM_RELEVANT_UNIT_IDS_DESCRIPTION,
-};
 use crate::services::chat_worker::db::load_related_units_for_chat_session_by_full_ids;
-use super::analyze_architecture_tool;
-use super::{maybe_complete_invoking_message, BoxError, ToolAnalyzeArchitecturePayload, ToolSpec};
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
 use gemini_rust::tools::model::FunctionDeclaration;
@@ -38,8 +38,7 @@ pub struct ToolFinishArchitectureAnalysisPayload {
 
 pub const ARG_RELEVANT_UNIT_IDS_DESCRIPTION: &str = LLM_RELEVANT_UNIT_IDS_DESCRIPTION;
 
-pub const ARG_DETAILED_REPORT_DESCRIPTION: &str =
-    "Complete architecture analysis for the planner and user: full explanation of current units, relationships, gaps, and risks—not a short recap. Write this only after all tool-based investigation is finished; omit trial-and-error, exploration steps, and intermediate reasoning.";
+pub const ARG_DETAILED_REPORT_DESCRIPTION: &str = "Complete architecture analysis for the planner and user: full explanation of current units, relationships, gaps, and risks—not a short recap. Write this only after all tool-based investigation is finished; omit trial-and-error, exploration steps, and intermediate reasoning.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFinishArchitectureAnalysisArgs {
@@ -92,7 +91,8 @@ pub fn payload_from_args(
     tool_call_id: Option<String>,
     tool_name: &str,
 ) -> Result<ChatMessagePayload, BoxError> {
-    let mut args = serde_json::from_value::<ToolFinishArchitectureAnalysisArgs>(args).unwrap_or_default();
+    let mut args =
+        serde_json::from_value::<ToolFinishArchitectureAnalysisArgs>(args).unwrap_or_default();
     args.relevant_unit_ids = args
         .relevant_unit_ids
         .into_iter()
@@ -228,29 +228,28 @@ pub async fn handler(
         };
         let merged_json = serde_json::to_value(&merged)
             .map_err(|e| -> BoxError { format!("serialize analyze payload: {}", e).into() })?;
-        let finish_json = serde_json::to_value(&finish_out)
-            .map_err(|e| -> BoxError { format!("serialize finish_architecture payload: {}", e).into() })?;
+        let finish_json = serde_json::to_value(&finish_out).map_err(|e| -> BoxError {
+            format!("serialize finish_architecture payload: {}", e).into()
+        })?;
 
         let (analyze_updated, finish_updated) = block_on_db_tokio(&pool, move |conn| {
-            let analyze_updated = diesel::update(
-                chat_messages::table.filter(chat_messages::id.eq(analyze_tool_id)),
-            )
-            .set((
-                chat_messages::payload.eq(Some(merged_json)),
-                chat_messages::status.eq(ChatMessageStatus::Completed),
-            ))
-            .returning(ChatMessageRow::as_returning())
-            .get_result(conn)?;
+            let analyze_updated =
+                diesel::update(chat_messages::table.filter(chat_messages::id.eq(analyze_tool_id)))
+                    .set((
+                        chat_messages::payload.eq(Some(merged_json)),
+                        chat_messages::status.eq(ChatMessageStatus::Completed),
+                    ))
+                    .returning(ChatMessageRow::as_returning())
+                    .get_result(conn)?;
 
-            let finish_updated = diesel::update(
-                chat_messages::table.filter(chat_messages::id.eq(message_id)),
-            )
-            .set((
-                chat_messages::payload.eq(Some(finish_json)),
-                chat_messages::status.eq(ChatMessageStatus::Completed),
-            ))
-            .returning(ChatMessageRow::as_returning())
-            .get_result(conn)?;
+            let finish_updated =
+                diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+                    .set((
+                        chat_messages::payload.eq(Some(finish_json)),
+                        chat_messages::status.eq(ChatMessageStatus::Completed),
+                    ))
+                    .returning(ChatMessageRow::as_returning())
+                    .get_result(conn)?;
 
             Ok::<_, diesel::result::Error>((analyze_updated, finish_updated))
         })
@@ -260,11 +259,12 @@ pub async fn handler(
         let channel = user_channel(user_id);
         for row in [analyze_updated, finish_updated] {
             let message = ChatMessageResponse::from(row);
-            let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
-                project_id,
-                session_id,
-                message,
-            });
+            let event =
+                WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                    project_id,
+                    session_id,
+                    message,
+                });
             let mut guard = redis_conn.lock().await;
             if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
                 tracing::warn!(
@@ -333,20 +333,20 @@ pub async fn handler(
         .map_err(|e| -> BoxError { format!("serialize analyze payload: {}", e).into() })?;
 
     let (analyze_updated, finish_updated) = block_on_db_tokio(&pool, move |conn| {
-        let analyze_updated = diesel::update(
-            chat_messages::table.filter(chat_messages::id.eq(analyze_tool_id)),
-        )
-        .set((
-            chat_messages::payload.eq(Some(merged_json)),
-            chat_messages::status.eq(ChatMessageStatus::Completed),
-        ))
-        .returning(ChatMessageRow::as_returning())
-        .get_result(conn)?;
+        let analyze_updated =
+            diesel::update(chat_messages::table.filter(chat_messages::id.eq(analyze_tool_id)))
+                .set((
+                    chat_messages::payload.eq(Some(merged_json)),
+                    chat_messages::status.eq(ChatMessageStatus::Completed),
+                ))
+                .returning(ChatMessageRow::as_returning())
+                .get_result(conn)?;
 
-        let finish_updated = diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
-            .set(chat_messages::status.eq(ChatMessageStatus::Completed))
-            .returning(ChatMessageRow::as_returning())
-            .get_result(conn)?;
+        let finish_updated =
+            diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+                .set(chat_messages::status.eq(ChatMessageStatus::Completed))
+                .returning(ChatMessageRow::as_returning())
+                .get_result(conn)?;
 
         Ok::<_, diesel::result::Error>((analyze_updated, finish_updated))
     })

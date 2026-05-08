@@ -3,7 +3,9 @@
 use crate::database::PooledConn;
 use crate::models::projects::{PlatformEnvironmentType, ProjectRuntimeResponse};
 use crate::schema::{project_runtimes, projects};
-use crate::services::releases::{project_release_id_for_revision_lane, ProjectReleaseRevisionLookup};
+use crate::services::releases::{
+    ProjectReleaseRevisionLookup, project_release_id_for_revision_lane,
+};
 use diesel::prelude::*;
 use uuid::Uuid;
 
@@ -39,7 +41,10 @@ pub fn apply_stage_release_deploy_to_runtime(
     runtime_id: Uuid,
     revision: f64,
     chat_session_id: Uuid,
-) -> Result<Result<(ProjectRuntimeResponse, StageDeployNatsMeta), StageRuntimeDeployDenied>, diesel::result::Error> {
+) -> Result<
+    Result<(ProjectRuntimeResponse, StageDeployNatsMeta), StageRuntimeDeployDenied>,
+    diesel::result::Error,
+> {
     let rt: Option<ProjectRuntimeResponse> = project_runtimes::table
         .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
         .filter(projects::owner_user_id.eq(user_id))
@@ -100,7 +105,10 @@ pub fn apply_stage_runtime_detach_live_release(
     user_id: Uuid,
     project_id: Uuid,
     runtime_id: Uuid,
-) -> Result<Result<(ProjectRuntimeResponse, Option<Uuid>), StageRuntimeDetachDenied>, diesel::result::Error> {
+) -> Result<
+    Result<(ProjectRuntimeResponse, Option<Uuid>), StageRuntimeDetachDenied>,
+    diesel::result::Error,
+> {
     let rt: Option<ProjectRuntimeResponse> = project_runtimes::table
         .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
         .filter(projects::owner_user_id.eq(user_id))
@@ -149,7 +157,10 @@ pub fn apply_runtime_detach_live_release(
     user_id: Uuid,
     project_id: Uuid,
     runtime_id: Uuid,
-) -> Result<Result<(ProjectRuntimeResponse, Option<Uuid>), RuntimeDetachDenied>, diesel::result::Error> {
+) -> Result<
+    Result<(ProjectRuntimeResponse, Option<Uuid>), RuntimeDetachDenied>,
+    diesel::result::Error,
+> {
     let rt: Option<ProjectRuntimeResponse> = project_runtimes::table
         .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
         .filter(projects::owner_user_id.eq(user_id))
@@ -199,7 +210,10 @@ pub fn apply_release_deploy_to_runtime(
     revision: f64,
     chat_session_id: Uuid,
     expected_env: PlatformEnvironmentType,
-) -> Result<Result<(ProjectRuntimeResponse, Uuid, Option<Uuid>), RuntimeDeployDenied>, diesel::result::Error> {
+) -> Result<
+    Result<(ProjectRuntimeResponse, Uuid, Option<Uuid>), RuntimeDeployDenied>,
+    diesel::result::Error,
+> {
     let rt: Option<ProjectRuntimeResponse> = project_runtimes::table
         .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
         .filter(projects::owner_user_id.eq(user_id))

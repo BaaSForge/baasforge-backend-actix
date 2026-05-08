@@ -14,7 +14,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// Description for the `intent` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
-pub const ARG_INTENT_DESCRIPTION: &str = "What you intend to plan: the user’s goals and current architecture analysis.";
+pub const ARG_INTENT_DESCRIPTION: &str =
+    "What you intend to plan: the user’s goals and current architecture analysis.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolAnalyzeSolutionArgs {
@@ -71,13 +72,15 @@ pub fn payload_from_args(
     tool_name: &str,
 ) -> Result<ChatMessagePayload, BoxError> {
     let args = serde_json::from_value::<ToolAnalyzeSolutionArgs>(args).unwrap_or_default();
-    Ok(ChatMessagePayload::ToolAnalyzeSolution(ToolAnalyzeSolutionPayload {
-        args,
-        detailed_report: String::new(),
-        tool_call_id,
-        tool_name: Some(tool_name.to_string()),
-        error: None,
-    }))
+    Ok(ChatMessagePayload::ToolAnalyzeSolution(
+        ToolAnalyzeSolutionPayload {
+            args,
+            detailed_report: String::new(),
+            tool_call_id,
+            tool_name: Some(tool_name.to_string()),
+            error: None,
+        },
+    ))
 }
 
 /// Queues a new LLM run for [`ChatAgentType::SolutionAnalyzer`] with the intent as the user text.
@@ -92,9 +95,9 @@ pub async fn handler(
     _payload: Option<ChatMessagePayload>,
     rabbit_publisher: Option<Arc<SharedRabbitPublisher>>,
 ) -> Result<(), BoxError> {
-    let publisher = rabbit_publisher.as_ref().ok_or_else(|| -> BoxError {
-        "analyze_solution_tool: rabbit publisher missing".into()
-    })?;
+    let publisher = rabbit_publisher
+        .as_ref()
+        .ok_or_else(|| -> BoxError { "analyze_solution_tool: rabbit publisher missing".into() })?;
 
     let response_message_id = crate::libs::ids::new_uuid();
     let queue_message = ChatSessionQueueMessage {
@@ -110,14 +113,9 @@ pub async fn handler(
         assistant_turn_id: None,
     };
 
-    chat_message_queue::publish_with_publisher(
-        publisher,
-        project_id,
-        session_id,
-        &queue_message,
-    )
-    .await
-    .map_err(|e| -> BoxError { Box::new(e) })?;
+    chat_message_queue::publish_with_publisher(publisher, project_id, session_id, &queue_message)
+        .await
+        .map_err(|e| -> BoxError { Box::new(e) })?;
 
     Ok(())
 }

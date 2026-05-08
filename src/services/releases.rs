@@ -7,12 +7,13 @@ use crate::database::PooledConn;
 use crate::libs::unit_slug::{compose_unit_id, parse_unit_path};
 use crate::models::chat_messages::{ChatMessagePayload, ChatMessageResponse, ChatMessageType};
 use crate::models::projects::{
-    PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectUnitResponse,
-    ProjectUnitRow, ProjectUnitType,
+    PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline,
+    ProjectUnitResponse, ProjectUnitRow, ProjectUnitType,
 };
 use crate::schema::{chat_messages, chat_sessions, project_releases, project_runtimes};
 use crate::services::chat_worker::db::{
-    load_project_units_by_keys, load_units_from_latest_production_metadata, project_units_with_latest_revision,
+    load_project_units_by_keys, load_units_from_latest_production_metadata,
+    project_units_with_latest_revision,
 };
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
@@ -94,11 +95,9 @@ pub fn compute_new_units(
         .collect();
     session_tips
         .iter()
-        .filter(|u| {
-            match prev_map.get(&logical_unit_key(u)) {
-                None => true,
-                Some(p) => session_unit_tip_replaces_previous(p, u),
-            }
+        .filter(|u| match prev_map.get(&logical_unit_key(u)) {
+            None => true,
+            Some(p) => session_unit_tip_replaces_previous(p, u),
         })
         .cloned()
         .collect()
@@ -224,11 +223,9 @@ pub fn load_unit_previous_revisions_for_release(
             rev - 1,
         );
 
-        if let Some(prev) = pick_loaded_unit_response_for_id(
-            &prev_loaded,
-            &prev_id,
-            anchor.chat_session_id,
-        ) {
+        if let Some(prev) =
+            pick_loaded_unit_response_for_id(&prev_loaded, &prev_id, anchor.chat_session_id)
+        {
             pending.push(i);
             rows_for_latest.push(prev.row.clone());
         }
@@ -294,7 +291,8 @@ fn release_unit_diff(
     new_keys.sort_by(|a, b| logical_unit_sort_tuple(a).cmp(&logical_unit_sort_tuple(b)));
     deleted_keys.sort_by(|a, b| logical_unit_sort_tuple(a).cmp(&logical_unit_sort_tuple(b)));
     modified_current.sort_by(|a, b| {
-        logical_unit_sort_tuple(&logical_unit_key(a)).cmp(&logical_unit_sort_tuple(&logical_unit_key(b)))
+        logical_unit_sort_tuple(&logical_unit_key(a))
+            .cmp(&logical_unit_sort_tuple(&logical_unit_key(b)))
     });
 
     ReleaseUnitDiff {
@@ -324,12 +322,7 @@ pub fn release_brief_note_markdown(
     };
     format!(
         "Previously **{}** active units → **{}** now.\n**+{}** new · **{}** modified · **{}** removed.\n{}",
-        d.prev_count,
-        d.comb_count,
-        n_new,
-        n_modified,
-        n_deleted,
-        tail
+        d.prev_count, d.comb_count, n_new, n_modified, n_deleted, tail
     )
 }
 
@@ -415,12 +408,7 @@ pub fn release_notes_markdown(
 }
 
 fn logical_unit_sort_tuple(k: &LogicalUnitKey) -> (&str, &str, &'static str, &str) {
-    (
-        k.0.as_str(),
-        k.1.as_str(),
-        k.2.as_slug(),
-        k.3.as_str(),
-    )
+    (k.0.as_str(), k.1.as_str(), k.2.as_slug(), k.3.as_str())
 }
 
 /// Result of resolving `project_releases.id` by `(project_id, chat_session_id, revision, lane)` — see
@@ -527,10 +515,7 @@ pub fn chat_session_stale_base_release(
     };
     let (current, source) = prod_live_release_source_chat_session(conn, project_id)?;
     Ok(stale_base_release_from_baseline(
-        snapshot,
-        current,
-        source,
-        session_id,
+        snapshot, current, source, session_id,
     ))
 }
 
@@ -644,8 +629,7 @@ pub fn enrich_owned_releases_by_session_map(
 ) -> Result<HashMap<Uuid, Vec<ProjectReleaseWithBaseline>>, diesel::result::Error> {
     let flat: Vec<ProjectReleaseResponse> = map.values().flatten().cloned().collect();
     if flat.is_empty() {
-        return Ok(map.into_keys().map(|k| (k, Vec::new()))
-            .collect());
+        return Ok(map.into_keys().map(|k| (k, Vec::new())).collect());
     }
     let enriched = attach_base_production_releases(conn, project_id, flat)?;
     let by_id: HashMap<Uuid, ProjectReleaseWithBaseline> =
@@ -745,11 +729,11 @@ pub fn release_controller_ordinal_in_session(
         .filter(chat_messages::chat_session_id.eq(session_id))
         .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
         .filter(
-            chat_messages::created_at.lt(target.0).or(
-                chat_messages::created_at
+            chat_messages::created_at
+                .lt(target.0)
+                .or(chat_messages::created_at
                     .eq(target.0)
-                    .and(chat_messages::id.le(message_id)),
-            ),
+                    .and(chat_messages::id.le(message_id))),
         )
         .count()
         .get_result(conn)
@@ -820,7 +804,8 @@ pub fn insert_production_release_from_stage_row(
         stage_release_belongs_to_chat_session(stage, session_id),
         "production promotion requires a stage row scoped to this chat session"
     );
-    let revision = revision_for_chat_release_controller(conn, project_id, session_id, message_id, false)?;
+    let revision =
+        revision_for_chat_release_controller(conn, project_id, session_id, message_id, false)?;
     diesel::insert_into(project_releases::table)
         .values((
             project_releases::project_id.eq(project_id),

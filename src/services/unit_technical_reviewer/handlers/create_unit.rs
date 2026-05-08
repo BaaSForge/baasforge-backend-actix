@@ -1,4 +1,4 @@
-use crate::database::{block_on_db_tokio, DbPool};
+use crate::database::{DbPool, block_on_db_tokio};
 use crate::libs::unit_slug::compose_unit_id;
 use crate::models::chat_messages::ChatMessageStatus;
 use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow};
@@ -9,15 +9,15 @@ use crate::schema::project_units;
 use crate::services::chat_worker::llm::tools::UnitSubTaskStatus;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::helpers::{
-    broadcast_message_updated, compile_ts_to_js, extract_create_unit_payload,
-    extract_unit_dependencies, load_tool_message_row, run_rule_check, trigger_llm_continuation,
-    update_tool_message_payload, BoxError, RedisConn, UnitOperation,
+    BoxError, RedisConn, UnitOperation, broadcast_message_updated, compile_ts_to_js,
+    extract_create_unit_payload, extract_unit_dependencies, load_tool_message_row, run_rule_check,
+    trigger_llm_continuation, update_tool_message_payload,
+};
+use crate::services::unit_technical_reviewer::queue::{
+    UnitReviewerMessageType, UnitReviewerQueueMessage, publish_reviewer_message,
 };
 use crate::services::unit_technical_reviewer::type_checker::run_typescript_check;
-use crate::services::unit_technical_reviewer::queue::{
-    publish_reviewer_message, UnitReviewerMessageType, UnitReviewerQueueMessage,
-};
-use crate::services::units::{build_unit_metadata, UnitMetadataBuildInput};
+use crate::services::units::{UnitMetadataBuildInput, build_unit_metadata};
 use diesel::prelude::*;
 use std::sync::Arc;
 
@@ -106,7 +106,12 @@ pub async fn process_create_unit_rule_check(
     let invoking_message_id = row.invoking_message_id;
     let mut payload = extract_create_unit_payload(&row)?;
 
-    let rule_errors = run_rule_check(UnitOperation::Create, &message.unit_type, &message.code, None);
+    let rule_errors = run_rule_check(
+        UnitOperation::Create,
+        &message.unit_type,
+        &message.code,
+        None,
+    );
 
     if rule_errors.is_empty() {
         // All checks passed: now insert the project_units row. The unit is persisted only at
@@ -185,9 +190,7 @@ pub async fn process_create_unit_rule_check(
                     unit: created_unit,
                 });
                 let mut guard = redis_conn.lock().await;
-                if let Err(e) =
-                    publish_event_to_channel(&mut *guard, &channel, &unit_event).await
-                {
+                if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &unit_event).await {
                     tracing::warn!(
                         "unit reviewer: failed to broadcast ProjectUnitCreated: {}",
                         e
@@ -203,10 +206,7 @@ pub async fn process_create_unit_rule_check(
                     e
                 );
                 payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
-                payload.error = Some(format!(
-                    "Failed to persist unit after checks: {}",
-                    e
-                ));
+                payload.error = Some(format!("Failed to persist unit after checks: {}", e));
                 let updated_row = update_tool_message_payload(
                     pool,
                     tool_message_id,
@@ -231,9 +231,13 @@ pub async fn process_create_unit_rule_check(
             "Rule check failed. Fix the following violations:\n{}",
             rule_errors.join("\n")
         ));
-        let updated_row =
-            update_tool_message_payload(pool, tool_message_id, &payload, ChatMessageStatus::Completed)
-                .await?;
+        let updated_row = update_tool_message_payload(
+            pool,
+            tool_message_id,
+            &payload,
+            ChatMessageStatus::Completed,
+        )
+        .await?;
         broadcast_message_updated(
             redis_conn,
             message.user_id,

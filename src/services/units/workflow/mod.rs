@@ -11,7 +11,6 @@ pub async fn build_unit_metadata(
     session_id: uuid::Uuid,
     code: &str,
 ) -> Option<super::UnitMetadata> {
-    let meta =
-        type_extractor::build_workflow_type_meta(pool, project_id, session_id, code).await;
+    let meta = type_extractor::build_workflow_type_meta(pool, project_id, session_id, code).await;
     Some(super::UnitMetadata::Workflow(meta))
 }

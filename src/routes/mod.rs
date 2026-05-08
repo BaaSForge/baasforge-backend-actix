@@ -112,24 +112,25 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
             None
         }
     };
-    let runtime_nats_publisher: SharedRuntimeNatsPublisher = match settings.runtime_nats_url.as_ref() {
-        Some(url) => match RuntimeNatsPublisher::connect(url).await {
-            Ok(p) => {
-                log::info!(
-                    "[runtime_nats] Connected (JetStream stream={}, consumer={}, subject={})",
-                    settings.runtime_nats_jetstream_stream_release,
-                    settings.runtime_nats_jetstream_consumer_release,
-                    settings.runtime_nats_subject_release,
-                );
-                Some(Arc::new(p))
-            }
-            Err(e) => {
-                log::warn!("[runtime_nats] Failed to connect: {}", e);
-                None
-            }
-        },
-        None => None,
-    };
+    let runtime_nats_publisher: SharedRuntimeNatsPublisher =
+        match settings.runtime_nats_url.as_ref() {
+            Some(url) => match RuntimeNatsPublisher::connect(url).await {
+                Ok(p) => {
+                    log::info!(
+                        "[runtime_nats] Connected (JetStream stream={}, consumer={}, subject={})",
+                        settings.runtime_nats_jetstream_stream_release,
+                        settings.runtime_nats_jetstream_consumer_release,
+                        settings.runtime_nats_subject_release,
+                    );
+                    Some(Arc::new(p))
+                }
+                Err(e) => {
+                    log::warn!("[runtime_nats] Failed to connect: {}", e);
+                    None
+                }
+            },
+            None => None,
+        };
     let app_context = AppContext::new(
         pool,
         settings.clone(),

@@ -1,3 +1,5 @@
+use super::analyze_solution_tool;
+use super::{BoxError, ToolSpec, maybe_complete_invoking_message};
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus,
@@ -8,8 +10,6 @@ use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::tools::ToolAnalyzeSolutionPayload;
-use super::analyze_solution_tool;
-use super::{maybe_complete_invoking_message, BoxError, ToolSpec};
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
 use gemini_rust::tools::model::FunctionDeclaration;
@@ -31,8 +31,7 @@ pub struct ToolFinishSolutionAnalysisPayload {
     pub error: Option<String>,
 }
 
-pub const ARG_DETAILED_REPORT_DESCRIPTION: &str =
-    "Complete solution analysis for the planner and user: recommended approach, alternatives considered, trade-offs, risks, sequencing, and what to implement—not a short recap. Write this only after all tool-based investigation is finished; omit trial-and-error, exploration steps, and intermediate reasoning.";
+pub const ARG_DETAILED_REPORT_DESCRIPTION: &str = "Complete solution analysis for the planner and user: recommended approach, alternatives considered, trade-offs, risks, sequencing, and what to implement—not a short recap. Write this only after all tool-based investigation is finished; omit trial-and-error, exploration steps, and intermediate reasoning.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFinishSolutionAnalysisArgs {
@@ -181,20 +180,20 @@ pub async fn handler(
         .map_err(|e| -> BoxError { format!("serialize analyze solution payload: {}", e).into() })?;
 
     let (analyze_updated, finish_updated) = block_on_db_tokio(&pool, move |conn| {
-        let analyze_updated = diesel::update(
-            chat_messages::table.filter(chat_messages::id.eq(analyze_tool_id)),
-        )
-        .set((
-            chat_messages::payload.eq(Some(merged_json)),
-            chat_messages::status.eq(ChatMessageStatus::Completed),
-        ))
-        .returning(ChatMessageRow::as_returning())
-        .get_result(conn)?;
+        let analyze_updated =
+            diesel::update(chat_messages::table.filter(chat_messages::id.eq(analyze_tool_id)))
+                .set((
+                    chat_messages::payload.eq(Some(merged_json)),
+                    chat_messages::status.eq(ChatMessageStatus::Completed),
+                ))
+                .returning(ChatMessageRow::as_returning())
+                .get_result(conn)?;
 
-        let finish_updated = diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
-            .set(chat_messages::status.eq(ChatMessageStatus::Completed))
-            .returning(ChatMessageRow::as_returning())
-            .get_result(conn)?;
+        let finish_updated =
+            diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+                .set(chat_messages::status.eq(ChatMessageStatus::Completed))
+                .returning(ChatMessageRow::as_returning())
+                .get_result(conn)?;
 
         Ok::<_, diesel::result::Error>((analyze_updated, finish_updated))
     })

@@ -7,14 +7,16 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::models::projects::{ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectUnitResponse};
+use crate::models::projects::{
+    ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectUnitResponse,
+};
 use crate::services::chat_worker::llm::tools::{
     ToolAnalyzeArchitecturePayload, ToolAnalyzeObservabilityPayload, ToolAnalyzeSolutionPayload,
     ToolCreateUnitPayload, ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
     ToolFinishArchitectureAnalysisPayload, ToolFinishImplementationPayload,
-    ToolFinishObservabilityAnalysisPayload, ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload,
-    ToolListModulesForUnitContextsPayload, ToolListUnitContextsPayload, ToolModifyUnitPayload,
-    ToolRemoveUnitPayload,
+    ToolFinishObservabilityAnalysisPayload, ToolFinishSolutionAnalysisPayload,
+    ToolImplementSolutionPayload, ToolListModulesForUnitContextsPayload,
+    ToolListUnitContextsPayload, ToolModifyUnitPayload, ToolRemoveUnitPayload,
 };
 
 /// One requested tool call from the LLM (GPT tool_call_id optional; Gemini has no id).
@@ -71,21 +73,13 @@ impl TextPayload {
         for b in blocks {
             out.push_str(&b.thinking);
         }
-        if out.is_empty() {
-            None
-        } else {
-            Some(out)
-        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     pub fn has_thinking_stored(&self) -> bool {
         self.thinking_blocks.as_ref().is_some_and(|b| {
             b.iter().any(|blk| {
-                !blk.thinking.is_empty()
-                    || blk
-                        .signature
-                        .as_ref()
-                        .is_some_and(|s| !s.is_empty())
+                !blk.thinking.is_empty() || blk.signature.as_ref().is_some_and(|s| !s.is_empty())
             })
         })
     }
@@ -219,15 +213,21 @@ impl ChatMessagePayload {
             ChatMessagePayload::ToolFetchRelevantUnits(_) => "ToolFetchRelevantUnits",
             ChatMessagePayload::ToolFetchLatestReleases(_) => "ToolFetchLatestReleases",
             ChatMessagePayload::ToolAnalyzeArchitecture(_) => "ToolAnalyzeArchitecture",
-            ChatMessagePayload::ToolFinishArchitectureAnalysis(_) => "ToolFinishArchitectureAnalysis",
+            ChatMessagePayload::ToolFinishArchitectureAnalysis(_) => {
+                "ToolFinishArchitectureAnalysis"
+            }
             ChatMessagePayload::ToolAnalyzeSolution(_) => "ToolAnalyzeSolution",
             ChatMessagePayload::ToolFinishSolutionAnalysis(_) => "ToolFinishSolutionAnalysis",
             ChatMessagePayload::ToolAnalyzeObservability(_) => "ToolAnalyzeObservability",
-            ChatMessagePayload::ToolFinishObservabilityAnalysis(_) => "ToolFinishObservabilityAnalysis",
+            ChatMessagePayload::ToolFinishObservabilityAnalysis(_) => {
+                "ToolFinishObservabilityAnalysis"
+            }
             ChatMessagePayload::ToolImplementSolution(_) => "ToolImplementSolution",
             ChatMessagePayload::ToolFinishImplementation(_) => "ToolFinishImplementation",
             ChatMessagePayload::ToolListUnitContexts(_) => "ToolListUnitContexts",
-            ChatMessagePayload::ToolListModulesForUnitContexts(_) => "ToolListModulesForUnitContexts",
+            ChatMessagePayload::ToolListModulesForUnitContexts(_) => {
+                "ToolListModulesForUnitContexts"
+            }
             ChatMessagePayload::ToolCreateUnit(_) => "ToolCreateUnit",
             ChatMessagePayload::ToolModifyUnit(_) => "ToolModifyUnit",
             ChatMessagePayload::ToolRemoveUnit(_) => "ToolRemoveUnit",
@@ -388,7 +388,8 @@ impl From<ChatMessageRow> for ChatMessageResponse {
             created_at: row.created_at,
             invoking_message_id: row.invoking_message_id,
             agent: row.agent,
-            is_edit_disabled_due_to_production_release: row.is_edit_disabled_due_to_production_release,
+            is_edit_disabled_due_to_production_release: row
+                .is_edit_disabled_due_to_production_release,
         }
     }
 }

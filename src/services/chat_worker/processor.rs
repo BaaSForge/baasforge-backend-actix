@@ -9,8 +9,8 @@ use crate::services::chat_worker::agent::load_history_for_agent;
 use crate::services::chat_worker::llm::tools::{
     maybe_complete_invoking_message, tool_context_for_chat_session, with_tool_context,
 };
-use crate::services::releases::chat_session_stale_base_release;
 use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient};
+use crate::services::releases::chat_session_stale_base_release;
 use diesel::prelude::*;
 use redis::aio::MultiplexedConnection;
 use std::sync::Arc;
@@ -152,12 +152,13 @@ pub async fn process_one(
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
                 if let Some(row) = updated_row {
                     let message = ChatMessageResponse::from(row);
-                    let event =
-                        WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                    let event = WsServerEvent::ChatSessionMessageUpdated(
+                        ChatSessionMessageUpdatedPayload {
                             project_id,
                             session_id,
                             message,
-                        });
+                        },
+                    );
                     let mut guard = redis_conn.lock().await;
                     publish_event_to_channel(&mut *guard, &channel, &event)
                         .await
@@ -173,18 +174,14 @@ pub async fn process_one(
                         .as_ref()
                         .map_or(0, |c| c.len());
                     let placeholder_id = placeholder_ai_message_id;
-                    let existing_child_count: i64 =
-                        block_on_db_tokio(pool, move |conn| {
-                            chat_messages::table
-                                .filter(
-                                    chat_messages::invoking_message_id
-                                        .eq(placeholder_id),
-                                )
-                                .count()
-                                .get_result(conn)
-                        })
-                        .await
-                        .unwrap_or(0);
+                    let existing_child_count: i64 = block_on_db_tokio(pool, move |conn| {
+                        chat_messages::table
+                            .filter(chat_messages::invoking_message_id.eq(placeholder_id))
+                            .count()
+                            .get_result(conn)
+                    })
+                    .await
+                    .unwrap_or(0);
                     if existing_child_count >= expected_tool_count as i64 {
                         maybe_complete_invoking_message(
                             pool,

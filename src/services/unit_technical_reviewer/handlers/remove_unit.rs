@@ -1,4 +1,4 @@
-use crate::database::{block_on_db_tokio, DbPool};
+use crate::database::{DbPool, block_on_db_tokio};
 use crate::libs::unit_slug::compose_unit_id;
 use crate::models::chat_messages::ChatMessageStatus;
 use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow};
@@ -10,9 +10,8 @@ use crate::services::chat_worker::db::load_units_from_latest_production_metadata
 use crate::services::chat_worker::llm::tools::UnitSubTaskStatus;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::helpers::{
-    broadcast_message_updated, extract_remove_unit_payload, load_tool_message_row,
-    run_rule_check, trigger_llm_continuation, update_tool_message_payload, BoxError, RedisConn,
-    UnitOperation,
+    BoxError, RedisConn, UnitOperation, broadcast_message_updated, extract_remove_unit_payload,
+    load_tool_message_row, run_rule_check, trigger_llm_continuation, update_tool_message_payload,
 };
 use crate::services::unit_technical_reviewer::queue::UnitReviewerQueueMessage;
 use diesel::prelude::*;
@@ -47,15 +46,17 @@ pub async fn process_remove_unit_rule_check(
             return Ok(Some(p));
         }
         let prod_units = load_units_from_latest_production_metadata(conn, pid)?;
-        Ok(prod_units.into_iter().find(|u| u.id == pk && !u.is_deleted).map(|u| u.row))
+        Ok(prod_units
+            .into_iter()
+            .find(|u| u.id == pk && !u.is_deleted)
+            .map(|u| u.row))
     })
     .await
     .map_err(|e| -> BoxError { e.to_string().into() })?;
 
     // Remove has no new code; old_code is the existing unit source.
     let old_code = parent_opt.as_ref().and_then(|p| p.code.as_deref());
-    let rule_errors =
-        run_rule_check(UnitOperation::Remove, &message.unit_type, "", old_code);
+    let rule_errors = run_rule_check(UnitOperation::Remove, &message.unit_type, "", old_code);
 
     if rule_errors.is_empty() {
         match parent_opt {
@@ -171,9 +172,13 @@ pub async fn process_remove_unit_rule_check(
             "Rule check failed. Fix the following violations:\n{}",
             rule_errors.join("\n")
         ));
-        let updated_row =
-            update_tool_message_payload(pool, tool_message_id, &payload, ChatMessageStatus::Completed)
-                .await?;
+        let updated_row = update_tool_message_payload(
+            pool,
+            tool_message_id,
+            &payload,
+            ChatMessageStatus::Completed,
+        )
+        .await?;
         broadcast_message_updated(
             redis_conn,
             message.user_id,

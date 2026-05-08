@@ -4,6 +4,6 @@ pub mod db;
 pub mod generation_lifecycle;
 pub mod llm;
 pub mod processor;
-pub mod release_controller_box;
 pub mod reject_controller_box;
+pub mod release_controller_box;
 pub mod runner;
