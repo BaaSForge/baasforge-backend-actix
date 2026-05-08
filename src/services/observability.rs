@@ -99,14 +99,14 @@ pub async fn query_jaeger_traces(
     filters: &JaegerQueryFilters,
 ) -> Result<BTreeMap<String, Vec<Value>>, JaegerQueryError> {
     let base = base_url.trim_end_matches('/');
-    let lookback = filters.lookback_minutes.clamp(1, MAX_LOOKBACK_MINUTES);
     let limit_per_service = filters.limit_per_service.clamp(1, MAX_LIMIT_PER_SERVICE);
 
     let now_us = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_micros() as u64)
         .unwrap_or(0);
-    let start_us = now_us.saturating_sub((lookback as u64) * 60 * 1_000_000);
+    let lookback = filters.lookback_minutes.clamp(1, MAX_LOOKBACK_MINUTES);
+    let search_start_us = now_us.saturating_sub((lookback as u64) * 60 * 1_000_000);
 
     let client = build_jaeger_client().map_err(|e| JaegerQueryError::ClientBuild(e.to_string()))?;
 
@@ -124,7 +124,7 @@ pub async fn query_jaeger_traces(
             "{}/api/traces/{}?start={}&end={}",
             base,
             urlencoding::encode(tid),
-            start_us,
+            0u64,
             now_us,
         );
         let payload = fetch_jaeger_json(&client, &url).await?;
@@ -149,7 +149,7 @@ pub async fn query_jaeger_traces(
                     "{}/api/traces?service={}&start={}&end={}&limit={}",
                     base,
                     urlencoding::encode(svc.as_str()),
-                    start_us,
+                    search_start_us,
                     now_us,
                     limit_per_service,
                 );

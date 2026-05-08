@@ -24,6 +24,48 @@ use gemini_rust::tools::model::FunctionDeclaration;
 
 const LIMIT_PER_SERVICE: usize = 10;
 
+fn validate_trace_id(trace_id: &str) -> Result<(), String> {
+    if !trace_id
+        .chars()
+        .all(|c| c.is_ascii_hexdigit())
+    {
+        return Err(
+            "fetch_release_traces: trace_id must be hexadecimal only (0-9, a-f). Do not invent, merge, or re-type ids from the brief—copy the exact trace_id from the observability handoff."
+                .to_string(),
+        );
+    }
+    if trace_id.len() != 16 && trace_id.len() != 32 {
+        return Err(format!(
+            "fetch_release_traces: trace_id must be exactly 16 or 32 hex characters (Jaeger / OpenTelemetry); got length {}. A longer or mixed string usually means the id was corrupted—use only the exact trace_id from the handoff.",
+            trace_id.len()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_release_id(release_id: &str) -> Result<(), String> {
+    Uuid::parse_str(release_id).map_err(|_| {
+        format!(
+            "fetch_release_traces: release_id must be a UUID (tag `baal.release.id` is the project release id). Got {:?}. Do not pass environment names (e.g. production, stage) or invented values—omit release_id when the handoff only pins trace_id, or pass the exact release_id from analyze_observability_tool args.",
+            release_id
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_tool_trace_and_release(
+    trace_trim: Option<&str>,
+    release_trim: Option<&str>,
+) -> Result<(), String> {
+    if let Some(t) = trace_trim {
+        validate_trace_id(t)?;
+    }
+    if let Some(r) = release_trim {
+        validate_release_id(r)?;
+    }
+    Ok(())
+}
+
 fn all_observability_services() -> Vec<ObservabilityService> {
     vec![
         ObservabilityService::ApiServer,
@@ -115,7 +157,7 @@ pub const TOOL_NAME: &str = "fetch_release_traces";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Read-only: load Jaeger spans from instrumented processes (15-minute lookback, per-service cap when searching). Either pass non-empty `release_id` to match tag `baal.release.id` (required if `trace_id` is omitted), or pass `trace_id` alone to load that trace without a release filter, or pass both to load one trace and filter spans by release.",
+        description: "Read-only: load Jaeger spans from instrumented processes (15-minute lookback and per-service cap when searching without `trace_id`; by `trace_id`, the full trace is requested without a lookback window). Either pass non-empty `release_id` to match tag `baal.release.id` (required if `trace_id` is omitted), or pass `trace_id` alone to load that trace without a release filter, or pass both to load one trace and filter spans by release.",
         parameters: params_schema(),
     }
 }
@@ -161,6 +203,26 @@ pub async fn handler(
                 "fetch_release_traces: pass a non-empty `release_id`, or pass `trace_id` (trace-only)."
                     .to_string(),
             ),
+        };
+        return persist_completed(
+            pool,
+            redis_conn,
+            _project_id,
+            session_id,
+            message_id,
+            user_id,
+            full_payload,
+        )
+        .await;
+    }
+
+    if let Err(msg) = validate_tool_trace_and_release(trace_trim, release_trim) {
+        let full_payload = ToolFetchReleaseTracesPayload {
+            args,
+            spans: vec![],
+            tool_call_id,
+            tool_name,
+            error: Some(msg),
         };
         return persist_completed(
             pool,
