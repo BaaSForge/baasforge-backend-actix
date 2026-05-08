@@ -23,6 +23,7 @@ pub mod analyze_architecture_tool;
 pub mod analyze_observability_tool;
 pub mod analyze_solution_tool;
 pub mod create_unit;
+pub mod fetch_release_traces;
 pub mod finish_architecture_analysis;
 pub mod finish_implementation;
 pub mod finish_observability_analysis;
@@ -40,6 +41,7 @@ pub use analyze_architecture_tool::ToolAnalyzeArchitecturePayload;
 pub use analyze_observability_tool::ToolAnalyzeObservabilityPayload;
 pub use analyze_solution_tool::ToolAnalyzeSolutionPayload;
 pub use create_unit::ToolCreateUnitPayload;
+pub use fetch_release_traces::ToolFetchReleaseTracesPayload;
 pub use finish_architecture_analysis::ToolFinishArchitectureAnalysisPayload;
 pub use finish_implementation::ToolFinishImplementationPayload;
 pub use finish_observability_analysis::ToolFinishObservabilityAnalysisPayload;
@@ -148,6 +150,11 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             load_latest_releases::TOOL_NAME,
             load_latest_releases::MESSAGE_TYPE,
             load_latest_releases::payload_from_args,
+        ),
+        (
+            fetch_release_traces::TOOL_NAME,
+            fetch_release_traces::MESSAGE_TYPE,
+            fetch_release_traces::payload_from_args,
         ),
         (
             list_unit_contexts::TOOL_NAME,
@@ -408,6 +415,7 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
     vec![
         load_latest_production_release_units::spec(),
         load_latest_releases::spec(),
+        fetch_release_traces::spec(),
         list_unit_contexts::spec(),
         list_modules_for_unit_contexts::spec(),
         analyze_architecture_tool::spec(),
@@ -642,6 +650,10 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                 (
                     load_latest_releases::MESSAGE_TYPE,
                     wrap_handler_with_payload(load_latest_releases::handler),
+                ),
+                (
+                    fetch_release_traces::MESSAGE_TYPE,
+                    wrap_handler_with_payload(fetch_release_traces::handler),
                 ),
                 (
                     list_unit_contexts::MESSAGE_TYPE,

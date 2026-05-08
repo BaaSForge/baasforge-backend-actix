@@ -12,11 +12,12 @@ use crate::models::projects::{
 };
 use crate::services::chat_worker::llm::tools::{
     ToolAnalyzeArchitecturePayload, ToolAnalyzeObservabilityPayload, ToolAnalyzeSolutionPayload,
-    ToolCreateUnitPayload, ToolFetchLatestReleasesPayload, ToolFetchRelevantUnitsPayload,
-    ToolFinishArchitectureAnalysisPayload, ToolFinishImplementationPayload,
-    ToolFinishObservabilityAnalysisPayload, ToolFinishSolutionAnalysisPayload,
-    ToolImplementSolutionPayload, ToolListModulesForUnitContextsPayload,
-    ToolListUnitContextsPayload, ToolModifyUnitPayload, ToolRemoveUnitPayload,
+    ToolCreateUnitPayload, ToolFetchLatestReleasesPayload, ToolFetchReleaseTracesPayload,
+    ToolFetchRelevantUnitsPayload, ToolFinishArchitectureAnalysisPayload,
+    ToolFinishImplementationPayload, ToolFinishObservabilityAnalysisPayload,
+    ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload,
+    ToolListModulesForUnitContextsPayload, ToolListUnitContextsPayload, ToolModifyUnitPayload,
+    ToolRemoveUnitPayload,
 };
 
 /// One requested tool call from the LLM (GPT tool_call_id optional; Gemini has no id).
@@ -132,6 +133,7 @@ pub enum ChatMessageType {
     RejectControllerBox,
     ToolFetchRelevantUnits,
     ToolFetchLatestReleases,
+    ToolFetchReleaseTraces,
     ToolListUnitContexts,
     ToolListModulesForUnitContexts,
     ToolAnalyzeArchitecture,
@@ -184,6 +186,7 @@ pub enum ChatMessagePayload {
     RejectControllerBox(RejectControllerBoxPayload),
     ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
     ToolFetchLatestReleases(ToolFetchLatestReleasesPayload),
+    ToolFetchReleaseTraces(ToolFetchReleaseTracesPayload),
     // `ToolListUnitContexts` / `ToolListModulesForUnitContexts` use permissive `args` + defaults.
     // They MUST come after unit CRUD payloads in this list, otherwise `untagged` deserialize matches
     // them first and steals `create_unit` / `modify_unit` / `remove_unit` JSON (see variant order).
@@ -212,6 +215,7 @@ impl ChatMessagePayload {
             ChatMessagePayload::RejectControllerBox(_) => "RejectControllerBox",
             ChatMessagePayload::ToolFetchRelevantUnits(_) => "ToolFetchRelevantUnits",
             ChatMessagePayload::ToolFetchLatestReleases(_) => "ToolFetchLatestReleases",
+            ChatMessagePayload::ToolFetchReleaseTraces(_) => "ToolFetchReleaseTraces",
             ChatMessagePayload::ToolAnalyzeArchitecture(_) => "ToolAnalyzeArchitecture",
             ChatMessagePayload::ToolFinishArchitectureAnalysis(_) => {
                 "ToolFinishArchitectureAnalysis"
@@ -265,6 +269,10 @@ impl ChatMessagePayload {
             ChatMessageType::ToolFetchLatestReleases => {
                 let p = serde_json::from_value::<ToolFetchLatestReleasesPayload>(v)?;
                 ChatMessagePayload::ToolFetchLatestReleases(p)
+            }
+            ChatMessageType::ToolFetchReleaseTraces => {
+                let p = serde_json::from_value::<ToolFetchReleaseTracesPayload>(v)?;
+                ChatMessagePayload::ToolFetchReleaseTraces(p)
             }
             ChatMessageType::ToolListUnitContexts => {
                 let p = serde_json::from_value::<ToolListUnitContextsPayload>(v)?;

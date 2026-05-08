@@ -117,7 +117,8 @@ fn jaeger_error_to_response(err: JaegerQueryError) -> HttpResponse {
             &format!("Jaeger returned status {}", status),
             json!({}),
         )),
-        JaegerQueryError::InvalidPayload { .. } => HttpResponse::BadGateway()
-            .json(api_error("Invalid response from Jaeger", json!({}))),
+        JaegerQueryError::InvalidPayload { .. } => {
+            HttpResponse::BadGateway().json(api_error("Invalid response from Jaeger", json!({})))
+        }
     }
 }

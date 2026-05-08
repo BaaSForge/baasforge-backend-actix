@@ -11,8 +11,10 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// If this value changes, update the user-facing "15 minutes" copy in `chat_worker::agent::planner`
+/// (`SYSTEM_PROMPT_CORE`).
 pub const MAX_LOOKBACK_MINUTES: u32 = 15;
-pub const DEFAULT_LOOKBACK_MINUTES: u32 = 15;
+pub const DEFAULT_LOOKBACK_MINUTES: u32 = MAX_LOOKBACK_MINUTES;
 pub const MAX_LIMIT_PER_SERVICE: usize = 20;
 pub const DEFAULT_LIMIT_PER_SERVICE: usize = 20;
 
@@ -56,13 +58,19 @@ pub struct JaegerQueryFilters {
 #[derive(Debug)]
 pub enum JaegerQueryError {
     ClientBuild(String),
-    Transport { url: String, message: String },
+    Transport {
+        url: String,
+        message: String,
+    },
     BadStatus {
         url: String,
         status: u16,
         body: String,
     },
-    InvalidPayload { url: String, message: String },
+    InvalidPayload {
+        url: String,
+        message: String,
+    },
 }
 
 impl std::fmt::Display for JaegerQueryError {
@@ -100,14 +108,9 @@ pub async fn query_jaeger_traces(
         .unwrap_or(0);
     let start_us = now_us.saturating_sub((lookback as u64) * 60 * 1_000_000);
 
-    let client = build_jaeger_client()
-        .map_err(|e| JaegerQueryError::ClientBuild(e.to_string()))?;
+    let client = build_jaeger_client().map_err(|e| JaegerQueryError::ClientBuild(e.to_string()))?;
 
-    let requested: HashSet<&str> = filters
-        .services
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let requested: HashSet<&str> = filters.services.iter().map(|s| s.as_str()).collect();
 
     let mut by_service: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for s in &filters.services {
@@ -157,11 +160,7 @@ pub async fn query_jaeger_traces(
             })
             .collect();
 
-        let results = join_all(
-            urls.iter()
-                .map(|(_, url)| fetch_jaeger_json(&client, url)),
-        )
-        .await;
+        let results = join_all(urls.iter().map(|(_, url)| fetch_jaeger_json(&client, url))).await;
 
         for ((svc_name, _), result) in urls.iter().zip(results) {
             let payload = result?;
@@ -169,13 +168,7 @@ pub async fn query_jaeger_traces(
             single.insert(svc_name.as_str());
             let mut local: BTreeMap<String, Vec<Value>> = BTreeMap::new();
             local.insert(svc_name.clone(), Vec::new());
-            merge_spans_into_buckets(
-                &payload,
-                &single,
-                release_id,
-                limit_per_service,
-                &mut local,
-            );
+            merge_spans_into_buckets(&payload, &single, release_id, limit_per_service, &mut local);
             if let Some(spans) = local.remove(svc_name) {
                 by_service.insert(svc_name.clone(), spans);
             }
@@ -194,10 +187,7 @@ fn build_jaeger_client() -> reqwest::Result<reqwest::Client> {
         .build()
 }
 
-async fn fetch_jaeger_json(
-    client: &reqwest::Client,
-    url: &str,
-) -> Result<Value, JaegerQueryError> {
+async fn fetch_jaeger_json(client: &reqwest::Client, url: &str) -> Result<Value, JaegerQueryError> {
     let response = client.get(url).send().await.map_err(|e| {
         let chain = error_chain(&e);
         log::error!(
@@ -290,9 +280,7 @@ fn merge_spans_into_buckets(
         }
 
         for (svc, mut spans_for_svc) in grouped {
-            spans_for_svc.sort_by_key(|s| {
-                s.get("startTime").and_then(|v| v.as_u64()).unwrap_or(0)
-            });
+            spans_for_svc.sort_by_key(|s| s.get("startTime").and_then(|v| v.as_u64()).unwrap_or(0));
             let bucket = by_service.entry(svc).or_default();
             for span in spans_for_svc {
                 if bucket.len() >= limit_per_service {

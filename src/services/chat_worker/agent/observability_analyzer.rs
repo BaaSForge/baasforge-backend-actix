@@ -3,6 +3,7 @@ use crate::models::chat_messages::{ChatMessageType, ChatSessionRoleType};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::nested_branch_history::load_nested_branch_history;
 use crate::services::chat_worker::llm::tools::{
+    analyze_observability_tool::ToolAnalyzeObservabilityArgs, fetch_release_traces,
     finish_observability_analysis, load_latest_production_release_units,
 };
 use crate::services::units as units_definitions;
@@ -27,11 +28,32 @@ fn synthetic_first_user_text(
         .optional()?
         .flatten();
     Ok(payload_val.and_then(|v| {
-        let s = v.get("args")?.get("brief")?.as_str()?.trim();
-        if s.is_empty() {
+        let args_val = v.get("args")?.clone();
+        let args: ToolAnalyzeObservabilityArgs = serde_json::from_value(args_val).ok()?;
+        let brief = args.brief.trim();
+        let mut parts: Vec<String> = Vec::new();
+        if !brief.is_empty() {
+            parts.push(brief.to_string());
+        }
+        let mut scope = String::new();
+        if let Some(ref t) = args.trace_id {
+            scope.push_str("trace_id=");
+            scope.push_str(t);
+        }
+        if let Some(ref r) = args.release_id {
+            if !scope.is_empty() {
+                scope.push(' ');
+            }
+            scope.push_str("release_id=");
+            scope.push_str(r);
+        }
+        if !scope.is_empty() {
+            parts.push(format!("Pinned Jaeger scope: {scope}"));
+        }
+        if parts.is_empty() {
             None
         } else {
-            Some(s.to_string())
+            Some(parts.join("\n\n"))
         }
     }))
 }
@@ -40,14 +62,14 @@ pub fn tool_names() -> &'static [&'static str] {
     &[
         // TODO: we might need to add `load_release_units` tool instead of `load_latest_production_release_units` as the whole job of observability analyzer is to analyze the a release not the production units.
         load_latest_production_release_units::TOOL_NAME,
-        // TODO: add load_release_traces tool
+        fetch_release_traces::TOOL_NAME,
         finish_observability_analysis::TOOL_NAME,
     ]
 }
 
 /// Loads history **only** under the nested branch rooted at the `ToolAnalyzeObservability` DB row.
 ///
-/// Reads `args.brief` from the anchor row for the optional synthetic first user line; see
+/// Reads `args` (brief, optional trace_id / release_id) from the anchor row for the optional synthetic first user line; see
 /// [`crate::services::chat_worker::agent::nested_branch_history`] for subtree behavior.
 pub fn load_history(
     conn: &mut PooledConn,
@@ -71,7 +93,7 @@ pub fn load_history(
 const SYSTEM_PROMPT_CORE: &str = r#"Role: You are the **Observability Analyzer** for a no-code backend platform. You diagnose failures and odd behavior using **traces, logs, symptoms, and timing** the user or planner describes, and you relate them to **how units are defined in production or stage** (via tools). You never show end users raw unit source code in your final deliverable—use plain language; cite unit **paths/ids** when precision matters.
 
 0. How your context works (IMPORTANT)
-You do **not** see the main planner–user thread or other agents’ nested threads. Your history is only this nested run (plus an optional first user line from the planner’s **brief** on the analyze-observability tool). Within this run you may multi-turn until you finish.
+You do **not** see the main planner–user thread or other agents’ nested threads. Your history is only this nested run (plus an optional first user line from the planner’s **analyze_observability_tool** args: **brief** and any pinned **trace_id** / **release_id**). Within this run you may multi-turn until you finish. When that first line includes a pinned scope, call **`fetch_release_traces`** early with those same ids unless you have a strong reason to defer.
 **Hard rule — every assistant turn:** You MUST NOT emit a message with assistant `content` only and no `tool_calls`. Every response must include at least one tool call (including your final **`finish_observability_analysis`**). Optional brief text may appear alongside `tool_calls`, never content-only questions alone.
 Brevity between tools: minimal assistant text; put the full diagnosis in **`detailed_report`** on finish—dense, evidence-backed, shortest form that still contains what the planner needs.
 
@@ -81,7 +103,10 @@ Brevity between tools: minimal assistant text; put the full diagnosis in **`deta
 - Say what would **confirm or falsify** each hypothesis (extra logs, repro, metrics).
 
 2. Unit loader (**load_latest_production_release_units**)
-This is your only way to pull **current live unit definitions** into this thread. Use a **natural-language `query`** that names behaviors, domains, or failure themes so retrieval returns the right units. You have **no** other listing tools here—narrow or re-query if results are too broad or empty.
+Pull **current live unit definitions** into this thread with a **natural-language `query`** (behaviors, domains, failure themes). Narrow or re-query if results are too broad or empty.
+
+2b. Traces (**fetch_release_traces**)
+Returns **`spans`** from Jaeger (15-minute lookback, host-enforced caps). **`release_id`** filters on tag `baal.release.id`; it is **required** when you are not passing **`trace_id`**. With **`trace_id`** alone you load that whole trace with no release filter; pass both to load one trace and keep only spans for that release.
 
 3. Execution loop
 When you return `tool_calls`, the host runs tools and invokes you again with results. **No `tool_calls` means no automatic next turn.** Never invent tool output. When done, always call **`finish_observability_analysis`** with a complete **`detailed_report`**—do not stop on narrative alone.

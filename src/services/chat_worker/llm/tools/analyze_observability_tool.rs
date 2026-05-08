@@ -16,10 +16,20 @@ use uuid::Uuid;
 
 pub const ARG_BRIEF_DESCRIPTION: &str = "Short briefing for the observability analyzer: what failed or looks wrong, symptoms, environment (stage vs production deployment), timestamps, trace or log excerpts, and which units or paths you suspect. This is the only handoff from the planner into the nested run—include what matters for diagnosis.";
 
+pub const ARG_TRACE_ID_DESCRIPTION: &str = "Optional Jaeger trace id. When set, the nested run focuses on that trace. If omitted, you must pass `release_id`.";
+
+pub const ARG_RELEASE_ID_DESCRIPTION: &str = "Optional when `trace_id` is set (filters spans to `baal.release.id`). Required when `trace_id` is omitted. Together with `trace_id`, at least one of the two must always be provided.";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolAnalyzeObservabilityArgs {
     #[schemars(description = ARG_BRIEF_DESCRIPTION)]
     pub brief: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = ARG_TRACE_ID_DESCRIPTION)]
+    pub trace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = ARG_RELEASE_ID_DESCRIPTION)]
+    pub release_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -44,7 +54,7 @@ pub const TOOL_NAME: &str = "analyze_observability_tool";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Request an asynchronous observability diagnostics pass: debugging, trace/log interpretation, and likely root causes against a release live unit definitions. Pass **brief** with a compact but concrete summary of the issue (symptoms, excerpts, scope)—the observability analyzer does not see the main chat.",
+        description: "Request an asynchronous observability diagnostics pass: debugging, trace/log interpretation, and likely root causes against a release live unit definitions. Pass **brief** with a compact but concrete summary of the issue (symptoms, excerpts, scope)—the observability analyzer does not see the main chat. Pass **trace_id** and/or **release_id**: at least one is required; if **trace_id** is omitted, **release_id** is required.",
         parameters: params_schema(),
     }
 }
@@ -56,6 +66,14 @@ fn params_schema() -> Value {
             "brief": {
                 "type": "string",
                 "description": ARG_BRIEF_DESCRIPTION
+            },
+            "trace_id": {
+                "type": "string",
+                "description": ARG_TRACE_ID_DESCRIPTION
+            },
+            "release_id": {
+                "type": "string",
+                "description": ARG_RELEASE_ID_DESCRIPTION
             }
         },
         "required": ["brief"]
@@ -72,7 +90,23 @@ pub fn payload_from_args(
     tool_call_id: Option<String>,
     tool_name: &str,
 ) -> Result<ChatMessagePayload, BoxError> {
-    let args = serde_json::from_value::<ToolAnalyzeObservabilityArgs>(args).unwrap_or_default();
+    let mut args = serde_json::from_value::<ToolAnalyzeObservabilityArgs>(args).unwrap_or_default();
+    args.release_id = args
+        .release_id
+        .take()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    args.trace_id = args
+        .trace_id
+        .take()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if args.trace_id.is_none() && args.release_id.is_none() {
+        return Err(
+            "analyze_observability_tool: pass at least one of trace_id or release_id (release_id is required when trace_id is omitted)"
+                .into(),
+        );
+    }
     Ok(ChatMessagePayload::ToolAnalyzeObservability(
         ToolAnalyzeObservabilityPayload {
             args,
