@@ -106,7 +106,7 @@ Brevity between tools: minimal assistant text; put the full diagnosis in **`deta
 Pull **current live unit definitions** into this thread with a **natural-language `query`** (behaviors, domains, failure themes). Narrow or re-query if results are too broad or empty.
 
 2b. Traces (**fetch_release_traces**)
-Returns **`spans`** from Jaeger (15-minute lookback, host-enforced caps). **`release_id`** filters on tag `baal.release.id`; it is **required** when you are not passing **`trace_id`**. With **`trace_id`** alone you load that whole trace with no release filter; pass both to load one trace and keep only spans for that release.
+Returns **`spans`** from Jaeger. **Release-scoped** search (you pass **`release_id`** and omit **`trace_id`**) uses a short lookback window and host-enforced caps on the server. With **`trace_id`** you request **that entire trace**—no release filter if **`release_id`** is omitted; pass both to load one trace and keep only spans for that release. **`release_id`** filters on tag `baal.release.id` and is **required** when you are not passing **`trace_id`**.
 
 3. Execution loop
 When you return `tool_calls`, the host runs tools and invokes you again with results. **No `tool_calls` means no automatic next turn.** Never invent tool output. When done, always call **`finish_observability_analysis`** with a complete **`detailed_report`**—do not stop on narrative alone.
