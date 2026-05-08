@@ -12,7 +12,7 @@ use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent}
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
-use crate::services::chat_worker::db::load_project_units_by_keys;
+use crate::services::chat_worker::db::load_related_units_for_chat_session_by_full_ids;
 use super::analyze_observability_tool;
 use super::{maybe_complete_invoking_message, BoxError, ToolAnalyzeObservabilityPayload, ToolSpec};
 use crate::services::message_queue::SharedRabbitPublisher;
@@ -113,6 +113,7 @@ pub fn payload_from_args(
 /// row completed, completes the nested analyzer `Text` without queueing another analyzer pass, then
 /// runs [`maybe_complete_invoking_message`] on the planner invoker (same effect as
 /// [`super::on_tool_message_finished`] for the outer tool).
+/// `related_units` are resolved from the session effective unit set (baseline release + draft tips), same as **load_latest_production_release_units**.
 pub async fn handler(
     pool: DbPool,
     redis_conn: Arc<Mutex<redis::aio::MultiplexedConnection>>,
@@ -302,20 +303,20 @@ pub async fn handler(
         return Ok(());
     }
 
-    let keys: Vec<(Uuid, String)> = finish_payload
+    let full_ids: Vec<String> = finish_payload
         .args
         .relevant_unit_ids
         .iter()
-        .map(|id| (session_id, id.trim().to_string()))
-        .filter(|(_, id)| !id.is_empty())
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
         .collect();
     let detailed_report = finish_payload.args.detailed_report.clone();
 
-    let related_units: Vec<ProjectUnitResponse> = if keys.is_empty() {
+    let related_units: Vec<ProjectUnitResponse> = if full_ids.is_empty() {
         vec![]
     } else {
         block_on_db_tokio(&pool, move |conn| {
-            load_project_units_by_keys(conn, project_id, &keys)
+            load_related_units_for_chat_session_by_full_ids(conn, project_id, session_id, &full_ids)
         })
         .await
         .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?

@@ -1,3 +1,17 @@
+//! PostgreSQL access for chat-time project units and related helpers.
+//!
+//! **Unit rows:** The authoritative store for unit definitions is the `project_units` table. Load
+//! rows only via queries on that table (typically `project_id` + `chat_session_id` + full unit `id`).
+//!
+//! **Release metadata is not a loader for chat tools:** `project_releases.units_metadata` / combined
+//! unit refs are a persisted snapshot for release workflows, not a source to resolve which units to
+//! load for features that run inside a chat session. For example, `finish_observability_analysis` and
+//! `finish_architecture_analysis` merge `related_units` via [`load_related_units_for_chat_session_by_full_ids`]
+//! (same effective set as [`load_units_for_latest_production_release`]), because baseline rows may
+//! use another `chat_session_id` than the invoking session. Functions that hydrate from release
+//! metadata ([`load_units_from_latest_production_metadata`], [`load_units_from_release_metadata`])
+//! exist for release-specific code paths; do not use a release row to populate session-scoped tool
+//! payloads in new code.
 use crate::database::PooledConn;
 use crate::libs::unit_slug::{compose_unit_id, parse_unit_path, UnitPath};
 use crate::models::chat_messages::{
@@ -198,7 +212,9 @@ macro_rules! inner_is_newer_same_unit {
 }
 
 // TODO: use vector db instead of postgres
-/// Resolve the live production release: prod runtime `live_release_id`, else newest prod row by `created_at`.
+/// Resolve the live production release row (runtime pointer or newest prod by `created_at`). For
+/// release workflows and stored snapshot metadata only—not for resolving chat-session unit loads;
+/// see the module-level docs on `project_units` vs release metadata.
 pub fn load_latest_production_release_for_project(
     conn: &mut PooledConn,
     project_id: Uuid,
@@ -231,7 +247,11 @@ pub fn load_latest_production_release_for_project(
         .optional()
 }
 
-/// Load unit rows referenced by the latest production release’s `combinedUnitIDs` metadata.
+/// Hydrates rows from `project_units` using refs stored on the latest production release row.
+///
+/// The release row only points at snapshot `(chat_session_id, unit_id)` pairs; it does not replace
+/// the database as the source of row content. Prefer explicit session-scoped keys (e.g. finish
+/// analysis tools) instead of this when the caller already has the chat session—see module docs.
 pub fn load_units_from_latest_production_metadata(
     conn: &mut PooledConn,
     project_id: Uuid,
@@ -248,7 +268,7 @@ pub fn load_units_from_latest_production_metadata(
     load_project_units_by_keys(conn, project_id, &keys)
 }
 
-/// Load unit rows referenced by a specific release's `combinedUnitIDs` metadata.
+/// Same as [`load_units_from_latest_production_metadata`] for one release id—snapshot refs only.
 pub fn load_units_from_release_metadata(
     conn: &mut PooledConn,
     project_id: Uuid,
@@ -653,7 +673,10 @@ pub fn load_chat_session_draft_units_as_of_release_controller_message(
     Ok(Ok(units))
 }
 
-/// Order matches `keys` (omits unknown pairs). Each key is `(chat_session_id, id)`; `id` is the full stored id including revision.
+/// Loads from `project_units` only. Order matches `keys` (omits unknown pairs). Each key is
+/// `(chat_session_id, id)` where `id` is the full stored id including revision. Keys must match rows
+/// in the table (e.g. refs from release metadata). For ids from the session effective unit set, use
+/// [`load_related_units_for_chat_session_by_full_ids`].
 pub fn load_project_units_by_keys(
     conn: &mut PooledConn,
     project_id: Uuid,
@@ -680,6 +703,29 @@ pub fn load_project_units_by_keys(
         .filter_map(|(s, id)| by_key.remove(&(*s, id.clone())))
         .collect();
     project_units_with_latest_revision(conn, project_id, ordered)
+}
+
+pub fn load_related_units_for_chat_session_by_full_ids(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    full_unit_ids: &[String],
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    if full_unit_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let effective = load_effective_units_for_chat_session(conn, project_id, session_id)?;
+    let by_id: HashMap<String, ProjectUnitResponse> = effective
+        .into_iter()
+        .map(|u| (u.id.clone(), u))
+        .collect();
+    let mut out = Vec::new();
+    for id in full_unit_ids {
+        if let Some(u) = by_id.get(id) {
+            out.push(u.clone());
+        }
+    }
+    Ok(out)
 }
 
 pub fn load_latest_releases(
