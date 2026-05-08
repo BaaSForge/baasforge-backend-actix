@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod chat;
+pub mod observability;
 pub mod package;
 pub mod payment;
 pub mod project;
@@ -226,6 +227,14 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                 web::scope("/api/v1/ws")
                     .wrap(from_fn(auth_closed_guard_middleware))
                     .route("", web::get().to(ws::handle_ws)),
+            )
+            .service(
+                web::scope("/api/v1/observability")
+                    .wrap(from_fn(auth_closed_guard_middleware))
+                    .route(
+                        "/traces",
+                        web::post().to(observability::handle_query_jaeger_traces),
+                    ),
             )
             .service(
                 web::scope("/api/v1/platform")

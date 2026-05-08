@@ -111,6 +111,9 @@ pub struct Settings {
     /// Base URL of the runtime, no trailing slash (e.g. `https://runtime.example.com`).
     /// Injected into agent prompts and returned per unit type in `GET .../platform/projects/{id}` (`runtimes`).
     pub base_runtime_endpoint: String,
+    /// Jaeger Query base URL, no trailing slash (e.g. `http://localhost:16686`).
+    /// Used by the observability proxy endpoint to fetch traces by traceID.
+    pub jaeger_query_base_url: String,
 }
 
 impl Settings {
@@ -255,6 +258,14 @@ impl Settings {
             .trim_end_matches('/')
             .to_string();
 
+        let jaeger_query_base_url = env::var("JAEGER_QUERY_BASE_URL")
+            .expect("JAEGER_QUERY_BASE_URL must be set")
+            .trim_end_matches('/')
+            .to_string();
+        if jaeger_query_base_url.is_empty() {
+            return Err("JAEGER_QUERY_BASE_URL must not be empty".into());
+        }
+
         Ok(Settings {
             port,
             app_environment,
@@ -287,6 +298,7 @@ impl Settings {
             runtime_nats_jetstream_consumer_release,
             unit_reviewer_simulate_failure,
             base_runtime_endpoint,
+            jaeger_query_base_url,
         })
     }
 }
