@@ -49,12 +49,14 @@ use crate::services::chat_worker::db::{
     load_unit_previous_revisions_by_full_ids_for_chat_session,
     load_unit_tips_by_ids_for_chat_session, load_units_by_ids_for_chat_session,
 };
-use crate::services::chat_worker::reject_controller_box::apply_disabled_due_to_production_release_on_matching_reject_box;
+use crate::services::chat_worker::reject_controller_box::apply_disabled_due_to_live_production_release_on_matching_reject_box;
 use crate::services::releases::{
-    attach_base_production_releases, attach_is_draft_flags_from_latest_production,
-    enrich_chat_message_response_releases, enrich_owned_releases_by_session_map,
-    insert_production_release_from_stage_row, live_release_id_from_production_runtime,
-    prod_live_release_source_chat_session, production_release_id_for_live_runtimes,
+    assistant_turn_has_live_production_release, attach_base_production_releases,
+    attach_is_draft_flags_from_latest_production, enrich_chat_message_response_releases,
+    enrich_owned_releases_by_session_map, insert_production_release_from_stage_row,
+    live_release_id_from_production_runtime, prod_live_release_source_chat_session,
+    production_release_id_for_live_runtimes,
+    recompute_user_message_edit_disabled_for_session_live_production,
     stale_base_release_from_baseline,
 };
 use crate::services::stage_release_from_controller::{
@@ -626,7 +628,7 @@ pub async fn handle_create_chat_session_message(
         payload: body.payload.clone(),
         status: ChatMessageStatus::Completed,
         agent: None, // user message; agent is only set for AI role
-        is_edit_disabled_due_to_production_release: false,
+        is_edit_disabled_due_to_live_production_release: false,
     };
 
     let (message, is_first) = match database::block_on_db(&context.pool, move |conn| {
@@ -1878,22 +1880,18 @@ pub async fn handle_create_production_release(
                     .get_result(conn)?;
 
             let reject_updated_row = match box_payload.assistant_turn_id {
-                Some(tid) => apply_disabled_due_to_production_release_on_matching_reject_box(
+                Some(tid) => apply_disabled_due_to_live_production_release_on_matching_reject_box(
                     conn, session_id, tid,
                 )?,
                 None => None,
             };
 
-            let controller_at = msg_row.created_at;
-            let user_messages_edit_disabled: Vec<ChatMessageRow> =
-                diesel::update(chat_messages::table)
-                    .filter(chat_messages::chat_session_id.eq(session_id))
-                    .filter(chat_messages::role.eq(ChatSessionRoleType::User))
-                    .filter(chat_messages::is_edit_disabled_due_to_production_release.eq(false))
-                    .filter(chat_messages::created_at.lt(controller_at))
-                    .set(chat_messages::is_edit_disabled_due_to_production_release.eq(true))
-                    .returning(ChatMessageRow::as_returning())
-                    .load(conn)?;
+            let user_messages_edit_disabled =
+                recompute_user_message_edit_disabled_for_session_live_production(
+                    conn,
+                    project_id,
+                    session_id,
+                )?;
 
             Ok(ProdReleaseOutcome::Success(
                 inserted,
@@ -2069,12 +2067,12 @@ enum ConfirmRejectOutcome {
     NotRejectController,
     PayloadInvalid,
     AlreadyRejected,
-    DisabledByProductionRelease,
+    DisabledByLiveProductionRelease,
     NotLastMessage,
 }
 
 /// POST — set `is_rejected` on a `reject_controller_box` row when it is still actionable (last session
-/// message, not disabled by production release) and disable the paired release controller.
+/// message, not blocked by a live production release on the paired controller) and disable the paired release controller.
 pub async fn handle_confirm_reject_controller(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -2138,8 +2136,13 @@ pub async fn handle_confirm_reject_controller(
             if box_payload.is_rejected {
                 return Ok(ConfirmRejectOutcome::AlreadyRejected);
             }
-            if box_payload.is_disabled_due_to_production_release {
-                return Ok(ConfirmRejectOutcome::DisabledByProductionRelease);
+            if assistant_turn_has_live_production_release(
+                conn,
+                project_id,
+                session_id,
+                box_payload.assistant_turn_id,
+            )? {
+                return Ok(ConfirmRejectOutcome::DisabledByLiveProductionRelease);
             }
 
             let tip: Option<ChatMessageRow> = chat_messages::table
@@ -2363,9 +2366,9 @@ pub async fn handle_confirm_reject_controller(
         )),
         ConfirmRejectOutcome::AlreadyRejected => HttpResponse::BadRequest()
             .json(api_error("Reject controller already confirmed", json!({}))),
-        ConfirmRejectOutcome::DisabledByProductionRelease => {
+        ConfirmRejectOutcome::DisabledByLiveProductionRelease => {
             HttpResponse::BadRequest().json(api_error(
-                "Reject controller is disabled because a production release was created",
+                "Reject controller is disabled because a live production release exists for this turn",
                 json!({}),
             ))
         }
@@ -2443,9 +2446,9 @@ pub async fn handle_truncate_chat_session_from_user_message(
         }
         TruncateSessionFromMessageOutcome::AnchorNotUserMessage => HttpResponse::BadRequest()
             .json(api_error("Message is not a user message", json!({}))),
-        TruncateSessionFromMessageOutcome::HasProductionReleaseAfterAnchor => {
+        TruncateSessionFromMessageOutcome::HasLiveProductionReleaseAfterAnchor => {
             HttpResponse::BadRequest().json(api_error(
-                "Cannot truncate: a production release exists on a release controller after this message",
+                "Cannot truncate: a live production release exists on a release controller after this message",
                 json!({}),
             ))
         }

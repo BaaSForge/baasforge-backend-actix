@@ -1,0 +1,2 @@
+ALTER TABLE chat_messages
+    RENAME COLUMN is_edit_disabled_due_to_live_production_release TO is_edit_disabled_due_to_production_release;

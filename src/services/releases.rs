@@ -5,7 +5,9 @@
 //! the stage release is created—not again at production time.
 use crate::database::PooledConn;
 use crate::libs::unit_slug::{compose_unit_id, parse_unit_path};
-use crate::models::chat_messages::{ChatMessagePayload, ChatMessageResponse, ChatMessageType};
+use crate::models::chat_messages::{
+    ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageType, ChatSessionRoleType,
+};
 use crate::models::projects::{
     PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline,
     ProjectUnitResponse, ProjectUnitRow, ProjectUnitType,
@@ -534,18 +536,156 @@ pub fn live_release_id_from_production_runtime(
     Ok(row.flatten())
 }
 
+/// Distinct production `project_releases.id` values currently pointed to by any prod runtime’s
+/// `live_release_id` for this project.
+pub fn all_live_production_release_ids(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+) -> Result<HashSet<Uuid>, diesel::result::Error> {
+    Ok(project_runtimes::table
+        .filter(project_runtimes::project_id.eq(project_id))
+        .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Prod))
+        .select(project_runtimes::live_release_id)
+        .load::<Option<Uuid>>(conn)?
+        .into_iter()
+        .flatten()
+        .collect())
+}
+
+/// Sets [`ChatMessageRow::is_edit_disabled_due_to_live_production_release`] for every user message in
+/// `session_id`: **true** iff some [`ChatMessageType::ReleaseControllerBox`] row strictly **after**
+/// that message (ordered by `created_at`, then `id`) embeds a production release whose id is in
+/// [`all_live_production_release_ids`] after any prod runtime moves (so promoting from an older
+/// controller clears stale disables set when a newer controller shipped first).
+///
+/// Returns rows whose flag **changed** (for WebSocket broadcast).
+pub fn recompute_user_message_edit_disabled_for_session_live_production(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> Result<Vec<ChatMessageRow>, diesel::result::Error> {
+    let live = all_live_production_release_ids(conn, project_id)?;
+
+    let rc_rows: Vec<ChatMessageRow> = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
+        .order((chat_messages::created_at.asc(), chat_messages::id.asc()))
+        .select(ChatMessageRow::as_select())
+        .load(conn)?;
+
+    let mut controllers: Vec<(DateTime<Utc>, Uuid, Option<Uuid>)> =
+        Vec::with_capacity(rc_rows.len());
+    for row in rc_rows {
+        let prod_id =
+            match ChatMessagePayload::from_value(&row.type_, row.payload.clone()) {
+                Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) => {
+                    p.prod_release.map(|pr| pr.release.id)
+                }
+                _ => None,
+            };
+        controllers.push((row.created_at, row.id, prod_id));
+    }
+
+    let users: Vec<ChatMessageRow> = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(chat_messages::role.eq(ChatSessionRoleType::User))
+        .select(ChatMessageRow::as_select())
+        .load(conn)?;
+
+    let mut ids_true = Vec::new();
+    let mut ids_false = Vec::new();
+    for u in &users {
+        let should_disable = controllers.iter().any(|(rc_ca, rc_id, prod_id)| {
+            let rc_after_user =
+                *rc_ca > u.created_at || (*rc_ca == u.created_at && *rc_id > u.id);
+            if !rc_after_user {
+                return false;
+            }
+            prod_id
+                .as_ref()
+                .is_some_and(|pid| live.contains(pid))
+        });
+        if should_disable != u.is_edit_disabled_due_to_live_production_release {
+            if should_disable {
+                ids_true.push(u.id);
+            } else {
+                ids_false.push(u.id);
+            }
+        }
+    }
+
+    let mut updated: Vec<ChatMessageRow> = Vec::new();
+    if !ids_false.is_empty() {
+        let rows: Vec<ChatMessageRow> = diesel::update(
+            chat_messages::table
+                .filter(chat_messages::id.eq_any(&ids_false))
+                .filter(chat_messages::chat_session_id.eq(session_id)),
+        )
+        .set(chat_messages::is_edit_disabled_due_to_live_production_release.eq(false))
+        .returning(ChatMessageRow::as_returning())
+        .load(conn)?;
+        updated.extend(rows);
+    }
+    if !ids_true.is_empty() {
+        let rows: Vec<ChatMessageRow> = diesel::update(
+            chat_messages::table
+                .filter(chat_messages::id.eq_any(&ids_true))
+                .filter(chat_messages::chat_session_id.eq(session_id)),
+        )
+        .set(chat_messages::is_edit_disabled_due_to_live_production_release.eq(true))
+        .returning(ChatMessageRow::as_returning())
+        .load(conn)?;
+        updated.extend(rows);
+    }
+    Ok(updated)
+}
+
 /// Production release id currently stored on prod runtimes’ `live_release_id`, if any.
 pub fn production_release_id_for_live_runtimes(
     conn: &mut PooledConn,
     project_id: Uuid,
 ) -> Result<Option<Uuid>, diesel::result::Error> {
-    let ids: Vec<Option<Uuid>> = project_runtimes::table
-        .filter(project_runtimes::project_id.eq(project_id))
-        .filter(project_runtimes::environment.eq(PlatformEnvironmentType::Prod))
-        .select(project_runtimes::live_release_id)
-        .load(conn)?;
+    Ok(all_live_production_release_ids(conn, project_id)?
+        .into_iter()
+        .next())
+}
 
-    Ok(ids.into_iter().flatten().next())
+/// True when some `ReleaseControllerBox` in the session shares `assistant_turn_id` and embeds a
+/// `prod_release` whose id is in [`all_live_production_release_ids`] (reject / truncate must stay blocked).
+pub fn assistant_turn_has_live_production_release(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    assistant_turn_id: Option<Uuid>,
+) -> Result<bool, diesel::result::Error> {
+    let Some(tid) = assistant_turn_id else {
+        return Ok(false);
+    };
+    let live = all_live_production_release_ids(conn, project_id)?;
+    if live.is_empty() {
+        return Ok(false);
+    }
+    let rows: Vec<ChatMessageRow> = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
+        .select(ChatMessageRow::as_select())
+        .load(conn)?;
+    for row in rows {
+        let Ok(Some(ChatMessagePayload::ReleaseControllerBox(p))) =
+            ChatMessagePayload::from_value(&row.type_, row.payload.clone())
+        else {
+            continue;
+        };
+        if p.assistant_turn_id != Some(tid) {
+            continue;
+        }
+        if let Some(pr) = p.prod_release {
+            if live.contains(&pr.release.id) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Session baseline: `chat_sessions.live_production_release_id` and the loaded **production** row, if it still exists.

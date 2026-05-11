@@ -168,7 +168,7 @@ pub async fn consume_reject_controller_box_queue_message(
         is_rejected: false,
         unit_changes,
         assistant_turn_id,
-        is_disabled_due_to_production_release: false,
+        is_disabled_due_to_live_production_release: false,
     };
     let payload_json = serde_json::to_value(&body)?;
 
@@ -214,7 +214,7 @@ pub async fn consume_reject_controller_box_queue_message(
     Ok(())
 }
 
-pub fn apply_disabled_due_to_production_release_on_matching_reject_box(
+pub fn apply_disabled_due_to_live_production_release_on_matching_reject_box(
     conn: &mut PooledConn,
     session_id: Uuid,
     assistant_turn_id: Uuid,
@@ -234,10 +234,10 @@ pub fn apply_disabled_due_to_production_release_on_matching_reject_box(
         if p.assistant_turn_id != Some(assistant_turn_id) {
             continue;
         }
-        if p.is_disabled_due_to_production_release {
+        if p.is_disabled_due_to_live_production_release {
             return Ok(Some(row));
         }
-        p.is_disabled_due_to_production_release = true;
+        p.is_disabled_due_to_live_production_release = true;
         let payload_json = match serde_json::to_value(&p) {
             Ok(v) => v,
             Err(_) => continue,

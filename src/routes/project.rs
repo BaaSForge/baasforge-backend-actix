@@ -32,6 +32,7 @@ use crate::services::releases::{
     ProjectReleaseRevisionLookup, attach_base_production_releases,
     attach_is_draft_flags_from_latest_production, load_unit_previous_revisions_for_release,
     project_release_id_for_revision_lane,
+    recompute_user_message_edit_disabled_for_session_live_production,
 };
 use crate::services::stage_release_from_controller::transaction_create_stage_release_from_controller;
 use crate::services::stage_runtime_release::{
@@ -1836,6 +1837,12 @@ pub async fn handle_deploy_production_release(
         .set(project_runtimes::live_release_id.eq(Some(deployed_release_id)))
         .returning(ProjectRuntimeResponse::as_select())
         .get_result::<ProjectRuntimeResponse>(conn)?;
+
+        recompute_user_message_edit_disabled_for_session_live_production(
+            conn,
+            project_id,
+            chat_session_id,
+        )?;
 
         Ok(Out::Ok(updated, deployed_release_id, previous_release_id))
     })

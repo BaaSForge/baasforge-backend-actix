@@ -6,6 +6,7 @@ use crate::models::projects::PlatformEnvironmentType;
 use crate::schema::{
     chat_messages, chat_sessions, project_releases, project_runtimes, project_units, projects,
 };
+use crate::services::releases::all_live_production_release_ids;
 use diesel::prelude::*;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -20,7 +21,7 @@ pub enum TruncateSessionFromMessageOutcome {
     SessionNotFound,
     AnchorNotFound,
     AnchorNotUserMessage,
-    HasProductionReleaseAfterAnchor,
+    HasLiveProductionReleaseAfterAnchor,
 }
 
 pub fn truncate_session_from_user_message(
@@ -57,6 +58,7 @@ pub fn truncate_session_from_user_message(
             return Ok(TruncateSessionFromMessageOutcome::AnchorNotUserMessage);
         }
 
+        let live_prod_ids = all_live_production_release_ids(conn, project_id)?;
         let release_controllers_after_anchor: Vec<ChatMessageRow> = chat_messages::table
             .filter(chat_messages::chat_session_id.eq(session_id))
             .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
@@ -70,8 +72,12 @@ pub fn truncate_session_from_user_message(
             else {
                 continue;
             };
-            if p.prod_release.is_some() {
-                return Ok(TruncateSessionFromMessageOutcome::HasProductionReleaseAfterAnchor);
+            if let Some(pr) = p.prod_release {
+                if live_prod_ids.contains(&pr.release.id) {
+                    return Ok(
+                        TruncateSessionFromMessageOutcome::HasLiveProductionReleaseAfterAnchor,
+                    );
+                }
             }
         }
 
@@ -89,6 +95,7 @@ pub fn truncate_session_from_user_message(
             .load(conn)?;
 
         let mut stage_release_ids: HashSet<Uuid> = HashSet::new();
+        let mut prod_release_ids: HashSet<Uuid> = HashSet::new();
         let mut unit_ids: HashSet<String> = HashSet::new();
 
         for row in &to_delete {
@@ -103,6 +110,11 @@ pub fn truncate_session_from_user_message(
                 ChatMessagePayload::ReleaseControllerBox(p) => {
                     if let Some(s) = p.stage_release {
                         stage_release_ids.insert(s.release.id);
+                    }
+                    if let Some(pr) = p.prod_release {
+                        if !live_prod_ids.contains(&pr.release.id) {
+                            prod_release_ids.insert(pr.release.id);
+                        }
                     }
                 }
                 ChatMessagePayload::RejectControllerBox(p) => {
@@ -144,6 +156,18 @@ pub fn truncate_session_from_user_message(
                     .filter(project_releases::project_id.eq(project_id))
                     .filter(project_releases::id.eq(sid))
                     .filter(project_releases::is_stage.eq(true)),
+            )
+            .execute(conn)?;
+        }
+
+        // Non-live production rows only: no prod runtime should reference them; FK ON DELETE SET NULL
+        // covers any stray pointer if the DB ever disagreed with the live-id check above.
+        for pid in prod_release_ids {
+            diesel::delete(
+                project_releases::table
+                    .filter(project_releases::project_id.eq(project_id))
+                    .filter(project_releases::id.eq(pid))
+                    .filter(project_releases::is_stage.eq(false)),
             )
             .execute(conn)?;
         }
