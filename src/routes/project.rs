@@ -633,6 +633,14 @@ pub struct ListProjectReleasesQuery {
     pub environment: Option<PlatformEnvironmentType>,
 }
 
+/// Query for [`handle_get_project_release_by_revision`]: `environment` is `stage` or `prod` (same as
+/// list releases); `revision` is the release lane revision float.
+#[derive(Deserialize)]
+pub struct GetProjectReleaseByRevisionQuery {
+    pub environment: PlatformEnvironmentType,
+    pub revision: f64,
+}
+
 pub async fn handle_list_project_runtimes(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -1006,6 +1014,77 @@ pub async fn handle_list_project_releases(
         "Project releases fetched successfully",
         json!(releases),
     ))
+}
+
+pub async fn handle_get_project_release_by_revision(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<Uuid>,
+    query: web::Query<GetProjectReleaseByRevisionQuery>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to get project release by revision");
+
+    let project_id = path.into_inner();
+    let user_id = access_payload.user_id;
+    let is_stage = query.environment == PlatformEnvironmentType::Stage;
+    let revision = query.revision;
+
+    enum LookupOutcome {
+        NotFound,
+        Conflict,
+        Ok(ProjectReleaseWithBaseline),
+    }
+
+    let outcome = match database::block_on_db(&context.pool, move |conn| {
+        let rows: Vec<ProjectReleaseResponse> = project_releases::table
+            .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(project_releases::project_id.eq(project_id))
+            .filter(project_releases::is_stage.eq(is_stage))
+            .filter(project_releases::revision.eq(revision))
+            .order(project_releases::created_at.desc())
+            .limit(2)
+            .select(ProjectReleaseResponse::as_select())
+            .load::<ProjectReleaseResponse>(conn)?;
+        match rows.len() {
+            0 => Ok(LookupOutcome::NotFound),
+            1 => {
+                let mut enriched = attach_base_production_releases(conn, project_id, rows)?;
+                Ok(LookupOutcome::Ok(
+                    enriched.pop().expect("one release row"),
+                ))
+            }
+            _ => Ok(LookupOutcome::Conflict),
+        }
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => {
+            log::error!("[handle_get_project_release_by_revision] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    match outcome {
+        LookupOutcome::NotFound => HttpResponse::NotFound().json(api_error(
+            "No release with this environment and revision exists for this project",
+            json!({}),
+        )),
+        LookupOutcome::Conflict => HttpResponse::Conflict().json(api_error(
+            "Multiple releases match this project, environment, and revision; disambiguate with chat session or release id",
+            json!({}),
+        )),
+        LookupOutcome::Ok(enriched) => HttpResponse::Ok().json(api_success(
+            "Project release fetched successfully",
+            json!(enriched),
+        )),
+    }
 }
 
 pub async fn handle_list_project_release_units(

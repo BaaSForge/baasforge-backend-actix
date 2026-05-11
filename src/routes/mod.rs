@@ -310,6 +310,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
+                        "/projects/{id}/releases/by-revision",
+                        web::get()
+                            .to(project::handle_get_project_release_by_revision)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
                         "/projects/{id}/releases/{release_id}/units",
                         web::get()
                             .to(project::handle_list_project_release_units)
