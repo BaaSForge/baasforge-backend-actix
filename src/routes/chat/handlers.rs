@@ -51,7 +51,8 @@ use crate::services::chat_worker::db::{
 };
 use crate::services::chat_worker::reject_controller_box::apply_disabled_due_to_live_production_release_on_matching_reject_box;
 use crate::services::releases::{
-    assistant_turn_has_live_production_release, attach_base_production_releases,
+    all_live_production_release_ids,
+    assistant_turn_has_live_production_release_with_live_ids, attach_base_production_releases,
     attach_is_draft_flags_from_latest_production, enrich_chat_message_response_releases,
     enrich_owned_releases_by_session_map, insert_production_release_from_stage_row,
     live_release_id_from_production_runtime, prod_live_release_source_chat_session,
@@ -2072,7 +2073,9 @@ enum ConfirmRejectOutcome {
 }
 
 /// POST — set `is_rejected` on a `reject_controller_box` row when it is still actionable (last session
-/// message, not blocked by a live production release on the paired controller) and disable the paired release controller.
+/// message, not blocked by a live production release on the paired controller), disable the paired
+/// release controller, delete its stage and non-live production release rows (detaching any stage
+/// runtime that had that stage release live), and clear those references from the controller payload.
 pub async fn handle_confirm_reject_controller(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -2136,11 +2139,12 @@ pub async fn handle_confirm_reject_controller(
             if box_payload.is_rejected {
                 return Ok(ConfirmRejectOutcome::AlreadyRejected);
             }
-            if assistant_turn_has_live_production_release(
+            let live_prod_ids = all_live_production_release_ids(conn, project_id)?;
+            if assistant_turn_has_live_production_release_with_live_ids(
                 conn,
-                project_id,
                 session_id,
                 box_payload.assistant_turn_id,
+                &live_prod_ids,
             )? {
                 return Ok(ConfirmRejectOutcome::DisabledByLiveProductionRelease);
             }
@@ -2169,6 +2173,7 @@ pub async fn handle_confirm_reject_controller(
 
             let turn_id = box_payload.assistant_turn_id;
             let mut stage_release_id_to_delete: Option<Uuid> = None;
+            let mut prod_release_id_to_delete: Option<Uuid> = None;
             let mut stage_runtime_ids_cleared: Vec<Uuid> = Vec::new();
             for u in &mut box_payload.unit_changes {
                 u.is_rejected = true;
@@ -2214,7 +2219,13 @@ pub async fn handle_confirm_reject_controller(
                             continue;
                         }
                         stage_release_id_to_delete = p.stage_release.as_ref().map(|s| s.release.id);
+                        if let Some(pr) = p.prod_release.as_ref() {
+                            if !live_prod_ids.contains(&pr.release.id) {
+                                prod_release_id_to_delete = Some(pr.release.id);
+                            }
+                        }
                         p.stage_release = None;
+                        p.prod_release = None;
                         p.is_disabled_due_to_reject = true;
                         let payload_json = match serde_json::to_value(&p) {
                             Ok(v) => v,
@@ -2258,6 +2269,16 @@ pub async fn handle_confirm_reject_controller(
                         .filter(project_releases::project_id.eq(project_id))
                         .filter(project_releases::id.eq(stage_release_id))
                         .filter(project_releases::is_stage.eq(true)),
+                )
+                .execute(conn)?;
+            }
+
+            if let Some(prod_id) = prod_release_id_to_delete {
+                diesel::delete(
+                    project_releases::table
+                        .filter(project_releases::project_id.eq(project_id))
+                        .filter(project_releases::id.eq(prod_id))
+                        .filter(project_releases::is_stage.eq(false)),
                 )
                 .execute(conn)?;
             }

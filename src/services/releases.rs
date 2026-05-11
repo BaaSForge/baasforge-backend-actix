@@ -651,18 +651,17 @@ pub fn production_release_id_for_live_runtimes(
 }
 
 /// True when some `ReleaseControllerBox` in the session shares `assistant_turn_id` and embeds a
-/// `prod_release` whose id is in [`all_live_production_release_ids`] (reject / truncate must stay blocked).
-pub fn assistant_turn_has_live_production_release(
+/// `prod_release` whose id is in `live_ids` (reject / truncate must stay blocked).
+pub fn assistant_turn_has_live_production_release_with_live_ids(
     conn: &mut PooledConn,
-    project_id: Uuid,
     session_id: Uuid,
     assistant_turn_id: Option<Uuid>,
+    live_ids: &HashSet<Uuid>,
 ) -> Result<bool, diesel::result::Error> {
     let Some(tid) = assistant_turn_id else {
         return Ok(false);
     };
-    let live = all_live_production_release_ids(conn, project_id)?;
-    if live.is_empty() {
+    if live_ids.is_empty() {
         return Ok(false);
     }
     let rows: Vec<ChatMessageRow> = chat_messages::table
@@ -680,12 +679,29 @@ pub fn assistant_turn_has_live_production_release(
             continue;
         }
         if let Some(pr) = p.prod_release {
-            if live.contains(&pr.release.id) {
+            if live_ids.contains(&pr.release.id) {
                 return Ok(true);
             }
         }
     }
     Ok(false)
+}
+
+/// True when some `ReleaseControllerBox` in the session shares `assistant_turn_id` and embeds a
+/// `prod_release` whose id is in [`all_live_production_release_ids`] (reject / truncate must stay blocked).
+pub fn assistant_turn_has_live_production_release(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    assistant_turn_id: Option<Uuid>,
+) -> Result<bool, diesel::result::Error> {
+    let live = all_live_production_release_ids(conn, project_id)?;
+    assistant_turn_has_live_production_release_with_live_ids(
+        conn,
+        session_id,
+        assistant_turn_id,
+        &live,
+    )
 }
 
 /// Session baseline: `chat_sessions.live_production_release_id` and the loaded **production** row, if it still exists.
