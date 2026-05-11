@@ -633,8 +633,9 @@ pub struct ListProjectReleasesQuery {
     pub environment: Option<PlatformEnvironmentType>,
 }
 
-/// Query for [`handle_get_project_release_by_revision`]: `environment` is `stage` or `prod` (same as
-/// list releases); `revision` is the release lane revision float.
+/// Query for [`handle_get_project_release_by_revision`]: `environment` is `stage` or `prod`; `revision`
+/// identifies the release lane. The handler returns 404 if missing, 409 if the revision is ambiguous,
+/// 400 if not live, 200 when that revision is the environment live release.
 #[derive(Deserialize)]
 pub struct GetProjectReleaseByRevisionQuery {
     pub environment: PlatformEnvironmentType,
@@ -1030,30 +1031,55 @@ pub async fn handle_get_project_release_by_revision(
 
     let project_id = path.into_inner();
     let user_id = access_payload.user_id;
-    let is_stage = query.environment == PlatformEnvironmentType::Stage;
-    let revision = query.revision;
+    let GetProjectReleaseByRevisionQuery {
+        environment: rt_env,
+        revision,
+    } = query.into_inner();
+    let is_stage = rt_env == PlatformEnvironmentType::Stage;
 
     enum LookupOutcome {
         NotFound,
         Conflict,
+        NotLive,
         Ok(ProjectReleaseWithBaseline),
     }
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
-        let rows: Vec<ProjectReleaseResponse> = project_releases::table
+        let candidates: Vec<ProjectReleaseResponse> = project_releases::table
             .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(project_releases::project_id.eq(project_id))
             .filter(project_releases::is_stage.eq(is_stage))
             .filter(project_releases::revision.eq(revision))
-            .order(project_releases::created_at.desc())
             .limit(2)
             .select(ProjectReleaseResponse::as_select())
             .load::<ProjectReleaseResponse>(conn)?;
-        match rows.len() {
+
+        match candidates.len() {
             0 => Ok(LookupOutcome::NotFound),
             1 => {
-                let mut enriched = attach_base_production_releases(conn, project_id, rows)?;
+                let release = candidates
+                    .into_iter()
+                    .next()
+                    .expect("one candidate release");
+
+                let points_here = project_runtimes::table
+                    .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+                    .filter(projects::owner_user_id.eq(user_id))
+                    .filter(project_runtimes::project_id.eq(project_id))
+                    .filter(project_runtimes::environment.eq(rt_env))
+                    .filter(project_runtimes::live_release_id.eq(Some(release.id)))
+                    .select(project_runtimes::id)
+                    .first::<Uuid>(conn)
+                    .optional()?
+                    .is_some();
+
+                if !points_here {
+                    return Ok(LookupOutcome::NotLive);
+                }
+
+                let mut enriched =
+                    attach_base_production_releases(conn, project_id, vec![release])?;
                 Ok(LookupOutcome::Ok(
                     enriched.pop().expect("one release row"),
                 ))
@@ -1073,15 +1099,19 @@ pub async fn handle_get_project_release_by_revision(
 
     match outcome {
         LookupOutcome::NotFound => HttpResponse::NotFound().json(api_error(
-            "No release with this environment and revision exists for this project",
+            "No release with this revision exists for this environment",
             json!({}),
         )),
         LookupOutcome::Conflict => HttpResponse::Conflict().json(api_error(
-            "Multiple releases match this project, environment, and revision; disambiguate with chat session or release id",
+            "Multiple releases share this revision for this environment",
+            json!({}),
+        )),
+        LookupOutcome::NotLive => HttpResponse::BadRequest().json(api_error(
+            "A release with this revision exists but it is not the live release for this environment",
             json!({}),
         )),
         LookupOutcome::Ok(enriched) => HttpResponse::Ok().json(api_success(
-            "Project release fetched successfully",
+            "Live release fetched successfully",
             json!(enriched),
         )),
     }
