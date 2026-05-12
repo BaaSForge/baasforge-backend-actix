@@ -1,4 +1,4 @@
-use crate::database::{DbPool, block_on_db_tokio};
+use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
 use crate::libs::unit_slug::compose_unit_id;
 use crate::models::chat_messages::ChatMessageStatus;
 use crate::models::projects::{ProjectUnitInsert, ProjectUnitResponse, ProjectUnitRow};
@@ -20,7 +20,44 @@ use crate::services::unit_technical_reviewer::queue::{
 use crate::services::unit_technical_reviewer::type_checker::run_typescript_check;
 use crate::services::units::{UnitMetadataBuildInput, build_unit_metadata};
 use diesel::prelude::*;
+use diesel::result::DatabaseErrorKind;
+use diesel::result::Error as DieselError;
 use std::sync::Arc;
+
+/// When the insert hits `project_units_pkey`, the next revision row is already present (retry
+/// after partial success, concurrent modify, etc.). Message is aimed at the LLM caller.
+fn modify_unit_insert_error_for_llm(
+    err: &BlockingDbError,
+    next_revision: i32,
+    next_unit_id: &str,
+    parent_unit_id: &str,
+    parent_revision: i32,
+) -> String {
+    let fallback = || format!("Failed to persist revised unit after checks: {}", err);
+
+    let BlockingDbError::Query(diesel_err) = err else {
+        return fallback();
+    };
+
+    let DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, info) = diesel_err else {
+        return fallback();
+    };
+
+    let is_project_units_pkey = info
+        .constraint_name()
+        .is_some_and(|c| c == "project_units_pkey")
+        || info.message().contains("project_units_pkey");
+
+    if is_project_units_pkey {
+        format!(
+            "A unit with revision {next_revision} (the next revision after your `unit_id`) already exists in this project and chat session: `{next_unit_id}`. \
+             Your `unit_id` was `{parent_unit_id}` (revision {parent_revision}), which is not the latest row for this logical unit—often because an earlier modify already persisted. \
+             List units in this session or copy the latest full `unit_id` from recent tool results, then call modify_unit with that id."
+        )
+    } else {
+        fallback()
+    }
+}
 
 pub async fn process_modify_unit_compiler_check(
     pool: &DbPool,
@@ -149,6 +186,7 @@ pub async fn process_modify_unit_rule_check(
                     &parent.unit_name_slug,
                     new_rev,
                 );
+                let next_unit_id_for_message = new_id.clone();
                 let code = payload.args.code.clone();
                 let explanation = payload.args.explanation.clone();
                 let compiled_code = compile_ts_to_js(&code).ok();
@@ -233,9 +271,14 @@ pub async fn process_modify_unit_rule_check(
                             e
                         );
                         payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
-                        payload.error = Some(format!(
-                            "Failed to persist revised unit after checks: {}",
-                            e
+                        let parent_unit_id = parent.id.as_str();
+                        let parent_revision = parent.revision;
+                        payload.error = Some(modify_unit_insert_error_for_llm(
+                            &e,
+                            new_rev,
+                            next_unit_id_for_message.as_str(),
+                            parent_unit_id,
+                            parent_revision,
                         ));
                         let updated_row = update_tool_message_payload(
                             pool,
