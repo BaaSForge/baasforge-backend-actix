@@ -485,6 +485,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
+                        "/projects/{id}/chat-sessions/{session_id}/messages/{message_id}/retry-planner",
+                        web::post()
+                            .to(chat::handle_retry_failed_planner_message)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
                         "/projects/{id}/chat-sessions/{session_id}/stop-generating",
                         web::post()
                             .to(chat::handle_stop_generating)

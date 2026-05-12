@@ -11,7 +11,7 @@ use crate::middlewares::auth::AccessPayload;
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessageCreateBody, ChatMessageInsert, ChatMessagePayload,
     ChatMessageResponse, ChatMessageRow, ChatMessageStatus, ChatMessageType,
-    ChatMessageWithFirstResponse, ChatSessionRoleType,
+    ChatMessageWithFirstResponse, ChatSessionRoleType, TextPayload,
 };
 use crate::models::chat_sessions::{
     ChatSessionDetailResponse, ChatSessionInsert, ChatSessionResponse,
@@ -750,6 +750,268 @@ pub async fn handle_create_chat_session_message(
         "Chat message created successfully",
         json!(response),
     ))
+}
+
+/// Re-queues the worker for a **main-thread Planner** AI `Text` row that ended in `Failed` (e.g. LLM
+/// provider error after Rabbit retries). Uses the same empty-queue payload as an automatic post-tool
+/// continuation: planner history is loaded from completed session rows only, so the user line and
+/// prior planner turns remain in context without duplicating the last user text.
+pub async fn handle_retry_failed_planner_message(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<(Uuid, Uuid, Uuid)>,
+) -> HttpResponse {
+    let user_id = req
+        .extensions()
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to retry planner message")
+        .user_id;
+    let (project_id, session_id, message_id) = path.into_inner();
+
+    enum RetryPlannerOutcome {
+        SessionNotFound,
+        AlreadyGenerating,
+        MessageNotFound,
+        NotEligible { reason: &'static str },
+        Ok,
+    }
+
+    let outcome = match database::block_on_db(&context.pool, {
+        let session_id = session_id;
+        let project_id = project_id;
+        let message_id = message_id;
+        let user_id = user_id;
+        move |conn| {
+            let session_exists: Option<Uuid> = chat_sessions::table
+                .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
+                .filter(projects::owner_user_id.eq(user_id))
+                .filter(chat_sessions::id.eq(session_id))
+                .filter(chat_sessions::project_id.eq(project_id))
+                .select(chat_sessions::id)
+                .first(conn)
+                .optional()?;
+            if session_exists.is_none() {
+                return Ok(RetryPlannerOutcome::SessionNotFound);
+            }
+            let generating_count: i64 = chat_messages::table
+                .filter(chat_messages::chat_session_id.eq(session_id))
+                .filter(chat_messages::role.eq(ChatSessionRoleType::Ai))
+                .filter(chat_messages::status.eq(ChatMessageStatus::Generating))
+                .count()
+                .get_result(conn)?;
+            if generating_count > 0 {
+                return Ok(RetryPlannerOutcome::AlreadyGenerating);
+            }
+            let row: Option<ChatMessageRow> = chat_messages::table
+                .filter(chat_messages::id.eq(message_id))
+                .filter(chat_messages::chat_session_id.eq(session_id))
+                .select(ChatMessageRow::as_select())
+                .first(conn)
+                .optional()?;
+            let Some(row) = row else {
+                return Ok(RetryPlannerOutcome::MessageNotFound);
+            };
+            if row.role != ChatSessionRoleType::Ai {
+                return Ok(RetryPlannerOutcome::NotEligible {
+                    reason: "message is not an assistant row",
+                });
+            }
+            if row.type_ != ChatMessageType::Text {
+                return Ok(RetryPlannerOutcome::NotEligible {
+                    reason: "message is not a text assistant message",
+                });
+            }
+            if row.status != ChatMessageStatus::Failed {
+                return Ok(RetryPlannerOutcome::NotEligible {
+                    reason: "message status is not failed",
+                });
+            }
+            if row.agent != Some(ChatAgentType::Planner) {
+                return Ok(RetryPlannerOutcome::NotEligible {
+                    reason: "message is not a planner assistant message",
+                });
+            }
+            if row.invoking_message_id.is_some() {
+                return Ok(RetryPlannerOutcome::NotEligible {
+                    reason: "only main-thread planner messages can be retried via this endpoint",
+                });
+            }
+            diesel::update(
+                chat_messages::table
+                    .filter(chat_messages::id.eq(message_id))
+                    .filter(chat_messages::chat_session_id.eq(session_id)),
+            )
+            .set((
+                chat_messages::status.eq(ChatMessageStatus::Generating),
+                chat_messages::payload.eq(None::<serde_json::Value>),
+            ))
+            .execute(conn)?;
+            Ok(RetryPlannerOutcome::Ok)
+        }
+    })
+    .await
+    {
+        Ok(o) => o,
+        Err(database::BlockingDbError::Query(e)) => {
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            tracing::error!("[handle_retry_failed_planner_message] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    match outcome {
+        RetryPlannerOutcome::SessionNotFound => {
+            HttpResponse::NotFound().json(api_error("Chat session not found", json!({})))
+        }
+        RetryPlannerOutcome::AlreadyGenerating => HttpResponse::Conflict().json(api_error(
+            "A message is already being generated in this chat. Please wait for it to finish.",
+            json!({}),
+        )),
+        RetryPlannerOutcome::MessageNotFound => {
+            HttpResponse::NotFound().json(api_error("Chat message not found in this session", json!({})))
+        }
+        RetryPlannerOutcome::NotEligible { reason } => HttpResponse::UnprocessableEntity().json(
+            api_error(
+                "This message cannot be retried as a failed planner turn",
+                json!({ "reason": reason }),
+            ),
+        ),
+        RetryPlannerOutcome::Ok => {
+            let continuation_payload = match serde_json::to_value(ChatMessagePayload::Text(
+                TextPayload {
+                    text: String::new(),
+                    ..Default::default()
+                },
+            )) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!("retry planner: serialize continuation payload: {}", e);
+                    let _ = database::block_on_db(&context.pool, move |conn| {
+                        diesel::update(
+                            chat_messages::table
+                                .filter(chat_messages::id.eq(message_id))
+                                .filter(chat_messages::chat_session_id.eq(session_id)),
+                        )
+                        .set(chat_messages::status.eq(ChatMessageStatus::Failed))
+                        .execute(conn)
+                    })
+                    .await;
+                    return HttpResponse::InternalServerError().json(api_error(
+                        "Failed to prepare retry payload",
+                        json!({}),
+                    ));
+                }
+            };
+            let queue_message = ChatSessionQueueMessage {
+                user_id,
+                role: ChatSessionRoleType::Ai,
+                type_: ChatMessageType::Text,
+                payload: Some(continuation_payload),
+                response_message_id: message_id,
+                retry_num: 0,
+                invoking_message_id: None,
+                agent: ChatAgentType::Planner,
+                sub_agent_stuck_continuation_count: 0,
+                assistant_turn_id: None,
+            };
+            let Some(ref publisher) = context.rabbit_publisher else {
+                tracing::error!("No RabbitMQ publisher available on retry planner message");
+                let _ = database::block_on_db(&context.pool, move |conn| {
+                    diesel::update(
+                        chat_messages::table
+                            .filter(chat_messages::id.eq(message_id))
+                            .filter(chat_messages::chat_session_id.eq(session_id)),
+                    )
+                    .set(chat_messages::status.eq(ChatMessageStatus::Failed))
+                    .execute(conn)
+                })
+                .await;
+                return HttpResponse::ServiceUnavailable().json(api_error(
+                    "Service is busy. Please try again shortly.",
+                    json!({}),
+                ));
+            };
+            if let Err(e) = chat_message_queue::publish_with_publisher(
+                publisher,
+                project_id,
+                session_id,
+                &queue_message,
+            )
+            .await
+            {
+                tracing::error!(
+                    %project_id,
+                    %session_id,
+                    %message_id,
+                    "Failed to publish planner retry to queue: {}",
+                    e
+                );
+                let revert = database::block_on_db(&context.pool, move |conn| {
+                    diesel::update(
+                        chat_messages::table
+                            .filter(chat_messages::id.eq(message_id))
+                            .filter(chat_messages::chat_session_id.eq(session_id)),
+                    )
+                    .set(chat_messages::status.eq(ChatMessageStatus::Failed))
+                    .execute(conn)
+                })
+                .await;
+                if let Err(rev_e) = revert {
+                    tracing::error!(
+                        %message_id,
+                        "Failed to revert message to Failed after queue publish error: {}",
+                        rev_e
+                    );
+                }
+                return HttpResponse::ServiceUnavailable().json(api_error(
+                    "Planner retry was prepared but the assistant pipeline is temporarily unavailable. Please try again.",
+                    json!({ "detail": e.to_string() }),
+                ));
+            }
+
+            if let Some(ref redis_conn) = context.redis_conn {
+                let topic = user_channel(user_id);
+                let mut guard = redis_conn.lock().await;
+                let status_event =
+                    WsServerEvent::ChatSessionMessageStatusChange(ChatSessionMessageStatusChangePayload {
+                        project_id,
+                        session_id,
+                        message_id,
+                        status: ChatMessageStatus::Generating,
+                    });
+                if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &status_event).await {
+                    tracing::warn!(
+                        "retry planner: failed to publish status Generating to Redis: {}",
+                        e
+                    );
+                }
+                let gen_event = WsServerEvent::ChatSessionGenerationStarted(
+                    ChatSessionGenerationStartedPayload {
+                        project_id,
+                        session_id,
+                    },
+                );
+                if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &gen_event).await {
+                    tracing::warn!(
+                        "retry planner: failed to broadcast generation started to Redis: {}",
+                        e
+                    );
+                }
+            }
+
+            HttpResponse::Ok().json(api_success(
+                "Planner retry queued",
+                json!({
+                    "message_id": message_id,
+                    "session_id": session_id,
+                    "project_id": project_id,
+                }),
+            ))
+        }
+    }
 }
 
 pub async fn handle_stop_generating(
