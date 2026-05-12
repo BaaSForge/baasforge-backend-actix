@@ -10,10 +10,12 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
     vec![
         (
             "`handleRequest` must be exported with the correct signature",
-            "Always export a function named `handleRequest` with exactly two parameters typed \
-             `IncomingMessage` and `ServerResponse` (imported from `node:http`): \
+            "Always export an **async** function named `handleRequest` with exactly two parameters typed \
+             `IncomingMessage` and `ServerResponse` (imported from `node:http`), and annotate the return \
+             type as `Promise<void>` so the platform can await completion: \
              `import type { IncomingMessage, ServerResponse } from \"node:http\"; \
-             export function handleRequest(req: IncomingMessage, res: ServerResponse) { … }`.",
+             export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> { … }`. \
+             Do not wrap the handler body in `void (async () => { … })()` — the runtime does not await that pattern.",
         ),
         (
             "`RequestBody` must be exported",
@@ -33,6 +35,12 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
              The export must always be present.",
         ),
         (
+            "No `void` on immediately-invoked async functions in `handleRequest`",
+            "Never use `void (async () => { … })()` or `void (async function () { … })()` inside `handleRequest`. \
+             That discards the Promise and the HTTP response can finish before async work runs. \
+             Make `handleRequest` itself `async` and use top-level `await` instead.",
+        ),
+        (
             "No other exports allowed",
             "Do not add any exports beyond `handleRequest` (the required function), \
              `RequestBody`, `ResponseBody`, and `QueryParams` (the required type aliases). \
@@ -47,9 +55,11 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
 
 #[cfg(feature = "unit_technical_reviewer")]
 use crate::services::unit_technical_reviewer::rule_checker::{
-    Declaration, Rule, RuleInput, Statement, export_all_source, get_exported_function_param_count,
-    get_exported_function_param_type_name, get_exported_type, has_exported_function,
-    has_exported_type, has_import_from, is_never, module_export_name_str,
+    Declaration, Rule, RuleInput, Statement, export_all_source,
+    exported_function_body_contains_void_discarded_async_invoke, get_exported_function_is_async,
+    get_exported_function_param_count, get_exported_function_param_type_name,
+    get_exported_function_return_type, get_exported_type, has_exported_function, has_exported_type,
+    has_import_from, is_never, is_promise_void_type, module_export_name_str,
 };
 
 #[cfg(feature = "unit_technical_reviewer")]
@@ -65,7 +75,7 @@ pub fn rules() -> Vec<Rule> {
 
 // ── Rules ─────────────────────────────────────────────────────────────────────────────────────
 
-/// `export function handleRequest(req: IncomingMessage, res: ServerResponse)` must be present.
+/// `export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void>` must be present.
 ///
 /// Every API unit is the entry point of an HTTP handler.  The runtime will call `handleRequest`
 /// with Node.js `IncomingMessage` and `ServerResponse` objects.  Both parameter types must be
@@ -77,6 +87,8 @@ pub fn rules() -> Vec<Rule> {
 ///   3. The first parameter is typed `IncomingMessage`.
 ///   4. The second parameter is typed `ServerResponse`.
 ///   5. Both `IncomingMessage` and `ServerResponse` are imported from `node:http`.
+///   6. The function is `async` and its return type is exactly `Promise<void>`.
+///   7. The body does not use `void (async …)()` / `void (async function …)()` fire-and-forget.
 #[cfg(feature = "unit_technical_reviewer")]
 fn handle_request_exported_correctly(input: &RuleInput) -> Vec<String> {
     let Some(program) = input.program else {
@@ -88,7 +100,7 @@ fn handle_request_exported_correctly(input: &RuleInput) -> Vec<String> {
     if !has_exported_function(program, "handleRequest") {
         errors.push(
             "API unit must export a function named `handleRequest`; \
-             e.g. `export function handleRequest(req: IncomingMessage, res: ServerResponse) { … }`"
+             e.g. `export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> { … }`"
                 .to_string(),
         );
         // Cannot check signature if the function is absent.
@@ -133,6 +145,36 @@ fn handle_request_exported_correctly(input: &RuleInput) -> Vec<String> {
         errors.push(
             "`IncomingMessage` and `ServerResponse` must be imported from `node:http`: \
              `import type { IncomingMessage, ServerResponse } from \"node:http\"`"
+                .to_string(),
+        );
+    }
+
+    match get_exported_function_is_async(program, "handleRequest") {
+        Some(true) => {}
+        Some(false) => errors.push(
+            "API unit `handleRequest` must be declared `async` (e.g. `export async function handleRequest(...)`) \
+             so the platform awaits async work; do not use a synchronous `export function` with `void (async () => …)()` inside"
+                .to_string(),
+        ),
+        None => {}
+    }
+
+    match get_exported_function_return_type(program, "handleRequest") {
+        None => errors.push(
+            "API unit `handleRequest` must annotate an explicit return type `: Promise<void>`"
+                .to_string(),
+        ),
+        Some(ty) if !is_promise_void_type(ty) => errors.push(
+            "API unit `handleRequest` return type must be exactly `Promise<void>` (so handler completion aligns with the HTTP response)"
+                .to_string(),
+        ),
+        Some(_) => {}
+    }
+
+    if exported_function_body_contains_void_discarded_async_invoke(program, "handleRequest") {
+        errors.push(
+            "API unit `handleRequest` must not use `void (async …)()` (or `void (async function …)()`); \
+             declare `handleRequest` as `async` and use top-level `await` so the response is not sent before async work finishes"
                 .to_string(),
         );
     }
@@ -199,7 +241,7 @@ fn query_params_exported(input: &RuleInput) -> Vec<String> {
 /// Forbidden: any export other than the three required type aliases and `handleRequest`.
 ///
 /// Permitted exports:
-///   - `export function handleRequest(…)` — the required HTTP handler
+///   - `export async function handleRequest(…): Promise<void>` — the required HTTP handler
 ///   - `export type RequestBody`, `export type ResponseBody`, `export type QueryParams`
 ///
 /// Everything else is rejected: other type aliases, other value exports, re-exports via

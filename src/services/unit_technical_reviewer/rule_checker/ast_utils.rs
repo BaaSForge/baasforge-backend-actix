@@ -9,9 +9,10 @@
 use oxc_ast::ast::{
     Declaration, ExportAllDeclaration, ExportDefaultDeclarationKind, ExportNamedDeclaration,
     Expression, Function, IdentifierReference, ImportDeclaration, ImportDeclarationSpecifier,
-    ModuleExportName, Program, Statement, TSType, TSTypeName,
+    ModuleExportName, Program, Statement, TSType, TSTypeName, UnaryExpression,
 };
 use oxc_ast_visit::{Visit, walk};
+use oxc_syntax::operator::UnaryOperator;
 
 // ── Source-text utilities ─────────────────────────────────────────────────────────────────────
 
@@ -382,6 +383,98 @@ pub fn get_exported_function_param_type_name<'a>(
     let param = func.params.items.get(param_index)?;
     let type_ann = param.type_annotation.as_ref()?;
     ts_type_reference_name(&type_ann.type_annotation)
+}
+
+/// Returns `true` if `ty` is exactly `Promise<void>` (a reference named `Promise` with one `void` argument).
+pub fn is_promise_void_type(ty: &TSType) -> bool {
+    let TSType::TSTypeReference(tr) = ty else {
+        return false;
+    };
+    let TSTypeName::IdentifierReference(id) = &tr.type_name else {
+        return false;
+    };
+    if id.name.as_str() != "Promise" {
+        return false;
+    }
+    let Some(args) = tr.type_arguments.as_deref() else {
+        return false;
+    };
+    if args.params.len() != 1 {
+        return false;
+    }
+    matches!(&args.params[0], TSType::TSVoidKeyword(_))
+}
+
+/// Returns whether the exported function named `fn_name` is declared `async`.
+pub fn get_exported_function_is_async(program: &Program, fn_name: &str) -> Option<bool> {
+    find_exported_function(program, fn_name).map(|f| f.r#async)
+}
+
+/// Returns the return type annotation of the exported function named `fn_name`, if present.
+pub fn get_exported_function_return_type<'a>(
+    program: &'a Program<'a>,
+    fn_name: &str,
+) -> Option<&'a TSType<'a>> {
+    find_exported_function(program, fn_name)?
+        .return_type
+        .as_deref()
+        .map(|ann| &ann.type_annotation)
+}
+
+/// Returns `true` if the body of the exported function `fn_name` contains `void (<async fn>() => …)()`
+/// (or `void (async function () { … })()`): discarding an immediately-invoked async function so the
+/// outer handler returns before the async work finishes.
+pub fn exported_function_body_contains_void_discarded_async_invoke(
+    program: &Program,
+    fn_name: &str,
+) -> bool {
+    let Some(func) = find_exported_function(program, fn_name) else {
+        return false;
+    };
+    let Some(body) = func.body.as_deref() else {
+        return false;
+    };
+    let mut finder = VoidAsyncInvokeFinder { found: false };
+    finder.visit_function_body(body);
+    finder.found
+}
+
+struct VoidAsyncInvokeFinder {
+    found: bool,
+}
+
+impl<'a> Visit<'a> for VoidAsyncInvokeFinder {
+    fn visit_unary_expression(&mut self, expr: &UnaryExpression<'a>) {
+        if !self.found && unary_void_discarded_async_invoke(expr) {
+            self.found = true;
+            return;
+        }
+        walk::walk_unary_expression(self, expr);
+    }
+}
+
+fn unary_void_discarded_async_invoke(u: &UnaryExpression<'_>) -> bool {
+    if u.operator != UnaryOperator::Void {
+        return false;
+    }
+    let inner = peel_parentheses(&u.argument);
+    let Expression::CallExpression(call) = inner else {
+        return false;
+    };
+    let callee = peel_parentheses(&call.callee);
+    match callee {
+        Expression::ArrowFunctionExpression(a) => a.r#async,
+        Expression::FunctionExpression(f) => f.r#async,
+        _ => false,
+    }
+}
+
+fn peel_parentheses<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
+    let mut cur = expr;
+    while let Expression::ParenthesizedExpression(p) = cur {
+        cur = &p.expression;
+    }
+    cur
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────────────────────

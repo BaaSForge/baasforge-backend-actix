@@ -1134,6 +1134,7 @@ dependencies = [
  "oxc_parser",
  "oxc_semantic",
  "oxc_span",
+ "oxc_syntax",
  "oxc_transformer",
  "r2d2",
  "redis 1.0.2",

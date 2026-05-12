@@ -34,14 +34,15 @@ pub mod ast_utils;
 
 #[cfg(feature = "unit_technical_reviewer")]
 pub use ast_utils::{
-    contains_word, export_all_source, get_export_default_call_name, get_export_named_decls,
+    contains_word, export_all_source, exported_function_body_contains_void_discarded_async_invoke,
+    get_export_default_call_name, get_export_named_decls, get_exported_function_is_async,
     get_exported_function_names, get_exported_function_param_count,
-    get_exported_function_param_type_name, get_exported_type, get_exported_type_names,
-    get_import_declarations, get_imports_from_source, get_named_imports_from_source,
-    get_node_module_import_sources, get_non_type_alias_exports, has_default_import_from,
-    has_export_default, has_exported_function, has_exported_type, has_identifier_reference,
-    has_import_from, has_namespace_import_from, is_never, is_object_type, module_export_name_str,
-    ts_type_reference_name,
+    get_exported_function_param_type_name, get_exported_function_return_type, get_exported_type,
+    get_exported_type_names, get_import_declarations, get_imports_from_source,
+    get_named_imports_from_source, get_node_module_import_sources, get_non_type_alias_exports,
+    has_default_import_from, has_export_default, has_exported_function, has_exported_type,
+    has_identifier_reference, has_import_from, has_namespace_import_from, is_never,
+    is_object_type, is_promise_void_type, module_export_name_str, ts_type_reference_name,
 };
 
 #[cfg(feature = "unit_technical_reviewer")]

@@ -28,7 +28,7 @@ The following four exports are ALWAYS required:
 - export type RequestBody = { ... } | never  — request body shape; use `never` if no body (REQUIRED)
 - export type ResponseBody = { ... }         — response body shape; MUST be a concrete object type, `never` is not allowed (REQUIRED)
 - export type QueryParams = { ... } | never  — query parameter shape; use `never` if no query params (REQUIRED)
-- export async function handleRequest        — the entry point (REQUIRED).
+- export async function handleRequest        — the entry point (REQUIRED): must be `async`, return `Promise<void>`, and must not use `void (async () => …)()` (the runtime will not await that pattern).
 
 Forbidden: any other type alias, `export const`, `export class`, `export default`,
 `export { … }`, `export * from '…'`.
@@ -53,7 +53,7 @@ export type RequestBody = never;
 export type ResponseBody = { kind: "attachment"; name: string; lines: number };
 export type QueryParams = never;
 
-export function handleRequest(_req: IncomingMessage, res: ServerResponse): void {
+export async function handleRequest(_req: IncomingMessage, res: ServerResponse): Promise<void> {
   const payload = "alpha\nbeta\ngamma\n";
   const snapshot: ResponseBody = { kind: "attachment", name: "sample-lines.txt", lines: 3 };
   res.writeHead(200, {
@@ -97,7 +97,7 @@ export async function handleRequest(req: IncomingMessage, res: ServerResponse): 
 
 // basic/get-method.ts
 /**
- * @covers GET-only API unit: `never` RequestBody/QueryParams, synchronous `handleRequest`, JSON `ResponseBody` echoing `req.method`.
+ * @covers GET-only API unit: `never` RequestBody/QueryParams, `async handleRequest` with `Promise<void>`, JSON `ResponseBody` echoing `req.method`.
  * 
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -106,7 +106,7 @@ export type RequestBody = never;
 export type ResponseBody = { method: string };
 export type QueryParams = never;
 
-export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ method: req.method ?? "UNKNOWN" } satisfies ResponseBody));
 }
@@ -122,7 +122,7 @@ export type RequestBody = never;
 export type ResponseBody = { received: Record<string, string> };
 export type QueryParams = never;
 
-export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const probeKeys = ["content-type", "x-test-header", "x-custom-value", "accept"];
   const received: Record<string, string> = {};
   for (const key of probeKeys) {
@@ -146,7 +146,7 @@ export type RequestBody = never;
 export type ResponseBody = { params: Record<string, string> };
 export type QueryParams = { [key: string]: string };
 
-export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const params: Record<string, string> = {};
   url.searchParams.forEach((value, key) => {
@@ -478,6 +478,7 @@ Common mistakes to avoid:
 - Using `callWorkflowAndWaitForOutputSync` for a workflow that waits on a signal
   freezes the endpoint forever — use `startWorkflowSync` instead, then signal via
   `callWorkflowHandlerAndWaitForResultSync`.
+- Using `void (async () => { … })()` inside `handleRequest` — wrong; the HTTP response can complete before that work finishes. Declare `handleRequest` as `async` and use top-level `await` instead.
 - Writing `await sdk.xxxSync({ ... })` — wrong; these functions are NOT async and return
   plain values. `await` on a non-Promise is a no-op but misleads anyone reading the code.
 "#;
