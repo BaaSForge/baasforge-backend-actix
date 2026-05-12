@@ -4,7 +4,7 @@ use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::nested_branch_history::load_nested_branch_history;
 use crate::services::chat_worker::llm::tools::{
     create_unit, finish_implementation, list_modules_for_unit_contexts, list_unit_contexts,
-    modify_unit, remove_unit,
+    load_latest_production_release_units, modify_unit, remove_unit,
 };
 use crate::services::unit_technical_reviewer::rule_checker;
 use crate::services::units as units_definitions;
@@ -45,6 +45,7 @@ fn synthetic_first_user_text(
 
 pub fn tool_names() -> &'static [&'static str] {
     &[
+        load_latest_production_release_units::TOOL_NAME,
         list_unit_contexts::TOOL_NAME,
         list_modules_for_unit_contexts::TOOL_NAME,
         create_unit::TOOL_NAME,
@@ -97,6 +98,8 @@ Ignoring this rule wastes a whole tool call: the server rejects the arguments, t
 - Use only your tools. Do not deliver long prose; short status between tool calls is fine.
 - Brevity: Say as little as possible in assistant text while **`detailed_report`** must still list every necessary outcome—unit ids, what changed, behavior, caveats—using the fewest words that preserve that information. Shorter is better if nothing is lost.
 - **Before every `create_unit` call:** You MUST first call **list_unit_contexts** (and, when you need module placement, **list_modules_for_unit_contexts** for the relevant context slugs) in this run so you reuse an existing bounded context or module when it fits the directive—avoid inventing a new `context_slug` or `module_slug` that duplicates or near-duplicates an existing domain. Never skip these calls.
+- **Before every `modify_unit` or `remove_unit` call:** You MUST call **load_latest_production_release_units** in this run with a substantive natural-language **query** that identifies each unit you will edit or remove (context/module/slug/topic keywords—not empty, not `*` alone) so your `code` and decisions reflect the **latest** definitions returned by tools, not guesses from the directive or prior turns. If results omit a target unit, refine the query and call again until you have the current source for every unit you change.
+- **Dependent units and contracts:** Other units may depend on this unit’s handler names, exports, types, and runtime behavior. Unless the directive **explicitly** authorizes removals or renames, **do not** delete or rename unrelated handlers, do not rename types used as contracts, and do not “clean up” or refactor code outside the requested delta. Apply the **smallest** edit that satisfies the directive; extend or adjust only what is in scope.
 - **DDD naming semantics (strict):** Treat `context` as the DDD **domain / bounded context**. Treat `module` as a **subdomain inside that context**. They are different layers and must not be conflated.
 - **New unit naming quality (strict):** When creating units, choose meaningful, specific, and distinct names for `unit_name`, `module_slug`, and `context_slug`. Avoid generic, ambiguous, duplicate, near-duplicate, or reused names that describe different concepts. If an existing context/module already fits, reuse it; if you add a new one, it must represent a clearly different domain or subdomain.
 - **Draft units:** Work-in-progress in this chat; not yet live in production. For **draft** units, you may freely use `modify_unit` whenever the directive calls for it—do not create redundant new units only to avoid editing draft work-in-progress.
