@@ -28,7 +28,7 @@ The following four exports are ALWAYS required:
 - export type RequestBody = { ... } | never  — request body shape; use `never` if no body (REQUIRED)
 - export type ResponseBody = { ... }         — response body shape; MUST be a concrete object type, `never` is not allowed (REQUIRED)
 - export type QueryParams = { ... } | never  — query parameter shape; use `never` if no query params (REQUIRED)
-- export function handleRequest              - the entry point (REQUIRED)
+- export async function handleRequest        — the entry point (REQUIRED).
 
 Forbidden: any other type alias, `export const`, `export class`, `export default`,
 `export { … }`, `export * from '…'`.
@@ -66,7 +66,7 @@ export function handleRequest(_req: IncomingMessage, res: ServerResponse): void 
 
 // basic/echo.ts
 /**
- * @covers JSON POST body: `text` from `node:stream/consumers`, JSON.parse with fallback, typed `RequestBody`/`ResponseBody`, `void (async () => { ... })()` around async body read before `res.end`.
+ * @covers JSON POST body: `text` from `node:stream/consumers`, JSON.parse with fallback, typed `RequestBody`/`ResponseBody`, `async handleRequest` returning `Promise<void>` so the platform awaits the body read before `res.end`.
  * 
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -76,25 +76,23 @@ export type RequestBody = Record<string, unknown>;
 export type ResponseBody = { echoed: Record<string, unknown>; method: string };
 export type QueryParams = never;
 
-export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
-  void (async () => {
-    const raw = await text(req);
-    let body: Record<string, unknown> = {};
-    if (raw) {
-      try {
-        body = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        body = { raw };
-      }
+export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const raw = await text(req);
+  let body: Record<string, unknown> = {};
+  if (raw) {
+    try {
+      body = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      body = { raw };
     }
-    const responseBody: ResponseBody = {
-      echoed: body,
-      method: req.method ?? "UNKNOWN",
-    };
-    const json = JSON.stringify(responseBody);
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(json);
-  })();
+  }
+  const responseBody: ResponseBody = {
+    echoed: body,
+    method: req.method ?? "UNKNOWN",
+  };
+  const json = JSON.stringify(responseBody);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(json);
 }
 
 // basic/get-method.ts
@@ -180,17 +178,15 @@ function headerContentType(req: IncomingMessage): string | null {
   return Array.isArray(v) ? (v[0] ?? null) : v;
 }
 
-export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
-  void (async () => {
-    const body = await text(req);
-    const out: ResponseBody = {
-      contentType: headerContentType(req),
-      length: body.length,
-      body,
-    };
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(out));
-  })();
+export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await text(req);
+  const out: ResponseBody = {
+    contentType: headerContentType(req),
+    length: body.length,
+    body,
+  };
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(out));
 }
 
 // cross-unit/api-to-api-via-sdk.ts
@@ -234,44 +230,42 @@ export type RequestBody = { actorId?: string; handler?: "get" | "increment" | "r
 export type ResponseBody = { count: number };
 export type QueryParams = never;
 
-export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
-  void (async () => {
-    const raw = await text(req);
-    let body: RequestBody = {};
-    try {
-      body = JSON.parse(raw) as RequestBody;
-    } catch {
-      // use defaults on invalid JSON
-    }
+export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const raw = await text(req);
+  let body: RequestBody = {};
+  try {
+    body = JSON.parse(raw) as RequestBody;
+  } catch {
+    // use defaults on invalid JSON
+  }
 
-    const actorId = (body.actorId ?? "api-test-counter-default") as ActorInstanceId;
-    const handler = body.handler ?? "increment";
+  const actorId = (body.actorId ?? "api-test-counter-default") as ActorInstanceId;
+  const handler = body.handler ?? "increment";
 
-    let result: { count: number };
+  let result: { count: number };
 
-    if (handler === "increment") {
-      const by = body.by ?? 1;
-      result = sdk.callActorAndWaitForResultSync<{ by: number }, { count: number }>({
-        unitPath: "test.actor-tests.actor.counter",
-        actorId,
-        handler: "increment",
-        payload: { by },
-        opts: { timeoutMs: 30_000 },
-      });
-    } else {
-      // "get" and "reset" take no meaningful payload
-      result = sdk.callActorAndWaitForResultSync<Record<string, never>, { count: number }>({
-        unitPath: "test.actor-tests.actor.counter",
-        actorId,
-        handler,
-        payload: {},
-        opts: { timeoutMs: 30_000 },
-      });
-    }
+  if (handler === "increment") {
+    const by = body.by ?? 1;
+    result = sdk.callActorAndWaitForResultSync<{ by: number }, { count: number }>({
+      unitPath: "test.actor-tests.actor.counter",
+      actorId,
+      handler: "increment",
+      payload: { by },
+      opts: { timeoutMs: 30_000 },
+    });
+  } else {
+    // "get" and "reset" take no meaningful payload
+    result = sdk.callActorAndWaitForResultSync<Record<string, never>, { count: number }>({
+      unitPath: "test.actor-tests.actor.counter",
+      actorId,
+      handler,
+      payload: {},
+      opts: { timeoutMs: 30_000 },
+    });
+  }
 
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(result satisfies ResponseBody));
-  })();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(result satisfies ResponseBody));
 }
 
 // cross-unit/call-workflow-handler.ts
@@ -293,51 +287,49 @@ export type ResponseBody = {
 };
 export type QueryParams = never;
 
-export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
-  void (async () => {
-    const raw = await text(req);
-    let body: RequestBody = {};
-    try {
-      body = JSON.parse(raw) as RequestBody;
-    } catch {
-      // defaults
-    }
+export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const raw = await text(req);
+  let body: RequestBody = {};
+  try {
+    body = JSON.parse(raw) as RequestBody;
+  } catch {
+    // defaults
+  }
 
-    const { instanceId } = sdk.startWorkflowSync<Record<string, never>>({
-      unitPath: WF,
-      input: {},
-    });
+  const { instanceId } = sdk.startWorkflowSync<Record<string, never>>({
+    unitPath: WF,
+    input: {},
+  });
 
-    const handlerEcho = sdk.callWorkflowHandlerAndWaitForResultSync<
-      { msg?: string },
-      { echoed: string }
-    >({
-      unitPath: WF,
-      instanceId: instanceId as WorkflowInstanceId,
-      handler: "echo",
-      input: { msg: body.msg ?? "api-handler-default" },
-      opts: { timeoutMs: 30_000 },
-    });
+  const handlerEcho = sdk.callWorkflowHandlerAndWaitForResultSync<
+    { msg?: string },
+    { echoed: string }
+  >({
+    unitPath: WF,
+    instanceId: instanceId as WorkflowInstanceId,
+    handler: "echo",
+    input: { msg: body.msg ?? "api-handler-default" },
+    opts: { timeoutMs: 30_000 },
+  });
 
-    const handlerFinish = sdk.callWorkflowHandlerAndWaitForResultSync<
-      Record<string, never>,
-      { closed: boolean }
-    >({
-      unitPath: WF,
-      instanceId: instanceId as WorkflowInstanceId,
-      handler: "finish",
-      input: {},
-    });
+  const handlerFinish = sdk.callWorkflowHandlerAndWaitForResultSync<
+    Record<string, never>,
+    { closed: boolean }
+  >({
+    unitPath: WF,
+    instanceId: instanceId as WorkflowInstanceId,
+    handler: "finish",
+    input: {},
+  });
 
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({
-        instanceId: String(instanceId),
-        handlerEcho,
-        handlerFinish,
-      } satisfies ResponseBody),
-    );
-  })();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      instanceId: String(instanceId),
+      handlerEcho,
+      handlerFinish,
+    } satisfies ResponseBody),
+  );
 }
 
 // cross-unit/call-workflow.ts
@@ -353,25 +345,23 @@ export type RequestBody = { value?: unknown };
 export type ResponseBody = { echoed: unknown };
 export type QueryParams = never;
 
-export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
-  void (async () => {
-    const raw = await text(req);
-    let body: RequestBody = {};
-    try {
-      body = JSON.parse(raw) as RequestBody;
-    } catch {
-      // use defaults
-    }
+export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const raw = await text(req);
+  let body: RequestBody = {};
+  try {
+    body = JSON.parse(raw) as RequestBody;
+  } catch {
+    // use defaults
+  }
 
-    const output = sdk.callWorkflowAndWaitForOutputSync<{ value: unknown }, { echoed: unknown }>({
-      unitPath: "test.wf.workflow.wf-echo",
-      input: { value: body.value ?? null },
-      opts: { timeoutMs: 120_000 },
-    });
+  const output = sdk.callWorkflowAndWaitForOutputSync<{ value: unknown }, { echoed: unknown }>({
+    unitPath: "test.wf.workflow.wf-echo",
+    input: { value: body.value ?? null },
+    opts: { timeoutMs: 120_000 },
+  });
 
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(output satisfies ResponseBody));
-  })();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(output satisfies ResponseBody));
 }
 
 // cross-unit/enqueue-worker.ts
@@ -387,26 +377,24 @@ export type RequestBody = { data?: Record<string, unknown> };
 export type ResponseBody = { runId: string };
 export type QueryParams = never;
 
-export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
-  void (async () => {
-    const raw = await text(req);
-    let body: RequestBody = {};
-    try {
-      body = JSON.parse(raw) as RequestBody;
-    } catch {
-      // use defaults
-    }
+export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const raw = await text(req);
+  let body: RequestBody = {};
+  try {
+    body = JSON.parse(raw) as RequestBody;
+  } catch {
+    // use defaults
+  }
 
-    const jobData: Record<string, unknown> = body.data ?? {};
+  const jobData: Record<string, unknown> = body.data ?? {};
 
-    const { runId } = sdk.enqueueWorkerSync<Record<string, unknown>>({
-      unitPath: "test.queue-worker.queue_worker.noop",
-      data: jobData,
-    });
+  const { runId } = sdk.enqueueWorkerSync<Record<string, unknown>>({
+    unitPath: "test.queue-worker.queue_worker.noop",
+    data: jobData,
+  });
 
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ runId: String(runId) } satisfies ResponseBody));
-  })();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ runId: String(runId) } satisfies ResponseBody));
 }
 
 // cross-unit/send-actor-msg.ts
@@ -422,29 +410,27 @@ export type RequestBody = { actorId?: string; by?: number };
 export type ResponseBody = { delivered: true };
 export type QueryParams = never;
 
-export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
-  void (async () => {
-    const raw = await text(req);
-    let body: RequestBody = {};
-    try {
-      body = JSON.parse(raw) as RequestBody;
-    } catch {
-      // use defaults
-    }
+export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const raw = await text(req);
+  let body: RequestBody = {};
+  try {
+    body = JSON.parse(raw) as RequestBody;
+  } catch {
+    // use defaults
+  }
 
-    const actorId = (body.actorId ?? "api-test-send-default") as ActorInstanceId;
-    const by = body.by ?? 1;
+  const actorId = (body.actorId ?? "api-test-send-default") as ActorInstanceId;
+  const by = body.by ?? 1;
 
-    const result = sdk.sendActorMessageSync<{ by: number }>({
-      unitPath: "test.actor-tests.actor.counter",
-      actorId,
-      handler: "increment",
-      payload: { by },
-    });
+  const result = sdk.sendActorMessageSync<{ by: number }>({
+    unitPath: "test.actor-tests.actor.counter",
+    actorId,
+    handler: "increment",
+    payload: { by },
+  });
 
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(result satisfies ResponseBody));
-  })();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(result satisfies ResponseBody));
 }
 
 // cross-unit/start-workflow-ff.ts
@@ -460,24 +446,22 @@ export type RequestBody = { value?: unknown };
 export type ResponseBody = { instanceId: string };
 export type QueryParams = never;
 
-export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
-  void (async () => {
-    const raw = await text(req);
-    let body: RequestBody = {};
-    try {
-      body = JSON.parse(raw) as RequestBody;
-    } catch {
-      // use defaults
-    }
+export async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const raw = await text(req);
+  let body: RequestBody = {};
+  try {
+    body = JSON.parse(raw) as RequestBody;
+  } catch {
+    // use defaults
+  }
 
-    const { instanceId } = sdk.startWorkflowSync<{ value: unknown }>({
-      unitPath: "test.wf.workflow.wf-echo",
-      input: { value: body.value ?? null },
-    });
+  const { instanceId } = sdk.startWorkflowSync<{ value: unknown }>({
+    unitPath: "test.wf.workflow.wf-echo",
+    input: { value: body.value ?? null },
+  });
 
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ instanceId: String(instanceId) } satisfies ResponseBody));
-  })();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ instanceId: String(instanceId) } satisfies ResponseBody));
 }
 "#;
 
