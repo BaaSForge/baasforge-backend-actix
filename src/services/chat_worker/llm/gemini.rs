@@ -222,11 +222,27 @@ pub async fn call_gemini_stream(
         .generate_content()
         .with_system_prompt(system_prompt.as_ref());
 
+    /// Last `contents` entry role we pushed (Gemini rejects a model **function call** turn that
+    /// immediately follows another model turn or starts the transcript).
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum GeminiRequestTail {
+        None,
+        UserLike,
+        Model,
+    }
+
+    let mut tail = GeminiRequestTail::None;
+
+    let parts_include_function_call = |parts: &[Part]| {
+        parts.iter().any(|p| matches!(p, Part::FunctionCall { .. }))
+    };
+
     for entry in &entries {
         match entry {
             UpstreamHistoryEntry::User { text } => {
                 if !text.is_empty() {
                     request = request.with_user_message(text.clone());
+                    tail = GeminiRequestTail::UserLike;
                 }
             }
             UpstreamHistoryEntry::Assistant {
@@ -234,6 +250,11 @@ pub async fn call_gemini_stream(
                 tool_calls,
                 thinking_blocks,
             } => {
+                // One logical assistant step → one model `Content` whose `parts` are: optional
+                // thought summaries, optional visible text, then every function call (Gemini
+                // multi-part candidate shape). Never split into multiple model rows before FCs.
+                let mut model_parts: Vec<Part> = Vec::new();
+
                 if let Some(tbs) = thinking_blocks.as_ref() {
                     for tb in tbs {
                         let has_text = !tb.thinking.is_empty();
@@ -247,51 +268,66 @@ pub async fn call_gemini_stream(
                                  API continuity may suffer"
                             );
                         }
-                        let model_content = match tb.signature.as_ref().filter(|s| !s.is_empty()) {
-                            Some(sig) => {
-                                Content::thought_with_signature(tb.thinking.clone(), sig.clone())
-                            }
-                            None => Content {
-                                parts: Some(vec![Part::Text {
-                                    text: tb.thinking.clone(),
-                                    thought: Some(true),
-                                    thought_signature: None,
-                                }]),
-                                role: None,
-                            },
-                        }
-                        .with_role(Role::Model);
-                        request = request.with_message(Message {
-                            content: model_content,
-                            role: Role::Model,
+                        let thought_sig = tb
+                            .signature
+                            .as_ref()
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string());
+                        model_parts.push(Part::Text {
+                            text: tb.thinking.clone(),
+                            thought: Some(true),
+                            thought_signature: thought_sig,
                         });
                     }
                 }
+
+                let visible = text.trim();
+                if !visible.is_empty() {
+                    model_parts.push(Part::Text {
+                        text: visible.to_string(),
+                        thought: None,
+                        thought_signature: None,
+                    });
+                }
+
                 if let Some(tcs) = tool_calls.as_ref() {
-                    if !text.trim().is_empty() {
-                        request = request.with_model_message(text.trim().to_string());
-                    }
                     for tc in tcs.iter() {
                         if tc.name.is_empty() {
                             continue;
                         }
                         let fc = FunctionCall::new(tc.name.clone(), tc.arguments.clone());
-                        let model_content = match tc
+                        let fc_sig = tc
                             .thought_signature
                             .as_ref()
                             .map(|s| s.trim())
                             .filter(|s| !s.is_empty())
-                        {
-                            Some(sig) => Content::function_call_with_thought(fc, sig.to_string()),
-                            None => Content::function_call(fc),
-                        };
-                        request = request.with_message(Message {
-                            content: model_content,
-                            role: Role::Model,
+                            .map(|s| s.to_string());
+                        model_parts.push(Part::FunctionCall {
+                            function_call: fc,
+                            thought_signature: fc_sig,
                         });
                     }
-                } else if !text.trim().is_empty() {
-                    request = request.with_model_message(text.trim().to_string());
+                }
+
+                if !model_parts.is_empty() {
+                    if parts_include_function_call(&model_parts)
+                        && tail != GeminiRequestTail::UserLike
+                    {
+                        // Satisfy: FC model turn must follow user or function-response turn.
+                        request = request.with_user_message(" ");
+                        tail = GeminiRequestTail::UserLike;
+                    }
+                    let model_content = Content {
+                        parts: Some(model_parts),
+                        role: None,
+                    }
+                    .with_role(Role::Model);
+                    request = request.with_message(Message {
+                        content: model_content,
+                        role: Role::Model,
+                    });
+                    tail = GeminiRequestTail::Model;
                 }
             }
             UpstreamHistoryEntry::ToolResult {
@@ -304,6 +340,7 @@ pub async fn call_gemini_stream(
                 request = request
                     .with_function_response(tool_name.clone(), response_value)
                     .map_err(|e| format!("Gemini history function response: {}", e))?;
+                tail = GeminiRequestTail::UserLike;
             }
             // Gemini has no `system` role on history turns: `Role` is only User/Model, and
             // `with_system_instruction` applies once per request (not in chronological order).
@@ -311,9 +348,16 @@ pub async fn call_gemini_stream(
             UpstreamHistoryEntry::System { text } => {
                 if !text.is_empty() {
                     request = request.with_user_message(text.clone());
+                    tail = GeminiRequestTail::UserLike;
                 }
             }
         }
+    }
+
+    // Continuation jobs may pass empty `user_text`, so `entries` can end on a model-only turn.
+    // Gemini rejects some tool/history shapes when the last content before generation is `model`.
+    if tail == GeminiRequestTail::Model {
+        request = request.with_user_message(" ");
     }
 
     request = request.with_function_calling_mode(FunctionCallingMode::Auto);
