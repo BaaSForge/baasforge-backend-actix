@@ -1,5 +1,6 @@
 use crate::database;
 use crate::libs::api_response::{api_error, api_success};
+use crate::libs::baal_inline::expand_baal_inlines_for_chat_title;
 use crate::libs::ids::new_uuid;
 use crate::libs::string::truncate_by_words;
 use crate::libs::unit_slug::{
@@ -1448,6 +1449,7 @@ fn chat_session_title_from_string(preferredString: Option<String>) -> String {
     let fallback = || format!("New chat session {}", Utc::now().format("%H:%M"));
 
     preferredString
+        .map(|m| expand_baal_inlines_for_chat_title(&m))
         .and_then(|m| truncate_by_words(m, 15))
         .map(|s| s.chars().take(CHAT_SESSION_TITLE_MAX_CHARS).collect())
         .unwrap_or_else(fallback)

@@ -10,6 +10,7 @@
 //! [`ChatMessageType::RejectControllerBox`] is included upstream as [`UpstreamHistoryEntry::System`]:
 //! rejection notice when `is_rejected` is true, or implicit-acceptance notice when it is false.
 
+use crate::libs::baal_inline::expand_baal_inlines_for_llm_user_text;
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload, ThinkingBlock,
 };
@@ -532,7 +533,8 @@ pub fn session_messages_to_upstream_entries(
         }
         match (role, type_) {
             (ChatSessionRoleType::User, _) => {
-                let text = payload_to_string(payload).trim().to_string();
+                let text = expand_baal_inlines_for_llm_user_text(&payload_to_string(payload));
+                let text = text.trim().to_string();
                 if !text.is_empty() {
                     out.push(UpstreamHistoryEntry::User { text });
                 }
@@ -614,9 +616,10 @@ pub fn session_messages_to_upstream_entries(
         }
     }
 
-    if !user_text.trim().is_empty() {
+    let user_for_llm = expand_baal_inlines_for_llm_user_text(user_text);
+    if !user_for_llm.trim().is_empty() {
         out.push(UpstreamHistoryEntry::User {
-            text: user_text.trim().to_string(),
+            text: user_for_llm.trim().to_string(),
         });
     }
 
