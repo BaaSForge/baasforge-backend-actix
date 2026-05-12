@@ -1441,11 +1441,15 @@ pub async fn handle_unit_previous_revisions_by_full_ids_for_chat_session(
     ))
 }
 
+/// Must stay in sync with `chat_sessions.title` (`VARCHAR(150)` in migrations / `schema.rs`).
+const CHAT_SESSION_TITLE_MAX_CHARS: usize = 120;
+
 fn chat_session_title_from_string(preferredString: Option<String>) -> String {
     let fallback = || format!("New chat session {}", Utc::now().format("%H:%M"));
 
     preferredString
         .and_then(|m| truncate_by_words(m, 15))
+        .map(|s| s.chars().take(CHAT_SESSION_TITLE_MAX_CHARS).collect())
         .unwrap_or_else(fallback)
 }
 
