@@ -19,6 +19,10 @@ pub const MAX_LIMIT_PER_SERVICE: usize = 20;
 pub const DEFAULT_LIMIT_PER_SERVICE: usize = 20;
 
 pub const RELEASE_ID_TAG_KEY: &str = "baal.release.id";
+pub const PROJECT_ID_TAG_KEY: &str = "baal.project.id";
+pub const RUNTIME_ID_TAG_KEY: &str = "baal.runtime.id";
+pub const UNIT_PATH_TAG_KEY: &str = "baal.unit.path";
+pub const UNIT_ID_TAG_KEY: &str = "baal.unit.id";
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -176,6 +180,147 @@ pub async fn query_jaeger_traces(
     }
 
     Ok(by_service)
+}
+
+/// Loads one trace document from Jaeger Query (`GET /api/traces/{traceID}`), returning the first object
+/// in the `data` array when present. Used by project-scoped trace APIs; for span grouping by service
+/// see [`query_jaeger_traces`].
+pub async fn fetch_jaeger_trace_by_id(
+    base_url: &str,
+    trace_id: &str,
+) -> Result<Option<Value>, JaegerQueryError> {
+    let base = base_url.trim_end_matches('/');
+    let now_us = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0);
+    let url = format!(
+        "{}/api/traces/{}?start={}&end={}",
+        base,
+        urlencoding::encode(trace_id),
+        0u64,
+        now_us,
+    );
+    let client = build_jaeger_client().map_err(|e| JaegerQueryError::ClientBuild(e.to_string()))?;
+    let payload = fetch_jaeger_json(&client, &url).await?;
+    Ok(payload
+        .get("data")
+        .and_then(|d| d.as_array())
+        .and_then(|arr| arr.first().cloned()))
+}
+
+/// Every `baal.project.id` value on the trace (process and span tags) must parse as the same UUID and
+/// match `expected`. Returns `Ok(())` when there is at least one tag and all agree; otherwise an
+/// error message suitable for a 403/400 response.
+pub fn trace_baal_project_id_matches(trace: &Value, expected: uuid::Uuid) -> Result<(), &'static str> {
+    use uuid::Uuid;
+    let mut seen: HashSet<Uuid> = HashSet::new();
+    for_each_jaeger_tag_value(trace, PROJECT_ID_TAG_KEY, |s| {
+        if let Ok(u) = Uuid::parse_str(s.trim()) {
+            seen.insert(u);
+        }
+    });
+    if seen.is_empty() {
+        return Err("trace has no baal.project.id tag");
+    }
+    if seen.len() != 1 {
+        return Err("trace has conflicting baal.project.id values");
+    }
+    let only = *seen.iter().next().expect("non-empty set");
+    if only != expected {
+        return Err("trace baal.project.id does not match this project");
+    }
+    Ok(())
+}
+
+/// When the tag is absent on the whole trace, returns `Ok(None)`. When present, every value must parse
+/// as a UUID and agree on the same id, or the result is `Err`.
+pub fn trace_optional_unique_tag_uuid(
+    trace: &Value,
+    key: &str,
+) -> Result<Option<uuid::Uuid>, &'static str> {
+    use uuid::Uuid;
+    let mut seen: HashSet<Uuid> = HashSet::new();
+    let mut any_non_empty = false;
+    let mut any_invalid = false;
+    for_each_jaeger_tag_value(trace, key, |s| {
+        let t = s.trim();
+        if t.is_empty() {
+            return;
+        }
+        any_non_empty = true;
+        match Uuid::parse_str(t) {
+            Ok(u) => {
+                seen.insert(u);
+            }
+            Err(_) => {
+                any_invalid = true;
+            }
+        }
+    });
+    if !any_non_empty {
+        return Ok(None);
+    }
+    if any_invalid {
+        return Err("tag value is not a valid UUID");
+    }
+    if seen.len() > 1 {
+        return Err("conflicting UUID values for tag");
+    }
+    Ok(seen.into_iter().next())
+}
+
+/// First non-empty string value for `key` on process tags then span tags (process keys sorted).
+pub fn trace_first_tag_string(trace: &Value, key: &str) -> Option<String> {
+    let mut out: Option<String> = None;
+    for_each_jaeger_tag_value(trace, key, |s| {
+        let t = s.trim();
+        if !t.is_empty() && out.is_none() {
+            out = Some(t.to_string());
+        }
+    });
+    out
+}
+
+fn for_each_jaeger_tag_value<F: FnMut(String)>(trace: &Value, key: &str, mut f: F) {
+    if let Some(processes) = trace.get("processes").and_then(|p| p.as_object()) {
+        let mut keys: Vec<&String> = processes.keys().collect();
+        keys.sort();
+        for pk in keys {
+            if let Some(proc) = processes.get(pk.as_str()) {
+                walk_tags_array(proc.get("tags"), key, &mut f);
+            }
+        }
+    }
+    if let Some(spans) = trace.get("spans").and_then(|s| s.as_array()) {
+        for span in spans {
+            walk_tags_array(span.get("tags"), key, &mut f);
+        }
+    }
+}
+
+fn walk_tags_array<F: FnMut(String)>(tags: Option<&Value>, key: &str, f: &mut F) {
+    let Some(arr) = tags.and_then(|t| t.as_array()) else {
+        return;
+    };
+    for t in arr {
+        let matches_key = t.get("key").and_then(|k| k.as_str()) == Some(key);
+        if !matches_key {
+            continue;
+        }
+        if let Some(s) = jaeger_tag_scalar_string(t.get("value")) {
+            f(s);
+        }
+    }
+}
+
+fn jaeger_tag_scalar_string(v: Option<&Value>) -> Option<String> {
+    match v {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        Some(Value::Bool(b)) => Some(b.to_string()),
+        _ => None,
+    }
 }
 
 fn build_jaeger_client() -> reqwest::Result<reqwest::Client> {

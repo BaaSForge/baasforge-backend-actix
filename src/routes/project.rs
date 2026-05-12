@@ -28,9 +28,15 @@ use crate::services::chat_worker::db::{
 use crate::services::payment::{
     PaidFeature, most_complete_needed_package, user_missing_paid_features,
 };
+use crate::services::observability::{
+    fetch_jaeger_trace_by_id, JaegerQueryError, RELEASE_ID_TAG_KEY, RUNTIME_ID_TAG_KEY,
+    trace_baal_project_id_matches, trace_first_tag_string, trace_optional_unique_tag_uuid,
+    UNIT_ID_TAG_KEY, UNIT_PATH_TAG_KEY,
+};
 use crate::services::releases::{
     ProjectReleaseRevisionLookup, attach_base_production_releases,
-    attach_is_draft_flags_from_latest_production, load_unit_previous_revisions_for_release,
+    attach_is_draft_flags_from_latest_production, combined_units_from_release_metadata,
+    load_unit_previous_revisions_for_release, pick_unit_from_combined_snapshot,
     project_release_id_for_revision_lane,
     recompute_user_message_edit_disabled_for_session_live_production,
 };
@@ -44,8 +50,9 @@ use crate::{libs::api_response::api_success, routes::AppContext};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use diesel::prelude::*;
 use diesel::result::Error;
+use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -1905,4 +1912,281 @@ pub async fn handle_deploy_production_release(
             ))
         }
     }
+}
+
+const MAX_PROJECT_TRACE_IDS: usize = 100;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadProjectTracesByIdsBody {
+    pub trace_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoadedProjectTraceEntry {
+    trace_id: String,
+    trace: Value,
+    release: Option<ProjectReleaseResponse>,
+    runtime: Option<ProjectRuntimeResponse>,
+    unit: Option<ProjectUnitResponse>,
+}
+
+fn validate_jaeger_trace_id_param(trace_id: &str) -> Result<(), &'static str> {
+    if !trace_id
+        .chars()
+        .all(|c| c.is_ascii_hexdigit())
+    {
+        return Err("each traceId must contain only hexadecimal characters");
+    }
+    if trace_id.len() != 16 && trace_id.len() != 32 {
+        return Err("each traceId must be exactly 16 or 32 hex characters");
+    }
+    Ok(())
+}
+
+fn jaeger_query_err_http(err: JaegerQueryError) -> HttpResponse {
+    match err {
+        JaegerQueryError::ClientBuild(_) => HttpResponse::InternalServerError()
+            .json(api_error("Failed to build HTTP client", json!({}))),
+        JaegerQueryError::Transport { .. } => {
+            HttpResponse::BadGateway().json(api_error("Failed to reach Jaeger", json!({})))
+        }
+        JaegerQueryError::BadStatus { status, .. } => HttpResponse::BadGateway().json(api_error(
+            &format!("Jaeger returned status {}", status),
+            json!({}),
+        )),
+        JaegerQueryError::InvalidPayload { .. } => {
+            HttpResponse::BadGateway().json(api_error("Invalid response from Jaeger", json!({})))
+        }
+    }
+}
+
+struct TracePlan {
+    trace_id: String,
+    trace: Value,
+    release_id: Option<Uuid>,
+    runtime_id: Option<Uuid>,
+    unit_path: Option<String>,
+    unit_id: Option<String>,
+}
+
+/// Loads full Jaeger trace JSON for the given ids, verifies `baal.project.id` on each trace matches
+/// the path project, optionally attaches the release row, runtime row, and a unit row resolved only
+/// from that release’s combined snapshot metadata (no path/id DB fallback outside the snapshot).
+pub async fn handle_load_project_traces_by_ids(
+    context: web::Data<AppContext>,
+    path: web::Path<Uuid>,
+    body: web::Json<LoadProjectTracesByIdsBody>,
+) -> HttpResponse {
+    let project_id = path.into_inner();
+    let normalized: Vec<String> = body
+        .trace_ids
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if normalized.is_empty() {
+        return HttpResponse::BadRequest().json(api_error(
+            "traceIds must contain at least one non-empty id",
+            json!({}),
+        ));
+    }
+    if normalized.len() > MAX_PROJECT_TRACE_IDS {
+        return HttpResponse::BadRequest().json(api_error(
+            &format!("traceIds must contain at most {} ids", MAX_PROJECT_TRACE_IDS),
+            json!({}),
+        ));
+    }
+
+    for tid in &normalized {
+        if let Err(msg) = validate_jaeger_trace_id_param(tid) {
+            return HttpResponse::BadRequest().json(api_error(msg, json!({})));
+        }
+    }
+
+    let mut uniq: Vec<String> = Vec::new();
+    for t in &normalized {
+        if !uniq.iter().any(|u| u == t) {
+            uniq.push(t.clone());
+        }
+    }
+
+    let jaeger_base = context.settings.jaeger_query_base_url.clone();
+    let fetched = match try_join_all(uniq.iter().map(|tid| {
+        let base = jaeger_base.clone();
+        let tid = tid.clone();
+        async move { fetch_jaeger_trace_by_id(&base, &tid).await }
+    }))
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => return jaeger_query_err_http(e),
+    };
+
+    if fetched.iter().any(|o| o.is_none()) {
+        return HttpResponse::NotFound().json(api_error(
+            "One or more traces were not found in Jaeger",
+            json!({}),
+        ));
+    }
+
+    let by_id: HashMap<String, Value> = uniq
+        .into_iter()
+        .zip(fetched.into_iter().map(|o| o.expect("checked non-none")))
+        .collect();
+
+    let mut plans: Vec<TracePlan> = Vec::with_capacity(normalized.len());
+    for tid in &normalized {
+        let Some(trace) = by_id.get(tid).cloned() else {
+            log::error!(
+                "[handle_load_project_traces_by_ids] missing trace after fetch trace_id={}",
+                tid
+            );
+            return HttpResponse::InternalServerError()
+                .json(api_error("Internal error resolving trace payload", json!({})));
+        };
+        if let Err(msg) = trace_baal_project_id_matches(&trace, project_id) {
+            return HttpResponse::Forbidden().json(api_error(msg, json!({})));
+        }
+        let release_id = match trace_optional_unique_tag_uuid(&trace, RELEASE_ID_TAG_KEY) {
+            Ok(v) => v,
+            Err(msg) => return HttpResponse::BadRequest().json(api_error(msg, json!({}))),
+        };
+        let runtime_id = match trace_optional_unique_tag_uuid(&trace, RUNTIME_ID_TAG_KEY) {
+            Ok(v) => v,
+            Err(msg) => return HttpResponse::BadRequest().json(api_error(msg, json!({}))),
+        };
+        let unit_path = trace_first_tag_string(&trace, UNIT_PATH_TAG_KEY);
+        let unit_id = trace_first_tag_string(&trace, UNIT_ID_TAG_KEY);
+        plans.push(TracePlan {
+            trace_id: tid.clone(),
+            trace,
+            release_id,
+            runtime_id,
+            unit_path,
+            unit_id,
+        });
+    }
+
+    let mut release_ids: HashSet<Uuid> = HashSet::new();
+    let mut runtime_ids: HashSet<Uuid> = HashSet::new();
+    let mut releases_needing_combined: HashSet<Uuid> = HashSet::new();
+    for p in &plans {
+        if let Some(r) = p.release_id {
+            release_ids.insert(r);
+            if p.unit_path.is_some() || p.unit_id.is_some() {
+                releases_needing_combined.insert(r);
+            }
+        }
+        if let Some(r) = p.runtime_id {
+            runtime_ids.insert(r);
+        }
+    }
+
+    let release_ids_vec: Vec<Uuid> = release_ids.iter().copied().collect();
+    let runtime_ids_vec: Vec<Uuid> = runtime_ids.iter().copied().collect();
+    let releases_for_combined: Vec<Uuid> = releases_needing_combined.iter().copied().collect();
+
+    let (releases, runtimes, combined_by_release) = match database::block_on_db(
+        &context.pool,
+        move |conn| {
+            let mut releases: HashMap<Uuid, ProjectReleaseResponse> = HashMap::new();
+            if !release_ids_vec.is_empty() {
+                let rows: Vec<ProjectReleaseResponse> = project_releases::table
+                    .filter(project_releases::project_id.eq(project_id))
+                    .filter(project_releases::id.eq_any(&release_ids_vec))
+                    .select(ProjectReleaseResponse::as_select())
+                    .load(conn)?;
+                for r in rows {
+                    releases.insert(r.id, r);
+                }
+            }
+
+            let mut runtimes: HashMap<Uuid, ProjectRuntimeResponse> = HashMap::new();
+            if !runtime_ids_vec.is_empty() {
+                let rows: Vec<ProjectRuntimeResponse> = project_runtimes::table
+                    .filter(project_runtimes::project_id.eq(project_id))
+                    .filter(project_runtimes::id.eq_any(&runtime_ids_vec))
+                    .select(ProjectRuntimeResponse::as_select())
+                    .load(conn)?;
+                for r in rows {
+                    runtimes.insert(r.id, r);
+                }
+            }
+
+            let mut combined_by_release: HashMap<Uuid, Vec<ProjectUnitResponse>> = HashMap::new();
+            for rid in &releases_for_combined {
+                let Some(rel) = releases.get(rid) else {
+                    continue;
+                };
+                let rows =
+                    combined_units_from_release_metadata(conn, project_id, rel.units_metadata.as_ref())?;
+                combined_by_release.insert(*rid, rows);
+            }
+
+            Ok((releases, runtimes, combined_by_release))
+        },
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("[handle_load_project_traces_by_ids] DB/block error: {:?}", e);
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    for rid in &release_ids {
+        if !releases.contains_key(rid) {
+            return HttpResponse::NotFound().json(api_error(
+                "One or more releases referenced by traces were not found for this project",
+                json!({}),
+            ));
+        }
+    }
+    for rid in &runtime_ids {
+        if !runtimes.contains_key(rid) {
+            return HttpResponse::NotFound().json(api_error(
+                "One or more runtimes referenced by traces were not found for this project",
+                json!({}),
+            ));
+        }
+    }
+
+    let mut entries: Vec<LoadedProjectTraceEntry> = Vec::with_capacity(plans.len());
+    for p in plans {
+        let release = p.release_id.and_then(|id| releases.get(&id).cloned());
+        let runtime = p.runtime_id.and_then(|id| runtimes.get(&id).cloned());
+        let unit = if p.unit_path.is_some() || p.unit_id.is_some() {
+            match p.release_id {
+                Some(rid) => combined_by_release.get(&rid).and_then(|comb| {
+                    pick_unit_from_combined_snapshot(
+                        comb,
+                        p.unit_id.as_deref(),
+                        p.unit_path.as_deref(),
+                    )
+                }),
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        let entry = LoadedProjectTraceEntry {
+            trace_id: p.trace_id,
+            trace: p.trace,
+            release,
+            runtime,
+            unit,
+        };
+        entries.push(entry);
+    }
+
+    HttpResponse::Ok().json(api_success(
+        "Traces loaded successfully",
+        json!({ "traces": entries }),
+    ))
 }

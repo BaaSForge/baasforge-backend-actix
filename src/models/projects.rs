@@ -241,7 +241,7 @@ impl Deref for ProjectUnitResponse {
     }
 }
 
-#[derive(Serialize, Queryable, Selectable)]
+#[derive(Debug, Clone, Serialize, Queryable, Selectable)]
 #[diesel(table_name = crate::schema::project_runtimes)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct ProjectRuntimeResponse {

@@ -4,7 +4,9 @@
 //! copies `units_metadata` (and session linkage) from that row. Unit diffs and merges run only when
 //! the stage release is created—not again at production time.
 use crate::database::PooledConn;
-use crate::libs::unit_slug::{compose_unit_id, parse_unit_path};
+use crate::libs::unit_slug::{
+    compose_unit_id, normalize_full_unit_id_arg, parse_unit_path, validate_full_unit_id_for_tool,
+};
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageType, ChatSessionRoleType,
 };
@@ -127,6 +129,48 @@ pub fn combined_units_from_release_metadata(
         return Ok(vec![]);
     };
     combined_rows_from_unit_refs(conn, project_id, &m.combined_unit_refs)
+}
+
+/// Resolves a unit only from `combined` (already the release combined snapshot). Does not query
+/// `project_units` by path or id outside that snapshot.
+pub fn pick_unit_from_combined_snapshot(
+    combined: &[ProjectUnitResponse],
+    unit_id_tag: Option<&str>,
+    unit_path_tag: Option<&str>,
+) -> Option<ProjectUnitResponse> {
+    let uid = unit_id_tag
+        .map(normalize_full_unit_id_arg)
+        .filter(|s| !s.is_empty());
+    let upath = unit_path_tag
+        .map(normalize_full_unit_id_arg)
+        .filter(|s| !s.is_empty());
+
+    if let Some(ref id) = uid {
+        if let Some(u) = combined.iter().find(|u| u.id == *id) {
+            return Some(u.clone());
+        }
+    }
+    if let Some(ref p) = upath {
+        let parts: Vec<&str> = p.split('.').filter(|x| !x.is_empty()).collect();
+        if parts.len() == 5 && validate_full_unit_id_for_tool(p).is_ok() {
+            if let Some(u) = combined.iter().find(|u| u.id == *p) {
+                return Some(u.clone());
+            }
+        }
+        if let Ok(parsed) = parse_unit_path(p) {
+            let want = (
+                parsed.context_slug.clone(),
+                parsed.module_slug.clone(),
+                parsed.unit_type,
+                parsed.unit_name_slug.clone(),
+            );
+            return combined
+                .iter()
+                .find(|u| logical_unit_key(u) == want)
+                .cloned();
+        }
+    }
+    None
 }
 
 pub fn project_unit_refs_from_responses(units: &[ProjectUnitResponse]) -> Vec<ReleaseUnitRef> {
