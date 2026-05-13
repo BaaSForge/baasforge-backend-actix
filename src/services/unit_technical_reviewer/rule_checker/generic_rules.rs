@@ -38,7 +38,7 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
              `import { URL } from \"node:url\"`, \
              `import { randomUUID, randomBytes, randomInt, randomFillSync, createHash, createHmac, \
              getHashes, getCiphers, pbkdf2Sync, scryptSync, timingSafeEqual, createCipheriv, \
-             createDecipheriv, subtle, getRandomValues } from \"node:crypto\"`, \
+             createDecipheriv, subtle, getRandomValues, webcrypto } from \"node:crypto\"`, \
              `import { Buffer } from \"node:buffer\"`, \
              `import { TextEncoder, TextDecoder } from \"node:util\"`, \
              `import { setTimeout as setTimeoutPromise } from \"node:timers/promises\"`.",
@@ -140,6 +140,7 @@ fn only_allowed_node_imports(input: &RuleInput) -> Vec<String> {
                 "createDecipheriv",
                 "subtle",
                 "getRandomValues",
+                "webcrypto",
             ],
         ),
         ("node:buffer", &["Buffer"]),
