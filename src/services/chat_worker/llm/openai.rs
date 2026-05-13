@@ -467,6 +467,19 @@ pub async fn call_gpt_stream(
     let thinking_blocks = thinking_blocks_from_accumulated_reasoning(&full_thinking);
     let published_stream_chunks = chunk_index > 0 || thinking_chunk_index > 0;
 
+    if has_tool_calls {
+        if let Some(ref conn) = redis_conn {
+            let mut guard = conn.lock().await;
+            if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                return Ok(GenerateOutcome::Stopped(TextPayload {
+                    text: full_text,
+                    requested_tool_calls: None,
+                    thinking_blocks,
+                }));
+            }
+        }
+    }
+
     let requested_tool_calls_out: Option<Vec<RequestedToolCall>> = if has_tool_calls {
         let to_run: Vec<_> = acc
             .into_iter()
@@ -508,6 +521,16 @@ pub async fn call_gpt_stream(
                     queue_invoking_message_id,
                 )
                 .await?;
+            }
+        }
+        if let Some(ref conn) = redis_conn {
+            let mut guard = conn.lock().await;
+            if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                return Ok(GenerateOutcome::Stopped(TextPayload {
+                    text: full_text,
+                    requested_tool_calls: None,
+                    thinking_blocks: thinking_blocks.clone(),
+                }));
             }
         }
         for (id, name, arguments) in &to_run {

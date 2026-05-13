@@ -508,6 +508,16 @@ pub async fn call_gemini_stream(
     let requested_tool_calls = if all_function_calls.is_empty() {
         None
     } else {
+        if let Some(ref conn) = redis_conn {
+            let mut guard = conn.lock().await;
+            if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                return Ok(GenerateOutcome::Stopped(TextPayload {
+                    text: full_text,
+                    requested_tool_calls: None,
+                    thinking_blocks: thinking_blocks.clone(),
+                }));
+            }
+        }
         tracing::info!("Gemini: LLM requested {} tool call(s), executing", fc_count);
         let requested: Vec<RequestedToolCall> = all_function_calls
             .iter()
@@ -539,6 +549,16 @@ pub async fn call_gemini_stream(
                 )
                 .await
                 .map_err(|e| format!("ai_message: {}", e))?;
+            }
+        }
+        if let Some(ref conn) = redis_conn {
+            let mut guard = conn.lock().await;
+            if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                return Ok(GenerateOutcome::Stopped(TextPayload {
+                    text: full_text,
+                    requested_tool_calls: None,
+                    thinking_blocks: thinking_blocks.clone(),
+                }));
             }
         }
 

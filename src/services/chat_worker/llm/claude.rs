@@ -633,6 +633,16 @@ pub async fn call_claude_stream(
         tracing::info!("Claude: no tool calls in stream");
         None
     } else {
+        if let Some(ref conn) = redis_conn {
+            let mut guard = conn.lock().await;
+            if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                return Ok(GenerateOutcome::Stopped(TextPayload {
+                    text: full_text,
+                    requested_tool_calls: None,
+                    thinking_blocks: thinking_blocks.clone(),
+                }));
+            }
+        }
         let requested: Vec<RequestedToolCall> = tool_uses
             .into_iter()
             .filter(|(_, name, _)| !name.is_empty())
@@ -670,6 +680,16 @@ pub async fn call_claude_stream(
                     )
                     .await
                     .map_err(|e| format!("ai_message: {}", e))?;
+                }
+            }
+            if let Some(ref conn) = redis_conn {
+                let mut guard = conn.lock().await;
+                if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                    return Ok(GenerateOutcome::Stopped(TextPayload {
+                        text: full_text,
+                        requested_tool_calls: None,
+                        thinking_blocks: thinking_blocks.clone(),
+                    }));
                 }
             }
             for r in &requested {
