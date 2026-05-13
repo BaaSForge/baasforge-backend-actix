@@ -97,7 +97,8 @@ pub async fn process_one(
                 block_on_db_tokio(pool, move |conn| {
                     diesel::update(
                         chat_messages::table
-                            .filter(chat_messages::id.eq(placeholder_ai_message_id)),
+                            .filter(chat_messages::id.eq(placeholder_ai_message_id))
+                            .filter(chat_messages::status.eq(ChatMessageStatus::Generating)),
                     )
                     .set((
                         chat_messages::payload.eq(payload),
@@ -113,6 +114,27 @@ pub async fn process_one(
                     %placeholder_ai_message_id,
                     "Streaming stopped by user, saved partial content to DB"
                 );
+            } else {
+                let placeholder_id = placeholder_ai_message_id;
+                let n = block_on_db_tokio(pool, move |conn| {
+                    diesel::update(
+                        chat_messages::table
+                            .filter(chat_messages::id.eq(placeholder_id))
+                            .filter(chat_messages::status.eq(ChatMessageStatus::Generating)),
+                    )
+                    .set(chat_messages::status.eq(ChatMessageStatus::Stopped))
+                    .execute(conn)
+                })
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                if n > 0 {
+                    info!(
+                        %project_id,
+                        %session_id,
+                        %placeholder_ai_message_id,
+                        "Streaming stopped with no persisted content; marked Generating row as Stopped"
+                    );
+                }
             }
             Ok(GenerateOutcome::Stopped(text_payload))
         }
@@ -169,32 +191,81 @@ pub async fn process_one(
                 info!(%project_id, %session_id, "Processed and saved AI response");
 
                 if has_tool_calls {
-                    let expected_tool_count = text_payload
-                        .requested_tool_calls
-                        .as_ref()
-                        .map_or(0, |c| c.len());
-                    let placeholder_id = placeholder_ai_message_id;
-                    let existing_child_count: i64 = block_on_db_tokio(pool, move |conn| {
-                        chat_messages::table
-                            .filter(chat_messages::invoking_message_id.eq(placeholder_id))
-                            .count()
-                            .get_result(conn)
+                    maybe_complete_invoking_message(
+                        pool,
+                        redis_conn,
+                        Some(rabbit_publisher),
+                        placeholder_ai_message_id,
+                        user_id,
+                        project_id,
+                        session_id,
+                        true,
+                    )
+                    .await;
+                }
+            } else {
+                let placeholder_id = placeholder_ai_message_id;
+                let child_count: i64 = block_on_db_tokio(pool, move |conn| {
+                    chat_messages::table
+                        .filter(chat_messages::invoking_message_id.eq(placeholder_id))
+                        .count()
+                        .get_result(conn)
+                })
+                .await
+                .unwrap_or(0);
+                if child_count > 0 {
+                    maybe_complete_invoking_message(
+                        pool,
+                        redis_conn,
+                        Some(rabbit_publisher),
+                        placeholder_ai_message_id,
+                        user_id,
+                        project_id,
+                        session_id,
+                        true,
+                    )
+                    .await;
+                } else {
+                    let empty = TextPayload::default();
+                    let payload = Some(serde_json::to_value(&empty)?);
+                    let updated_row = block_on_db_tokio(pool, move |conn| {
+                        diesel::update(
+                            chat_messages::table
+                                .filter(chat_messages::id.eq(placeholder_id))
+                                .filter(chat_messages::status.eq(ChatMessageStatus::Generating)),
+                        )
+                        .set((
+                            chat_messages::payload.eq(payload),
+                            chat_messages::status.eq(ChatMessageStatus::Completed),
+                        ))
+                        .returning(ChatMessageRow::as_returning())
+                        .get_result(conn)
+                        .optional()
                     })
                     .await
-                    .unwrap_or(0);
-                    if existing_child_count >= expected_tool_count as i64 {
-                        maybe_complete_invoking_message(
-                            pool,
-                            redis_conn,
-                            Some(rabbit_publisher),
-                            placeholder_ai_message_id,
-                            user_id,
-                            project_id,
-                            session_id,
-                            true,
-                        )
-                        .await;
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                    if let Some(row) = updated_row {
+                        let message = ChatMessageResponse::from(row);
+                        let event = WsServerEvent::ChatSessionMessageUpdated(
+                            ChatSessionMessageUpdatedPayload {
+                                project_id,
+                                session_id,
+                                message,
+                            },
+                        );
+                        let mut guard = redis_conn.lock().await;
+                        publish_event_to_channel(&mut *guard, &channel, &event)
+                            .await
+                            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                                e.to_string().into()
+                            })?;
                     }
+                    info!(
+                        %project_id,
+                        %session_id,
+                        %placeholder_ai_message_id,
+                        "Model returned no text, tools, or thinking; marked placeholder as Completed"
+                    );
                 }
             }
             Ok(GenerateOutcome::Completed(text_payload))

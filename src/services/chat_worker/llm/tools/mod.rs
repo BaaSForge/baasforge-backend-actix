@@ -791,19 +791,14 @@ pub async fn maybe_complete_invoking_message(
         ChatMessageStatus::Completed
     };
     let new_status_for_db = new_status.clone();
-    let is_failed = failed_count > 0;
     let rows_updated = match block_on_db_tokio(pool, move |conn| {
-        let base =
-            diesel::update(chat_messages::table.filter(chat_messages::id.eq(invoking_message_id)));
-        let rows = if is_failed {
-            base.set(chat_messages::status.eq(new_status_for_db))
-                .execute(conn)?
-        } else {
-            // Only set Completed when parent is still Generating; do not override Failed.
-            base.set(chat_messages::status.eq(new_status_for_db))
-                .filter(chat_messages::status.eq(ChatMessageStatus::Generating))
-                .execute(conn)?
-        };
+        let rows = diesel::update(
+            chat_messages::table
+                .filter(chat_messages::id.eq(invoking_message_id))
+                .filter(chat_messages::status.eq(ChatMessageStatus::Generating)),
+        )
+        .set(chat_messages::status.eq(new_status_for_db))
+        .execute(conn)?;
         Ok::<_, diesel::result::Error>(rows)
     })
     .await
