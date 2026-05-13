@@ -7,9 +7,10 @@
 // All functions are pure: no side effects, no error accumulation.
 
 use oxc_ast::ast::{
-    Declaration, ExportAllDeclaration, ExportDefaultDeclarationKind, ExportNamedDeclaration,
-    Expression, Function, IdentifierReference, ImportDeclaration, ImportDeclarationSpecifier,
-    ModuleExportName, Program, Statement, TSType, TSTypeName, UnaryExpression,
+    CallExpression, Declaration, ExportAllDeclaration, ExportDefaultDeclarationKind,
+    ExportNamedDeclaration, Expression, Function, IdentifierReference, ImportDeclaration,
+    ImportDeclarationSpecifier, ModuleExportName, Program, Statement, TSType, TSTypeName,
+    UnaryExpression,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_syntax::operator::UnaryOperator;
@@ -318,16 +319,39 @@ pub fn has_export_default(program: &Program) -> bool {
 /// If `export default` is a direct call expression (`export default fn(...)`), returns the
 /// callee identifier name.  Returns `None` if there's no default export or it's not a plain call.
 pub fn get_export_default_call_name<'a>(program: &'a Program<'a>) -> Option<&'a str> {
+    let call = get_export_default_call_expression(program)?;
+    let callee = peel_parentheses(call_callee_expression(&call.callee));
+    if let Expression::Identifier(id) = callee {
+        return Some(id.name.as_str());
+    }
+    None
+}
+
+/// If `export default` is a call expression, returns it. Otherwise `None`.
+pub fn get_export_default_call_expression<'a>(
+    program: &'a Program<'a>,
+) -> Option<&'a CallExpression<'a>> {
     for stmt in &program.body {
         if let Statement::ExportDefaultDeclaration(export) = stmt {
             if let ExportDefaultDeclarationKind::CallExpression(call) = &export.declaration {
-                if let Expression::Identifier(id) = &call.callee {
-                    return Some(id.name.as_str());
-                }
+                return Some(call.as_ref());
             }
         }
     }
     None
+}
+
+fn call_callee_expression<'a>(callee: &'a Expression<'a>) -> &'a Expression<'a> {
+    let mut cur = callee;
+    loop {
+        cur = peel_parentheses(cur);
+        match cur {
+            Expression::TSInstantiationExpression(inst) => {
+                cur = &inst.expression;
+            }
+            _ => return cur,
+        }
+    }
 }
 
 /// Returns the names of all top-level exported function declarations, in source order.

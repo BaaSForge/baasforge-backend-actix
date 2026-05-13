@@ -35,7 +35,8 @@ pub mod ast_utils;
 #[cfg(feature = "unit_technical_reviewer")]
 pub use ast_utils::{
     contains_word, export_all_source, exported_function_body_contains_void_discarded_async_invoke,
-    get_export_default_call_name, get_export_named_decls, get_exported_function_is_async,
+    get_export_default_call_expression, get_export_default_call_name, get_export_named_decls,
+    get_exported_function_is_async,
     get_exported_function_names, get_exported_function_param_count,
     get_exported_function_param_type_name, get_exported_function_return_type, get_exported_type,
     get_exported_type_names, get_import_declarations, get_imports_from_source,

@@ -21,7 +21,11 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
              `export type {HandlerName}Input = …`. \
              For handlers with a non-void return, export \
              `export type {HandlerName}Output = …`. \
-             The `{HandlerName}` prefix must match the handler key exactly.",
+             `{HandlerName}` is the handler key with its first character uppercased \
+             (e.g. `createAgent` → `CreateAgentInput`). \
+             When `handlers` is a static object literal, every exported `*Input` / `*Output` must \
+             match a key in that object under that rule (omit `handlers` or use a non-literal \
+             value if the actor has no externally invoked handlers).",
         ),
         (
             "No other exports allowed",
@@ -35,6 +39,10 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
 }
 
 #[cfg(feature = "unit_technical_reviewer")]
+use super::handler_keys::{
+    actor_handler_key_to_exported_type_prefix, parse_actor_handlers_literal_keys,
+};
+#[cfg(feature = "unit_technical_reviewer")]
 use crate::services::unit_technical_reviewer::rule_checker::{
     Declaration, Rule, RuleInput, Statement, export_all_source, get_export_default_call_name,
     has_export_default, has_exported_type, module_export_name_str,
@@ -46,6 +54,7 @@ pub fn rules() -> Vec<Rule> {
         actor_default_exported,
         state_exported,
         no_alarm_deadletter_exports,
+        handler_io_exports_match_handlers,
         no_other_exports,
     ]
 }
@@ -89,6 +98,7 @@ fn state_exported(input: &RuleInput) -> Vec<String> {
     }
 }
 
+#[cfg(feature = "unit_technical_reviewer")]
 const FORBIDDEN_HANDLER_TYPE_PREFIXES: &[&str] = &["OnAlarm", "OnDeadLetter"];
 
 #[cfg(feature = "unit_technical_reviewer")]
@@ -111,6 +121,73 @@ fn no_alarm_deadletter_exports(input: &RuleInput) -> Vec<String> {
                     }
                 }
             }
+        }
+    }
+    errors
+}
+
+#[cfg(feature = "unit_technical_reviewer")]
+fn handler_io_exports_match_handlers(input: &RuleInput) -> Vec<String> {
+    let Some(program) = input.program else {
+        return vec![];
+    };
+    if get_export_default_call_name(program) != Some("actor") {
+        return vec![];
+    }
+    let parsed = parse_actor_handlers_literal_keys(program);
+    let Some(handler_keys_opt) = parsed else {
+        return vec![];
+    };
+    let Some(handler_keys) = handler_keys_opt else {
+        return vec![];
+    };
+    let mut expected: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for k in &handler_keys {
+        expected.insert(actor_handler_key_to_exported_type_prefix(k));
+    }
+    let mut errors = Vec::new();
+    for stmt in &program.body {
+        let Statement::ExportNamedDeclaration(export) = stmt else {
+            continue;
+        };
+        let Some(decl) = &export.declaration else {
+            continue;
+        };
+        let name = match decl {
+            Declaration::TSTypeAliasDeclaration(a) => a.id.name.as_str(),
+            Declaration::TSInterfaceDeclaration(i) => i.id.name.as_str(),
+            _ => continue,
+        };
+        if name == "State" {
+            continue;
+        }
+        let stem = if let Some(s) = name.strip_suffix("Input") {
+            s
+        } else if let Some(s) = name.strip_suffix("Output") {
+            s
+        } else {
+            continue;
+        };
+        if stem.is_empty() {
+            continue;
+        }
+        if FORBIDDEN_HANDLER_TYPE_PREFIXES
+            .iter()
+            .any(|p| name.starts_with(p))
+        {
+            continue;
+        }
+        if !expected.contains(stem) {
+            let keys_hint = if handler_keys.is_empty() {
+                "(handlers object is empty)".to_string()
+            } else {
+                handler_keys.join(", ")
+            };
+            errors.push(format!(
+                "Actor unit exports `{name}` but no `handlers` key maps to that type prefix \
+                 `{stem}` (expected stem for each key: first character uppercased, rest unchanged; \
+                 handler keys found: {keys_hint})"
+            ));
         }
     }
     errors

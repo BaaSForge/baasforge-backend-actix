@@ -1,4 +1,6 @@
 pub mod definitions;
+#[cfg(feature = "unit_technical_reviewer")]
+mod handler_keys;
 pub mod metadata;
 pub mod rules;
 pub mod type_extractor;
