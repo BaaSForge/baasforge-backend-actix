@@ -1,6 +1,8 @@
 use crate::database;
 use crate::libs::api_response::api_error;
-use crate::libs::unit_slug::validate_full_unit_id_for_tool;
+use crate::libs::unit_slug::{
+    normalize_full_unit_id_arg, parse_unit_path, validate_full_unit_id_for_tool,
+};
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
@@ -1207,6 +1209,51 @@ fn default_page_size() -> u32 {
     20
 }
 
+const MAX_RELEASE_UNITS_PATH_ID_FILTER_ITEMS: usize = 1_000;
+
+fn release_unit_path_key(u: &ProjectUnitResponse) -> String {
+    format!(
+        "{}.{}.{}.{}",
+        u.context_slug,
+        u.module_slug,
+        u.unit_type.as_slug(),
+        u.unit_name_slug
+    )
+}
+
+fn normalize_release_unit_path_filters(paths: &[String]) -> Result<HashSet<String>, String> {
+    let mut out = HashSet::new();
+    for p in paths {
+        let t = p.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let n = normalize_full_unit_id_arg(t);
+        let parsed = parse_unit_path(&n)?;
+        out.insert(format!(
+            "{}.{}.{}.{}",
+            parsed.context_slug,
+            parsed.module_slug,
+            parsed.unit_type.as_slug(),
+            parsed.unit_name_slug
+        ));
+    }
+    Ok(out)
+}
+
+fn normalize_release_unit_id_filters(ids: &[String]) -> Result<HashSet<String>, String> {
+    let mut out = HashSet::new();
+    for id in ids {
+        let n = normalize_full_unit_id_arg(id);
+        if n.is_empty() {
+            continue;
+        }
+        validate_full_unit_id_for_tool(&n)?;
+        out.insert(n);
+    }
+    Ok(out)
+}
+
 /// `(context_slug, module_slug)` sent together; used to filter release units (see [`handle_list_project_release_units_all`]).
 #[derive(Debug, Clone, Deserialize)]
 pub struct ContextModulePair {
@@ -1229,14 +1276,21 @@ pub struct ListReleaseUnitsAllBody {
     /// When non-empty, only rows whose `(context_slug, module_slug)` matches one of these pairs.
     #[serde(default)]
     pub context_module_pairs: Vec<ContextModulePair>,
+    #[serde(default)]
+    pub units_paths: Vec<String>,
+    #[serde(default)]
+    pub units_ids: Vec<String>,
 }
 
-/// Filters, sorts, and paginates in-memory. Non-empty filter dimensions are combined with AND.
+/// Filters, sorts, and optionally paginates in-memory.
 fn filter_sort_paginate_release_units(
     mut units: Vec<ProjectUnitResponse>,
     unit_types: &[ProjectUnitType],
     context_slugs: &[String],
     context_module_pairs: &[ContextModulePair],
+    path_filter: Option<&HashSet<String>>,
+    id_filter: Option<&HashSet<String>>,
+    skip_pagination: bool,
     page: u32,
     page_size: u32,
 ) -> (Vec<ProjectUnitResponse>, u64, u32, u32) {
@@ -1293,6 +1347,14 @@ fn filter_sort_paginate_release_units(
         {
             return false;
         }
+        if path_filter.is_some() || id_filter.is_some() {
+            let path_ok = path_filter.is_some_and(|s| s.contains(&release_unit_path_key(u)));
+            let nid = normalize_full_unit_id_arg(&u.id);
+            let id_ok = id_filter.is_some_and(|s| s.contains(&nid));
+            if !path_ok && !id_ok {
+                return false;
+            }
+        }
         true
     });
 
@@ -1305,6 +1367,10 @@ fn filter_sort_paginate_release_units(
     });
 
     let total = units.len() as u64;
+    if skip_pagination {
+        let n = units.len() as u32;
+        return (units, total, 1, n);
+    }
     let page = page.max(1);
     let page_size = page_size.clamp(1, 100);
     let offset = (page.saturating_sub(1) as usize).saturating_mul(page_size as usize);
@@ -1316,8 +1382,9 @@ fn filter_sort_paginate_release_units(
     (page_units, total, page, page_size)
 }
 
-/// All units in the release snapshot (`combinedUnitIDs`), with optional filters and pagination.
-/// [`ListReleaseUnitsAllBody::context_module_pairs`] must send `context_slug` and `module_slug` together per row.
+/// Combined release snapshot (`combinedUnitIDs`). Filters live in the JSON body; if `units_paths` and/or
+/// `units_ids` resolve to at least one value, every matching row is returned (no pagination).
+/// [`ListReleaseUnitsAllBody::context_module_pairs`] sends `context_slug` and `module_slug` per row.
 pub async fn handle_list_project_release_units_all(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -1332,6 +1399,33 @@ pub async fn handle_list_project_release_units_all(
 
     let (project_id, release_id) = path.into_inner();
     let user_id = access_payload.user_id;
+
+    if body.units_paths.len().saturating_add(body.units_ids.len()) > MAX_RELEASE_UNITS_PATH_ID_FILTER_ITEMS
+    {
+        return HttpResponse::BadRequest().json(api_error(
+            "Too many units_paths or units_ids entries in one request",
+            json!({ "max_total": MAX_RELEASE_UNITS_PATH_ID_FILTER_ITEMS }),
+        ));
+    }
+
+    let path_keys = match normalize_release_unit_path_filters(&body.units_paths) {
+        Ok(v) => v,
+        Err(msg) => {
+            return HttpResponse::BadRequest()
+                .json(api_error("Invalid units_paths entry", json!({ "detail": msg })));
+        }
+    };
+    let id_keys = match normalize_release_unit_id_filters(&body.units_ids) {
+        Ok(v) => v,
+        Err(msg) => {
+            return HttpResponse::BadRequest()
+                .json(api_error("Invalid units_ids entry", json!({ "detail": msg })));
+        }
+    };
+
+    let path_filter: Option<HashSet<String>> = (!path_keys.is_empty()).then_some(path_keys);
+    let id_filter: Option<HashSet<String>> = (!id_keys.is_empty()).then_some(id_keys);
+    let skip_pagination = path_filter.is_some() || id_filter.is_some();
 
     let page_req = body.page.max(1);
     let page_size_req = body.page_size.clamp(1, 100);
@@ -1366,7 +1460,12 @@ pub async fn handle_list_project_release_units_all(
 
         if keys.is_empty() {
             let empty: Vec<ProjectUnitResponse> = vec![];
-            return Ok(Some((empty, 0u64, page_req, page_size_req)));
+            let page_size_out = if skip_pagination {
+                0
+            } else {
+                page_size_req
+            };
+            return Ok(Some((empty, 0u64, page_req, page_size_out)));
         }
 
         let units = load_project_units_by_keys(conn, project_id, &keys)?;
@@ -1376,6 +1475,9 @@ pub async fn handle_list_project_release_units_all(
             &unit_types,
             &context_slugs,
             &context_module_pairs,
+            path_filter.as_ref(),
+            id_filter.as_ref(),
+            skip_pagination,
             page_req,
             page_size_req,
         );
