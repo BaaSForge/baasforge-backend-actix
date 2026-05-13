@@ -74,7 +74,8 @@ use crate::models::chat_messages::{
 };
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{
-    ChatSessionMessageCreatedPayload, ChatSessionMessageStatusChangePayload, WsServerEvent,
+    ChatSessionMessageCreatedPayload, ChatSessionMessageStatusChangePayload,
+    ChatSessionMessageUpdatedPayload, WsServerEvent,
 };
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
@@ -453,7 +454,8 @@ pub async fn execute_tool_async(
 type RedisConn = Arc<Mutex<redis::aio::MultiplexedConnection>>;
 
 /// Persists a tool message as Failed in the DB, merges `error` into the message JSON payload when
-/// possible (so LLM history replays include the failure reason), and notifies the client via WebSocket.
+/// possible (so LLM history replays include the failure reason), and notifies the client via WebSocket
+/// (`ChatSessionMessageUpdated` with payload so live clients match HTTP reload, plus status change).
 /// Call this from tool handlers on any failure path so that (1) the tool row shows Failed when
 /// listing messages from DB, and (2) maybe_complete_invoking_message can see it and update the
 /// invoker to Failed in DB and over WS.
@@ -467,7 +469,7 @@ pub async fn set_tool_message_failed(
     error: String,
 ) {
     let error_for_db = error.clone();
-    if let Err(e) = block_on_db_tokio(pool, move |conn| {
+    let updated_row = match block_on_db_tokio(pool, move |conn| {
         let row_opt = chat_messages::table
             .filter(chat_messages::id.eq(message_id))
             .select(chat_messages::payload)
@@ -475,7 +477,7 @@ pub async fn set_tool_message_failed(
             .optional()?;
 
         let Some(maybe_payload) = row_opt else {
-            return Ok(());
+            return Ok(None);
         };
 
         let new_payload = match maybe_payload {
@@ -488,20 +490,36 @@ pub async fn set_tool_message_failed(
             Some(_) | None => serde_json::json!({ "error": error_for_db }),
         };
 
-        diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+        let row = diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
             .set((
                 chat_messages::status.eq(ChatMessageStatus::Failed),
                 chat_messages::payload.eq(Some(new_payload)),
             ))
-            .execute(conn)?;
-        Ok::<_, diesel::result::Error>(())
+            .returning(crate::models::chat_messages::ChatMessageRow::as_returning())
+            .get_result(conn)
+            .optional()?;
+        Ok::<_, diesel::result::Error>(row)
     })
     .await
     {
-        tracing::error!(%message_id, "set_tool_message_failed: DB update failed: {}", e);
-    }
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(%message_id, "set_tool_message_failed: DB update failed: {}", e);
+            None
+        }
+    };
+    let Some(row) = updated_row else {
+        return;
+    };
     let channel = user_channel(user_id);
-    let event =
+    let message = ChatMessageResponse::from(row);
+    let updated_event =
+        WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+            project_id,
+            session_id,
+            message,
+        });
+    let status_event =
         WsServerEvent::ChatSessionMessageStatusChange(ChatSessionMessageStatusChangePayload {
             project_id,
             session_id,
@@ -509,7 +527,13 @@ pub async fn set_tool_message_failed(
             status: ChatMessageStatus::Failed,
         });
     let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &updated_event).await {
+        tracing::warn!(
+            "set_tool_message_failed: failed to publish message updated: {}",
+            e
+        );
+    }
+    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &status_event).await {
         tracing::warn!(
             "set_tool_message_failed: failed to publish status change: {}",
             e
