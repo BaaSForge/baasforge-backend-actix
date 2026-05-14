@@ -165,6 +165,7 @@ tokio-stream = "0.1.18"
 async-nats = "0.46"
 
 oxc_allocator = { version = "0.123", optional = true }
+oxc_diagnostics = { version = "0.123", optional = true }
 oxc_parser = { version = "0.123", optional = true }
 oxc_ast = { version = "0.123", optional = true }
 oxc_ast_visit = { version = "0.123", optional = true }
@@ -177,6 +178,7 @@ oxc_syntax = { version = "0.123", optional = true }
 [features]
 unit_technical_reviewer = [
     "dep:oxc_allocator",
+    "dep:oxc_diagnostics",
     "dep:oxc_parser",
     "dep:oxc_ast",
     "dep:oxc_ast_visit",

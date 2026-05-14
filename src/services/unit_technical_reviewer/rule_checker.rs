@@ -266,6 +266,38 @@ fn append_hints(out: &mut String, entries: Vec<(&'static str, &'static str)>) {
 
 // ── Public entry point ────────────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "unit_technical_reviewer")]
+fn byte_offset_to_line_column(source: &str, byte_offset: usize) -> (usize, usize) {
+    let byte_offset = byte_offset.min(source.len());
+    let prefix = &source[..byte_offset];
+    let line = prefix.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1;
+    let line_start = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let column = byte_offset.saturating_sub(line_start).saturating_add(1);
+    (line, column)
+}
+
+#[cfg(feature = "unit_technical_reviewer")]
+fn format_oxc_parse_error(source: &str, diagnostic: &oxc_diagnostics::OxcDiagnostic) -> String {
+    let message = diagnostic.message.as_ref();
+    let Some(labels) = diagnostic.labels.as_ref() else {
+        return format!("Parse error: {message}");
+    };
+    let label = labels
+        .iter()
+        .find(|l| l.primary())
+        .or_else(|| labels.first());
+    let Some(label) = label else {
+        return format!("Parse error: {message}");
+    };
+    let start = label.offset();
+    let end = start.saturating_add(label.len());
+    let (line_s, col_s) = byte_offset_to_line_column(source, start);
+    let (line_e, col_e) = byte_offset_to_line_column(source, end);
+    format!(
+        "Parse error: {message} at L{line_s}:C{col_s}-L{line_e}:C{col_e} (bytes {start}..{end})"
+    )
+}
+
 /// Runs all applicable rules for the given operation and unit type.
 ///
 /// - `operation`  — whether the LLM is creating, modifying, or removing the unit.
@@ -299,7 +331,7 @@ pub fn run_rule_check(
             return ret
                 .errors
                 .iter()
-                .map(|e| format!("Parse error: {e}"))
+                .map(|e| format_oxc_parse_error(code, e))
                 .collect();
         }
         Some(ret)
