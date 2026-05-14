@@ -23,7 +23,7 @@ pub enum UnitMetadata {
     Actor(actor::metadata::ActorUnitMetadata),
 }
 
-/// Snake-case ids for each unit kind. Same order as [`all_briefs`] / [`all_details`] and
+/// Snake-case ids for each unit kind. Same order as [`all_briefs`] / [`all_details`] / [`all_runtimes`] and
 /// [`crate::models::projects::ProjectUnitType`] (serde snake_case). Keep in sync when adding a unit definition module.
 macro_rules! define_unit_kind_slugs {
     ($first:literal $(, $rest:literal)*) => {
@@ -93,6 +93,31 @@ pub fn all_communications() -> String {
     ROWS.iter()
         .map(|(title, comm)| format!("### {title}\n\n{comm}\n"))
         .collect()
+}
+
+// Prefixed to [`all_runtimes`] output once (before per-unit `RUNTIME` blocks).
+const RUNTIME_PROMPT_EXPORTED_TYPES_PITFALL: &str = r#"### Pitfall — dashboard endpoints follow exported types only
+
+Endpoint documentation and the HTTP client in the dashboard are **generated automatically** from the **types exported in the unit code**. If those exports are wrong or do not match the real unit definition (handlers, payloads and ...), the generated API surface is wrong too, because it **only** relies on those exported types—so it is important they **match the actual unit code**.
+
+**Critical:** Those auto-generated endpoints in the dashboard and its documentation **are not editable by the user**. They always follow the types exported in the unit code. If the unit exports wrong types, the generated documentation and try-it flows will **keep** invoking the unit the wrong way, and the user **cannot** fix that in the dashboard UI alone—it stays automatic from exports until the unit source exports the correct types.
+
+"#;
+
+/// Per-unit `RUNTIME` prompt text for each kind, prefixed once with a shared pitfall: dashboard
+/// HTTP docs and try-it clients are generated from exported types only and are not user-editable.
+pub fn all_runtimes() -> String {
+    const ROWS: &[(&str, &str)] = &[
+        (api::TITLE, api::RUNTIME),
+        (workflow::TITLE, workflow::RUNTIME),
+        (queue_worker::TITLE, queue_worker::RUNTIME),
+        (actor::TITLE, actor::RUNTIME),
+    ];
+    let per_kind: String = ROWS
+        .iter()
+        .map(|(title, runtime)| format!("### {title}\n\n{runtime}\n"))
+        .collect();
+    format!("{RUNTIME_PROMPT_EXPORTED_TYPES_PITFALL}{per_kind}")
 }
 
 pub fn all_metadata() -> String {

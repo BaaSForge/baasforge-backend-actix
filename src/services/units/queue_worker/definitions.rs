@@ -258,5 +258,23 @@ Outbound (what THIS worker can do) — `unitPath` / `actorId` / `instanceId` fol
 same `*UnitPathOrId` and branded-id rules as in `@sdk` (cast plain strings with `as`).
 "#;
 
+pub const RUNTIME: &str = r#"
+### Automatically generated endpoints for Queue Worker units
+
+These endpoints are created automatically by the platform, and user can interact with them through the dashboard. They are internal to the dashboard only — not the public HTTP surface for external integrations (unlike API unit trigger URLs).
+
+HTTP trigger prefix `/api/v1/trigger/workerQueue/`. Stage URLs insert `/stage/{runtime_id}/` after `{project_id}/`.
+
+Tail after project id:
+- Enqueue: `POST .../{project_id}/{context_slug}/{module_slug}/{worker_name_slug}` — JSON body matches exported `Input`; response includes a `runId` (UUID string).
+- Run status: `GET .../{project_id}/{context}/{module}/{worker_name_slug}/{run_id}/status`
+- Run result: `GET .../{project_id}/{context}/{module}/{worker_name_slug}/{run_id}/result`
+- Cancel run: `POST .../{project_id}/{context}/{module}/{worker_name_slug}/{run_id}/cancel`
+
+`{worker_name_slug}` is the unit’s name segment (same as in the logical path `context.module.queue_worker.<slug>`). The trigger UI types the enqueue body from exported `Input` and documents completion via exported `Output`.
+
+Example (production enqueue): `POST /api/v1/trigger/workerQueue/{project_id}/jobs/media/transcode-video` with JSON body matching `Input`.
+"#;
+
 pub const METADATA: &str = r#"
 "#;

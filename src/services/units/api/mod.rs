@@ -3,7 +3,7 @@ pub mod metadata;
 pub mod rules;
 pub mod type_extractor;
 
-pub use definitions::{BRIEF, CODE_EXAMPLES, COMMUNICATION, DETAIL, METADATA, TITLE};
+pub use definitions::{BRIEF, CODE_EXAMPLES, COMMUNICATION, DETAIL, METADATA, RUNTIME, TITLE};
 
 /// Build the persisted `UnitMetadata` for an API unit after all checks pass.
 ///

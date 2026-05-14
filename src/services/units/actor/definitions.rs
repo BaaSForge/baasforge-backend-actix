@@ -13,8 +13,9 @@ An actor unit must have a default export produced by the `actor()` function:
   export default actor<TState>({ state, handlers, metadata?, onAlarm?, onDeadLetter? });
 
 `state` — the initial state value for new actor instances. It is deep-cloned on first
-activation. Mutate `ctx.state` directly inside handlers; the updated state is persisted
-atomically after each successful handler execution.
+activation. Update handler state by mutating `ctx.state` in place or by assigning a new
+object to `ctx.state` (e.g. `ctx.state = { ...prev, n: next }`). The resulting state is
+persisted atomically after each successful handler execution.
 
 Handler return values are serialized and sent back to the caller.
 
@@ -306,6 +307,28 @@ Outbound (what THIS actor can do) — every sync-wait call blocks the handler un
 returns; handler execution is sequential per actor instance so long blocking calls
 stall the mailbox. Use `ActorInstanceId` / `WorkflowInstanceId` (`as T` from plain
 `string` when needed); `unitPath` strings must satisfy `ActorUnitPathOrId`, etc.
+"#;
+
+pub const RUNTIME: &str = r#"
+### Automatically generated endpoints for Actor units
+
+These endpoints are created automatically by the platform, and user can interact with them through the dashboard. They are internal to the dashboard only — not the public HTTP surface for external integrations (unlike API unit trigger URLs).
+
+HTTP trigger prefix `/api/v1/trigger/actor/`. Stage URLs insert `/stage/{runtime_id}/` immediately after `{project_id}/`.
+
+Tail path (all slugs URL-safe): `{context_slug}/{module_slug}/{unit_name_slug}/{actor_id}/...`
+
+Operations:
+- Invoke handler: `POST .../{context}/{module}/{unit}/{actor_id}/{handler_name}` — request body is JSON matching the exported `{HandlerName}Input` type for that handler; response `{ "result": ... }` matches `{HandlerName}Output` when the query flag waits (see below).
+- Fire-and-forget same POST: add query `await=false` (default is `await=true`). When `await=true`, the server runs the handler and returns `result`; when `await=false`, the server accepts the message and returns `{ "delivered": true }` without waiting for handler completion.
+- Read durable state: `GET .../{context}/{module}/{unit}/{actor_id}/state`
+- Database snapshot (debug/ops): `GET .../{context}/{module}/{unit}/{actor_id}/snapshot-pg`
+- Passivate: `POST .../{context}/{module}/{unit}/{actor_id}/passivate`
+- Delete instance: `DELETE .../{context}/{module}/{unit}/{actor_id}`
+
+Handler names in the URL match the keys in `handlers`. The dashboard builds one trigger action per handler; request/response JSON schemas come from the exported `{HandlerName}Input` and `{HandlerName}Output` types.
+
+Example (production, wait for result): `POST /api/v1/trigger/actor/{project_id}/shop/cart/cart-actor/user-42/increment` with body `{"by":1}`.
 "#;
 
 pub const METADATA: &str = r#"

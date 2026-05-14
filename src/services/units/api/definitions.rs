@@ -483,5 +483,23 @@ Common mistakes to avoid:
   plain values. `await` on a non-Promise is a no-op but misleads anyone reading the code.
 "#;
 
+pub const RUNTIME: &str = r#"
+### Automatically generated endpoints for API units
+
+These endpoints are created automatically by the platform, and user can interact with them through the dashboard. For API units, the same URLs are public: they can be triggered from outside the dashboard by any HTTP client (webhooks, curl, other services).
+
+HTTP trigger (Postman-style dashboard and external HTTP callers; separate from in-process `sdk.*`).
+
+URL pattern:
+- Production: `/api/v1/trigger/{project_id}/{context_slug}/{module_slug}/{unit_name_slug}`
+- Stage: `/api/v1/trigger/{project_id}/stage/{runtime_id}/{context_slug}/{module_slug}/{unit_name_slug}`
+
+The path is fixed (no extra path segments). Variable input is only query string and body.
+
+Which HTTP verb applies to this unit is not in the URL: the dashboard uses unit metadata JSON field `method` (e.g. GET, POST) together with the URL above so the trigger client picks the correct verb. Typing for the trigger UI and cross-unit imports comes from exported `RequestBody`, `QueryParams`, and `ResponseBody`; the host forwards the real request into `handleRequest` as method, URL (including query), headers, and body.
+
+Example (production): `GET /api/v1/trigger/{project_id}/shop/orders/list-orders?status=pending` — query keys align with `QueryParams`; `RequestBody` is `never` when there is no body.
+"#;
+
 pub const METADATA: &str = r#"
 "#;

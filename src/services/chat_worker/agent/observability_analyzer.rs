@@ -103,6 +103,9 @@ Brevity between tools: minimal assistant text; put the full diagnosis in **`deta
 - Form **ranked hypotheses** (most likely first), tie each to **observable evidence** and to **relevant units** when applicable.
 - Say what would **confirm or falsify** each hypothesis (extra logs, repro, metrics).
 
+1b. Auto-generated trigger endpoints vs unit code (pitfall)
+Users may invoke a unit only through **platform-generated** HTTP trigger URLs (dashboard / internal triggers). Those URLs and actions are derived from **exported types** and metadata for that unit—not hand-edited per deployment. If exports **do not align** with the unit’s real entry points (**handler keys** on actors/workflows, **`handleRequest`** on API units, worker entrypoints, etc.), the generated endpoints are **wrong**; the user still hits them and cannot fix the URL surface directly—they must fix the **source exports and definitions** so they match. Whenever you load a relevant unit’s code, **verify** that exported types used for automatic triggers line up with the defined handlers/functions/methods. If they diverge, **report that explicitly** in **`detailed_report`** alongside any other findings, because mismatch here is a first-class root cause, not a secondary detail.
+
 2. Unit loader (**load_latest_production_release_units**)
 Pull **current live unit definitions** into this thread with a **natural-language `query`** (behaviors, domains, failure themes). Narrow or re-query if results are too broad or empty.
 
@@ -124,6 +127,7 @@ pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::n
         "{SYSTEM_PROMPT_CORE}\n\n\
         ## Unit type reference (detailed)\n\n{}\n\
         ## Unit communication reference\n\nHow each unit type communicates with the outside world and with other units.\n\n{}\n\
+        ## Unit runtime (dashboard trigger URLs)\n\nAutomatically generated HTTP surfaces per unit type—use when mapping traces or logs to how a unit was invoked.\n\n{}\n\
         ## Unit code examples\n\nFull working examples for each unit type.\n\n{}\n\
         ## Unit metadata reference\n\nPersisted metadata schema and semantics for each unit type.\n\n{}\n\
         ## Platform SDK (`@sdk`)\n\n\
@@ -137,6 +141,7 @@ pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::n
         {}\n",
         units_definitions::all_details(),
         units_definitions::all_communications(),
+        units_definitions::all_runtimes(),
         units_definitions::all_code_examples(),
         units_definitions::all_metadata(),
         include_str!("../../../tsgo/@sdk.d.ts"),

@@ -630,5 +630,25 @@ SIDE EFFECTS — every one wrapped in `await ctx.run("name", () => ...)`:
   );
 "#;
 
+pub const RUNTIME: &str = r#"
+### Automatically generated endpoints for Workflow units
+
+These endpoints are created automatically by the platform, and user can interact with them through the dashboard. They are internal to the dashboard only — not the public HTTP surface for external integrations (unlike API unit trigger URLs).
+
+HTTP trigger prefix `/api/v1/trigger/wf/`. Stage URLs insert `/stage/{runtime_id}/` after `{project_id}/`.
+
+After `{project_id}/` (and optional `stage/{runtime_id}/`), the next three segments are `{context_slug}/{module_slug}/{workflow_name_slug}` — same slugs as in the logical unit path `{context_slug}.{module_slug}.workflow.{workflow_name_slug}`.
+
+- Start a new instance: `POST .../{project_id}/{context}/{module}/{workflow_slug}` — JSON body is the exported `Input` type; response includes `instanceId` and initial status.
+- Call a shared handler on a running instance: `POST .../{project_id}/.../{workflow_slug}/{instance_id}/handlers/{handler_name}` — JSON body matches the exported `{HandlerName}Input` for that handler; response data matches `{HandlerName}Output`.
+- Status: `GET .../{instance_id}/status`
+- Final result (when complete): `GET .../{instance_id}/result`
+- Cancel: `POST .../{instance_id}/cancel`
+
+The dashboard lists start with `Input`/`Output` and lists each `handlers` entry with its `{Name}Input`/`{Name}Output` exports. `instance_id` is opaque to the client until returned from start.
+
+Example (production start): `POST /api/v1/trigger/wf/{project_id}/billing/flows/invoice-wf` with body matching `Input`.
+"#;
+
 pub const METADATA: &str = r#"
 "#;
