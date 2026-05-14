@@ -273,6 +273,11 @@ pub struct ProjectRuntimeWithLiveReleaseApi {
     pub live_release: Option<ProjectReleaseWithBaseline>,
 }
 
+#[derive(Serialize)]
+pub struct LiveReleaseByRevisionApiResponse {
+    pub runtimes: Vec<ProjectRuntimeWithLiveReleaseApi>,
+}
+
 /// One unit pointer in [`ReleaseUnitsMetadata`]: `unit_id` is the full stored id (path + revision).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

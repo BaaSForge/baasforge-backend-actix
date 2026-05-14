@@ -1,0 +1,6 @@
+ALTER TABLE project_releases
+    DROP CONSTRAINT IF EXISTS uq_project_releases_project_id_is_stage_revision;
+
+ALTER TABLE project_releases
+    ADD CONSTRAINT uq_project_releases_project_id_is_stage_revision_chat_session
+        UNIQUE (project_id, is_stage, revision, chat_session_id);

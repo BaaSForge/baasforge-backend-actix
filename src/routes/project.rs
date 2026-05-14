@@ -6,10 +6,11 @@ use crate::libs::unit_slug::{
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
 use crate::models::projects::{
-    PlatformEnvironmentType, ProjectDetailResponse, ProjectInsert, ProjectReleaseResponse,
-    ProjectReleaseWithBaseline, ProjectResponse, ProjectRuntimeInsert, ProjectRuntimeResponse,
-    ProjectRuntimeWithLiveReleaseApi, ProjectRuntimeWithLiveReleaseResponse,
-    ProjectRuntimesBaseUrls, ProjectUnitResponse, ProjectUnitType,
+    LiveReleaseByRevisionApiResponse, PlatformEnvironmentType, ProjectDetailResponse,
+    ProjectInsert, ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectResponse,
+    ProjectRuntimeInsert, ProjectRuntimeResponse, ProjectRuntimeWithLiveReleaseApi,
+    ProjectRuntimeWithLiveReleaseResponse, ProjectRuntimesBaseUrls, ProjectUnitResponse,
+    ProjectUnitType,
 };
 use crate::routes::chat::handlers::{
     broadcast_production_live_release_changed, broadcast_stage_release_create_effects,
@@ -644,8 +645,9 @@ pub struct ListProjectReleasesQuery {
 }
 
 /// Query for [`handle_get_project_release_by_revision`]: `environment` is `stage` or `prod`; `revision`
-/// identifies the release lane. The handler returns 404 if missing, 409 if the revision is ambiguous,
-/// 400 if not live, 200 when that revision is the environment live release.
+/// is the lane revision. 404 if no row exists, 400 if none of those rows are live on a runtime in
+/// that environment, 200 with one entry per matching runtime (same numeric revision can map to
+/// different `project_releases.id` values on different stage runtimes).
 #[derive(Deserialize)]
 pub struct GetProjectReleaseByRevisionQuery {
     pub environment: PlatformEnvironmentType,
@@ -1049,53 +1051,67 @@ pub async fn handle_get_project_release_by_revision(
 
     enum LookupOutcome {
         NotFound,
-        Conflict,
         NotLive,
-        Ok(ProjectReleaseWithBaseline),
+        Ok(LiveReleaseByRevisionApiResponse),
     }
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
-        let candidates: Vec<ProjectReleaseResponse> = project_releases::table
+        let release_ids: Vec<Uuid> = project_releases::table
             .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
             .filter(project_releases::project_id.eq(project_id))
             .filter(project_releases::is_stage.eq(is_stage))
             .filter(project_releases::revision.eq(revision))
-            .limit(2)
-            .select(ProjectReleaseResponse::as_select())
-            .load::<ProjectReleaseResponse>(conn)?;
+            .select(project_releases::id)
+            .load::<Uuid>(conn)?;
 
-        match candidates.len() {
-            0 => Ok(LookupOutcome::NotFound),
-            1 => {
-                let release = candidates
-                    .into_iter()
-                    .next()
-                    .expect("one candidate release");
-
-                let points_here = project_runtimes::table
-                    .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
-                    .filter(projects::owner_user_id.eq(user_id))
-                    .filter(project_runtimes::project_id.eq(project_id))
-                    .filter(project_runtimes::environment.eq(rt_env))
-                    .filter(project_runtimes::live_release_id.eq(Some(release.id)))
-                    .select(project_runtimes::id)
-                    .first::<Uuid>(conn)
-                    .optional()?
-                    .is_some();
-
-                if !points_here {
-                    return Ok(LookupOutcome::NotLive);
-                }
-
-                let mut enriched =
-                    attach_base_production_releases(conn, project_id, vec![release])?;
-                Ok(LookupOutcome::Ok(
-                    enriched.pop().expect("one release row"),
-                ))
-            }
-            _ => Ok(LookupOutcome::Conflict),
+        if release_ids.is_empty() {
+            return Ok(LookupOutcome::NotFound);
         }
+
+        let rows: Vec<ProjectRuntimeWithLiveReleaseResponse> = project_runtimes::table
+            .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
+            .left_join(
+                project_releases::table
+                    .on(project_runtimes::live_release_id.eq(project_releases::id.nullable())),
+            )
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(project_runtimes::project_id.eq(project_id))
+            .filter(project_runtimes::environment.eq(rt_env))
+            .filter(project_runtimes::live_release_id.eq_any(&release_ids))
+            .order(project_runtimes::id.asc())
+            .select(ProjectRuntimeWithLiveReleaseResponse::as_select())
+            .load::<ProjectRuntimeWithLiveReleaseResponse>(conn)?;
+
+        if rows.is_empty() {
+            return Ok(LookupOutcome::NotLive);
+        }
+
+        let to_enrich: Vec<ProjectReleaseResponse> =
+            rows.iter().filter_map(|r| r.live_release.clone()).collect();
+        let by_id: HashMap<Uuid, ProjectReleaseWithBaseline> = if to_enrich.is_empty() {
+            HashMap::new()
+        } else {
+            attach_base_production_releases(conn, project_id, to_enrich)?
+                .into_iter()
+                .map(|e| (e.release.id, e))
+                .collect()
+        };
+        let runtimes: Vec<ProjectRuntimeWithLiveReleaseApi> = rows
+            .into_iter()
+            .map(|r| {
+                let live_release = r
+                    .live_release
+                    .as_ref()
+                    .and_then(|lr| by_id.get(&lr.id).cloned());
+                ProjectRuntimeWithLiveReleaseApi {
+                    runtime: r.runtime,
+                    live_release,
+                }
+            })
+            .collect();
+
+        Ok(LookupOutcome::Ok(LiveReleaseByRevisionApiResponse { runtimes }))
     })
     .await
     {
@@ -1112,12 +1128,8 @@ pub async fn handle_get_project_release_by_revision(
             "No release with this revision exists for this environment",
             json!({}),
         )),
-        LookupOutcome::Conflict => HttpResponse::Conflict().json(api_error(
-            "Multiple releases share this revision for this environment",
-            json!({}),
-        )),
         LookupOutcome::NotLive => HttpResponse::BadRequest().json(api_error(
-            "A release with this revision exists but it is not the live release for this environment",
+            "A release with this revision exists but it is not the live release for any runtime in this environment",
             json!({}),
         )),
         LookupOutcome::Ok(enriched) => HttpResponse::Ok().json(api_success(

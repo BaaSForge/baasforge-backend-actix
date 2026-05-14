@@ -20,6 +20,7 @@ use crate::services::chat_worker::db::{
     project_units_with_latest_revision,
 };
 use chrono::{DateTime, Utc};
+use diesel::dsl::max;
 use diesel::prelude::*;
 use diesel::sql_types::Integer;
 use std::collections::{HashMap, HashSet};
@@ -468,8 +469,8 @@ pub enum ProjectReleaseRevisionLookup {
 }
 
 /// Looks up `project_releases.id` for this project, revision, stage vs production lane, **and**
-/// chat session. Revision floats are not unique per project; callers must always pass the session
-/// that owns the release row.
+/// chat session. Callers that only know the revision (no session) should use release id or the
+/// live-by-revision endpoint, which resolves all matching runtimes.
 pub fn project_release_id_for_revision_lane(
     conn: &mut PooledConn,
     project_id: Uuid,
@@ -913,51 +914,24 @@ pub fn attach_is_draft_flags_from_latest_production(
     Ok(units)
 }
 
-/// 1-based index of this message among `ReleaseControllerBox` rows in the session (order: `created_at`, `id`).
-pub fn release_controller_ordinal_in_session(
-    conn: &mut PooledConn,
-    session_id: Uuid,
-    message_id: Uuid,
-) -> Result<i64, diesel::result::Error> {
-    let target = chat_messages::table
-        .filter(chat_messages::id.eq(message_id))
-        .filter(chat_messages::chat_session_id.eq(session_id))
-        .select((chat_messages::created_at, chat_messages::id))
-        .first::<(DateTime<Utc>, Uuid)>(conn)?;
-
-    chat_messages::table
-        .filter(chat_messages::chat_session_id.eq(session_id))
-        .filter(chat_messages::type_.eq(ChatMessageType::ReleaseControllerBox))
-        .filter(
-            chat_messages::created_at
-                .lt(target.0)
-                .or(chat_messages::created_at
-                    .eq(target.0)
-                    .and(chat_messages::id.le(message_id))),
-        )
-        .count()
-        .get_result(conn)
+fn next_project_lane_release_revision(max_rev: f64) -> f64 {
+    if max_rev <= 0.0 {
+        return 1.1;
+    }
+    let ticks = (max_rev * 10.0).round() as i64;
+    (ticks + 1) as f64 / 10.0
 }
 
-#[inline]
-fn compose_chat_release_revision(major: i64, ordinal: i64) -> f64 {
-    major as f64 + ordinal as f64 / 10.0
-}
-
-/// Revision for a release created from a release-controller message: `major + ordinal/10`, with
-/// `major = floor(session baseline prod revision) + 1` (or `1` if none), and `ordinal` the 1-based index among
-/// [`ChatMessageType::ReleaseControllerBox`] rows in the session (same rule for stage and production).
+/// Next revision for a release created from a release-controller message: strictly greater than every
+/// existing row for this project and lane (`is_stage`), using one-decimal steps (`4.1` → `4.2`).
 ///
-/// Uses the chat session’s baseline production release (see [`load_baseline_production_release_for_chat_session`]),
-/// i.e. the live production release when the session was created—so multiple controller rows in the same chat share one major.
-///
-/// Call only inside an **outer** database transaction. Takes the same lane advisory lock as the old
-/// `MAX(revision)+1` path so concurrent in-chat creates serialize per project and lane.
+/// Call only inside an **outer** database transaction. Uses a per-project per-lane advisory lock so
+/// concurrent creates serialize.
 pub fn revision_for_chat_release_controller(
     conn: &mut PooledConn,
     project_id: Uuid,
-    session_id: Uuid,
-    message_id: Uuid,
+    _session_id: Uuid,
+    _message_id: Uuid,
     is_stage: bool,
 ) -> Result<f64, diesel::result::Error> {
     let (k1, k2) = project_release_lane_advisory_lock_keys(project_id, is_stage);
@@ -966,13 +940,13 @@ pub fn revision_for_chat_release_controller(
         .bind::<Integer, _>(k2)
         .execute(conn)?;
 
-    let (_baseline_id, baseline_row) =
-        load_baseline_production_release_for_chat_session(conn, project_id, session_id)?;
-    let base_floor = baseline_row.map(|r| r.revision.floor()).unwrap_or(0.0);
-    let major = (base_floor as i64).saturating_add(1);
+    let max_rev: Option<f64> = project_releases::table
+        .filter(project_releases::project_id.eq(project_id))
+        .filter(project_releases::is_stage.eq(is_stage))
+        .select(max(project_releases::revision))
+        .first(conn)?;
 
-    let ordinal = release_controller_ordinal_in_session(conn, session_id, message_id)?;
-    Ok(compose_chat_release_revision(major, ordinal))
+    Ok(next_project_lane_release_revision(max_rev.unwrap_or(0.0)))
 }
 
 /// `true` when the stage row is scoped to `session_id` (`project_releases.chat_session_id`).
@@ -987,8 +961,8 @@ pub fn stage_release_belongs_to_chat_session(
 /// Inserts a **production** `project_releases` row by copying persisted content from a **stage** row.
 ///
 /// Callers must load `stage` from the database (`is_stage == true`, matching project/session) and
-/// pass the same `stage_release_id` the client sent. This function assigns a new production
-/// [`revision_for_chat_release_controller`] (production lane); it does **not** recompute
+/// pass the same `stage_release_id` the client sent. This function assigns the next production-lane
+/// revision via [`revision_for_chat_release_controller`]; it does **not** recompute
 /// [`ReleaseUnitsMetadata`]—that was fixed when the stage release was created.
 ///
 /// **Invariant:** `stage` must belong to `session_id` (see [`stage_release_belongs_to_chat_session`]);
