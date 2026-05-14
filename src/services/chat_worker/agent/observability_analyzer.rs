@@ -6,6 +6,7 @@ use crate::services::chat_worker::llm::tools::{
     analyze_observability_tool::ToolAnalyzeObservabilityArgs, fetch_release_traces,
     finish_observability_analysis, load_latest_production_release_units,
 };
+use crate::services::unit_technical_reviewer::rule_checker;
 use crate::services::units as units_definitions;
 use diesel::OptionalExtension;
 use diesel::prelude::*;
@@ -128,12 +129,18 @@ pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::n
         ## Platform SDK (`@sdk`)\n\n\
         All unit code runs in a Node.js TypeScript environment. The `@sdk` module is the \
         only way to interact with other units and platform primitives. \n\n\
-        ```typescript\n{}\n```\n",
+        ```typescript\n{}\n```\n\n\
+        ## Automated Code Rules\n\n\
+        The same rules below are enforced by the platform linter on create/modify/remove. When \
+        loaded unit source is relevant, use them to spot contract bugs and similar issues—describe findings in \
+        plain language in your report.\n\n\
+        {}\n",
         units_definitions::all_details(),
         units_definitions::all_communications(),
         units_definitions::all_code_examples(),
         units_definitions::all_metadata(),
         include_str!("../../../tsgo/@sdk.d.ts"),
+        rule_checker::rules_prompt(),
     );
     Box::leak(combined.into_boxed_str())
 });
