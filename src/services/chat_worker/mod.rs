@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_flow;
 pub mod ai_message;
 pub mod db;
 pub mod generation_lifecycle;

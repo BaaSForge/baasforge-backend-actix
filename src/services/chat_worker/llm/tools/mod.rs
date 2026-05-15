@@ -229,8 +229,9 @@ pub use crate::services::chat_worker::agent::tool_names_for_llm_session;
 
 fn tool_queue_registry_for_agent(
     agent: &ChatAgentType,
+    flow: &crate::services::chat_worker::agent_flow::AgentFlowSession,
 ) -> Vec<(&'static str, ChatMessageType, PayloadFromArgsFn)> {
-    let names = tool_names_for_llm_session(agent);
+    let names = tool_names_for_llm_session(agent, flow);
     tool_queue_registry()
         .iter()
         .filter(|(name, _, _)| names.contains(name))
@@ -261,9 +262,10 @@ pub fn tool_context_for_chat_session(
     session_id: Uuid,
     invoking_message_id: Uuid,
     agent: ChatAgentType,
+    flow: &crate::services::chat_worker::agent_flow::AgentFlowSession,
 ) -> ToolContext {
     let mut callbacks = HashMap::new();
-    for (name, message_type, payload_from_args) in tool_queue_registry_for_agent(&agent) {
+    for (name, message_type, payload_from_args) in tool_queue_registry_for_agent(&agent, flow) {
         let pool = pool.clone();
         let redis_conn = redis_conn.clone();
         let publisher = publisher.clone();
@@ -341,6 +343,71 @@ pub fn tool_context_for_chat_session(
     ToolContext { callbacks }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn persist_failed_tool_child_message(
+    pool: &DbPool,
+    redis_conn: Option<&RedisConn>,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
+    invoking_message_id: Uuid,
+    agent: ChatAgentType,
+    message_type: ChatMessageType,
+    insert_message_id: Uuid,
+    payload: Value,
+    log_ctx: &str,
+) {
+    let session_id_ins = session_id;
+    let agent_ins = agent.clone();
+    let payload_clone = payload.clone();
+    let row = match block_on_db_tokio(pool, move |conn| {
+        diesel::insert_into(chat_messages::table)
+            .values((
+                chat_messages::id.eq(insert_message_id),
+                chat_messages::chat_session_id.eq(session_id_ins),
+                chat_messages::role.eq(ChatSessionRoleType::Ai),
+                chat_messages::type_.eq(message_type),
+                chat_messages::payload.eq(Some(payload_clone)),
+                chat_messages::status.eq(ChatMessageStatus::Failed),
+                chat_messages::invoking_message_id.eq(Some(invoking_message_id)),
+                chat_messages::agent.eq(Some(agent_ins)),
+            ))
+            .returning(crate::models::chat_messages::ChatMessageRow::as_returning())
+            .get_result(conn)
+    })
+    .await
+    {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!(
+                %insert_message_id,
+                context = log_ctx,
+                "persist_failed_tool_child_message: insert failed: {}",
+                e
+            );
+            return;
+        }
+    };
+    let Some(redis_conn) = redis_conn else {
+        return;
+    };
+    let channel = user_channel(user_id);
+    let created_message = ChatMessageResponse::from(row);
+    let event = WsServerEvent::ChatSessionMessageCreated(ChatSessionMessageCreatedPayload {
+        project_id,
+        session_id,
+        message: created_message,
+    });
+    let mut guard = redis_conn.lock().await;
+    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+        tracing::warn!(
+            context = log_ctx,
+            "persist_failed_tool_child_message: failed to publish ChatSessionMessageCreated: {}",
+            e
+        );
+    }
+}
+
 /// Inserts a Failed tool row when `payload_from_args` rejects LLM arguments (nothing is published to
 /// the queue). The next LLM pass loads this row in session history so the model can correct inputs.
 #[allow(clippy::too_many_arguments)]
@@ -365,51 +432,82 @@ async fn persist_tool_args_parse_failure(
         "tool_call_id": tool_call_id,
         "raw_arguments": raw_arguments,
     });
-    let insert_message_id = message_id;
-    let session_id_ins = session_id;
-    let agent_ins = agent.clone();
-    let row = match block_on_db_tokio(pool, move |conn| {
-        diesel::insert_into(chat_messages::table)
-            .values((
-                chat_messages::id.eq(insert_message_id),
-                chat_messages::chat_session_id.eq(session_id_ins),
-                chat_messages::role.eq(ChatSessionRoleType::Ai),
-                chat_messages::type_.eq(message_type),
-                chat_messages::payload.eq(Some(payload.clone())),
-                chat_messages::status.eq(ChatMessageStatus::Failed),
-                chat_messages::invoking_message_id.eq(Some(invoking_message_id)),
-                chat_messages::agent.eq(Some(agent_ins)),
-            ))
-            .returning(crate::models::chat_messages::ChatMessageRow::as_returning())
-            .get_result(conn)
-    })
-    .await
-    {
-        Ok(row) => row,
-        Err(e) => {
-            tracing::error!(
-                %message_id,
-                %tool_name,
-                "persist_tool_args_parse_failure: insert failed: {}",
-                e
-            );
-            return;
-        }
-    };
-    let channel = user_channel(user_id);
-    let created_message = ChatMessageResponse::from(row);
-    let event = WsServerEvent::ChatSessionMessageCreated(ChatSessionMessageCreatedPayload {
+    persist_failed_tool_child_message(
+        pool,
+        Some(redis_conn),
+        user_id,
         project_id,
         session_id,
-        message: created_message,
-    });
-    let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
-        tracing::warn!(
-            "persist_tool_args_parse_failure: failed to publish ChatSessionMessageCreated: {}",
-            e
+        invoking_message_id,
+        agent,
+        message_type,
+        message_id,
+        payload,
+        "persist_tool_args_parse_failure",
+    )
+    .await;
+}
+
+/// When [`execute_tool_async`] fails before a normal tool row exists (e.g. callback not registered,
+/// queue publish error), insert a Failed child under the invoking AI Text row so
+/// [`maybe_complete_invoking_message`] can mark the parent Failed instead of leaving it stuck in
+/// Generating.
+#[allow(clippy::too_many_arguments)]
+pub async fn persist_tool_execution_failure(
+    pool: &DbPool,
+    redis_conn: Option<&RedisConn>,
+    user_id: Uuid,
+    project_id: Uuid,
+    session_id: Uuid,
+    invoking_message_id: Uuid,
+    agent: ChatAgentType,
+    tool_name: &str,
+    tool_call_id: Option<String>,
+    raw_arguments: &Value,
+    error: &str,
+) {
+    let message_type = tool_queue_registry()
+        .iter()
+        .find(|(name, _, _)| *name == tool_name)
+        .map(|(_, t, _)| *t)
+        .unwrap_or(ChatMessageType::Text);
+    let payload = if message_type == ChatMessageType::Text {
+        let text = format!(
+            "Tool `{}` could not be executed: {}",
+            tool_name,
+            error.trim()
         );
-    }
+        serde_json::to_value(TextPayload {
+            text,
+            ..Default::default()
+        })
+        .unwrap_or_else(|_| {
+            serde_json::json!({
+                "text": format!("Tool `{}` could not be executed.", tool_name),
+            })
+        })
+    } else {
+        serde_json::json!({
+            "error": error,
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "raw_arguments": raw_arguments,
+        })
+    };
+    persist_failed_tool_child_message(
+        pool,
+        redis_conn,
+        user_id,
+        project_id,
+        session_id,
+        invoking_message_id,
+        agent,
+        message_type,
+        new_uuid(),
+        payload,
+        "persist_tool_execution_failure",
+    )
+    .await;
 }
 
 pub fn all_tool_specs() -> Vec<ToolSpec> {

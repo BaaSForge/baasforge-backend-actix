@@ -9,6 +9,7 @@ use crate::routes::ws::events::{
 };
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::agent::system_prompt_for_agent;
+use crate::services::chat_worker::agent_flow::AgentFlowSession;
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::GenerateOutcome;
 use crate::services::chat_worker::llm::history::{
@@ -201,8 +202,8 @@ fn build_request_body(
 
 /// Build tools array for Claude Messages API. Each tool: name, description, input_schema (JSON Schema).
 /// Matches Anthropic format: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use
-fn to_tools_json(agent: &ChatAgentType) -> Vec<Value> {
-    let names = tools::tool_names_for_llm_session(agent);
+fn to_tools_json(agent: &ChatAgentType, flow: &AgentFlowSession) -> Vec<Value> {
+    let names = tools::tool_names_for_llm_session(agent, flow);
     tools::all_tool_specs()
         .into_iter()
         .filter(|t| names.contains(&t.name))
@@ -411,14 +412,16 @@ pub async fn call_claude_stream(
     queue_invoking_message_id: Option<Uuid>,
     stale_base_release: bool,
     base_runtime_endpoint: &str,
+    flow: AgentFlowSession,
 ) -> Result<GenerateOutcome, BoxError> {
     let system_prompt = system_prompt_for_agent(
         &agent,
         stale_base_release,
         project_id,
         base_runtime_endpoint,
+        &flow,
     );
-    let tools_list = to_tools_json(&agent);
+    let tools_list = to_tools_json(&agent, &flow);
     let tool_count = tools_list.len();
 
     let entries = session_messages_to_upstream_entries(session_messages, user_text);
@@ -701,11 +704,26 @@ pub async fn call_claude_stream(
                 )
                 .await
                 {
+                    let err_msg = e.to_string();
                     tracing::warn!(
                         tool = %r.tool_name,
-                        "Tool arg validation failed (Failed row persisted); continuing remaining tool calls: {}",
-                        e
+                        "Tool execution failed; persisting failed tool row: {}",
+                        err_msg
                     );
+                    tools::persist_tool_execution_failure(
+                        pool,
+                        redis_conn.as_ref(),
+                        user_id,
+                        project_id,
+                        session_id,
+                        message_id,
+                        agent.clone(),
+                        &r.tool_name,
+                        r.tool_call_id.clone(),
+                        &r.tool_arguments_to_pass,
+                        &err_msg,
+                    )
+                    .await;
                 }
             }
             Some(requested)

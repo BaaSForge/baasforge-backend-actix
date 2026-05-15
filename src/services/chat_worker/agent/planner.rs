@@ -37,6 +37,7 @@ pub fn load_history(
     // Apply planner/user filter in SQL before LIMIT. Otherwise the last FETCH_LIMIT rows can be
     // almost entirely developer (or other) sub-agent messages, and we drop planner tool-call /
     // tool-result pairs from context — or worse, keep a tool result without its invoker turn.
+    // AI rows require `agent = Planner` so nested sub-agent Text/tool rows never appear here.
     let rows = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))
         .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
@@ -47,9 +48,7 @@ pub fn load_history(
             chat_messages::role
                 .eq(ChatSessionRoleType::User)
                 .or(chat_messages::role.eq(ChatSessionRoleType::Ai).and(
-                    chat_messages::agent
-                        .eq(Some(ChatAgentType::Planner))
-                        .or(chat_messages::agent.is_null()),
+                    chat_messages::agent.eq(Some(ChatAgentType::Planner)),
                 ))
                 .or(chat_messages::role
                     .eq(ChatSessionRoleType::System)

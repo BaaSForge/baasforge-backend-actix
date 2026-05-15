@@ -7,6 +7,7 @@
 //! per-session).
 
 use crate::models::chat_messages::ChatAgentType;
+use crate::services::chat_worker::agent_flow::AgentFlowSession;
 use std::borrow::Cow;
 use uuid::Uuid;
 
@@ -33,6 +34,7 @@ pub fn system_prompt_for_agent(
     stale_base_release: bool,
     project_id: Uuid,
     base_runtime_endpoint: &str,
+    flow: &AgentFlowSession,
 ) -> Cow<'static, str> {
     let base: &'static str = match agent {
         ChatAgentType::Planner => *planner::SYSTEM_PROMPT_WITH_UNIT_BRIEFS,
@@ -48,8 +50,9 @@ pub fn system_prompt_for_agent(
 
     let needs_trigger_url = matches!(agent, ChatAgentType::Planner | ChatAgentType::Developer);
     let needs_stale_appendix = stale_base_release && matches!(agent, ChatAgentType::Planner);
+    let flow_appendix = flow.prompt_appendix();
 
-    if !needs_trigger_url && !needs_stale_appendix {
+    if !needs_trigger_url && !needs_stale_appendix && flow_appendix.is_none() {
         return Cow::Borrowed(base);
     }
 
@@ -64,10 +67,17 @@ pub fn system_prompt_for_agent(
     if needs_stale_appendix {
         prompt.push_str(PLANNER_STALE_BASE_APPENDIX);
     }
+    if let Some(appendix) = flow_appendix {
+        prompt.push_str("\n\n");
+        prompt.push_str(appendix);
+    }
     Cow::Owned(prompt)
 }
 
-/// Tool names exposed to the LLM and queue callbacks for this agent (full set; stale baseline does not disable tools).
-pub fn tool_names_for_llm_session(agent: &ChatAgentType) -> Vec<&'static str> {
-    tool_names_for_agent(agent).to_vec()
+/// Tool names exposed to the LLM and queue callbacks for this agent.
+pub fn tool_names_for_llm_session(
+    agent: &ChatAgentType,
+    flow: &AgentFlowSession,
+) -> Vec<&'static str> {
+    flow.tool_names(agent, tool_names_for_agent(agent))
 }

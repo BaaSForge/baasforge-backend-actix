@@ -11,6 +11,7 @@ use crate::routes::ws::events::{
 };
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::agent::system_prompt_for_agent;
+use crate::services::chat_worker::agent_flow::AgentFlowSession;
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::GenerateOutcome;
 use crate::services::chat_worker::llm::history::{
@@ -100,8 +101,9 @@ fn gemini_declaration_fns_by_name() -> &'static [(
 /// Gemini declarations for the given agent only (subset of all tools).
 fn to_gemini_declarations_for_agent(
     agent: &ChatAgentType,
+    flow: &AgentFlowSession,
 ) -> Vec<gemini_rust::tools::model::FunctionDeclaration> {
-    let names = super::tools::tool_names_for_llm_session(agent);
+    let names = super::tools::tool_names_for_llm_session(agent, flow);
     gemini_declaration_fns_by_name()
         .iter()
         .filter(|(name, _)| names.contains(name))
@@ -196,6 +198,7 @@ pub async fn call_gemini_stream(
     queue_invoking_message_id: Option<Uuid>,
     stale_base_release: bool,
     base_runtime_endpoint: &str,
+    flow: AgentFlowSession,
 ) -> Result<GenerateOutcome, BoxError> {
     let client = Gemini::with_model(api_key, gemini_model_id(model))
         .map_err(|e| format!("Gemini client: {}", e))?;
@@ -205,8 +208,9 @@ pub async fn call_gemini_stream(
         stale_base_release,
         project_id,
         base_runtime_endpoint,
+        &flow,
     );
-    let declarations: Vec<FunctionDeclaration> = to_gemini_declarations_for_agent(&agent)
+    let declarations: Vec<FunctionDeclaration> = to_gemini_declarations_for_agent(&agent, &flow)
         .into_iter()
         .map(sanitize_gemini_function_declaration)
         .collect::<Result<Vec<_>, _>>()?;
@@ -567,11 +571,26 @@ pub async fn call_gemini_stream(
             if let Err(e) =
                 tools::execute_tool_async(name, args.clone(), req.tool_call_id.clone()).await
             {
+                let err_msg = e.to_string();
                 tracing::warn!(
                     tool = %name,
-                    "Tool arg validation failed (Failed row persisted); continuing remaining tool calls: {}",
-                    e
+                    "Tool execution failed; persisting failed tool row: {}",
+                    err_msg
                 );
+                tools::persist_tool_execution_failure(
+                    pool,
+                    redis_conn.as_ref(),
+                    user_id,
+                    project_id,
+                    session_id,
+                    message_id,
+                    agent.clone(),
+                    name,
+                    req.tool_call_id.clone(),
+                    args,
+                    &err_msg,
+                )
+                .await;
             }
         }
         Some(requested)

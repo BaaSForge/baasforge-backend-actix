@@ -6,6 +6,7 @@ use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent}
 use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::load_history_for_agent;
+use crate::services::chat_worker::agent_flow::resolve_for_agent;
 use crate::services::chat_worker::llm::tools::{
     maybe_complete_invoking_message, tool_context_for_chat_session, with_tool_context,
 };
@@ -67,6 +68,8 @@ pub async fn process_one(
     .await
     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
+    let flow = resolve_for_agent(&agent, &session_messages);
+
     let channel = user_channel(user_id);
     // Tool rows published from this LLM pass must reference `placeholder_ai_message_id` (this AI Text
     // message), whether the agent is Planner or a nested sub-agent — so nested tool calls chain
@@ -80,6 +83,7 @@ pub async fn process_one(
         session_id,
         placeholder_ai_message_id,
         agent.clone(),
+        &flow,
     );
     let outcome = with_tool_context(
         tool_ctx,
@@ -96,6 +100,7 @@ pub async fn process_one(
             agent,
             queue_invoking_message_id,
             stale_base_release,
+            flow,
         ),
     )
     .await?;

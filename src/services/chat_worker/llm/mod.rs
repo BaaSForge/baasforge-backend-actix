@@ -3,6 +3,7 @@ use crate::database::DbPool;
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessageType, ChatSessionRoleType, TextPayload,
 };
+use crate::services::chat_worker::agent_flow::AgentFlowSession;
 use redis::aio::MultiplexedConnection;
 use serde_json::Value;
 use std::sync::Arc;
@@ -71,6 +72,7 @@ impl LlmClient {
         agent: ChatAgentType,
         queue_invoking_message_id: Option<Uuid>,
         stale_base_release: bool,
+        flow: AgentFlowSession,
     ) -> Result<GenerateOutcome, BoxError> {
         match self {
             LlmClient::OpenAi {
@@ -96,6 +98,7 @@ impl LlmClient {
                     queue_invoking_message_id,
                     stale_base_release,
                     base_runtime_endpoint,
+                    flow,
                 )
                 .await
             }
@@ -122,6 +125,7 @@ impl LlmClient {
                     queue_invoking_message_id,
                     stale_base_release,
                     base_runtime_endpoint,
+                    flow,
                 )
                 .await
             }
@@ -148,6 +152,7 @@ impl LlmClient {
                     queue_invoking_message_id,
                     stale_base_release,
                     base_runtime_endpoint,
+                    flow,
                 )
                 .await
             }
