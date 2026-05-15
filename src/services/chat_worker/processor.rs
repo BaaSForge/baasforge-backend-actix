@@ -18,12 +18,22 @@ use tokio::sync::Mutex;
 use tracing::info;
 use uuid::Uuid;
 
+const LLM_EMPTY_RESPONSE_FALLBACK: &str = "The assistant returned no text or tool calls—this is usually a temporary issue with the language model, not our platform. Please try again.";
+
 fn text_payload_has_storable_content(p: &TextPayload) -> bool {
     !p.text.is_empty()
         || p.requested_tool_calls
             .as_ref()
             .is_some_and(|c| !c.is_empty())
         || p.has_thinking_stored()
+}
+
+fn text_payload_for_empty_llm_response() -> TextPayload {
+    TextPayload {
+        text: LLM_EMPTY_RESPONSE_FALLBACK.to_string(),
+        requested_tool_calls: None,
+        thinking_blocks: None,
+    }
 }
 
 pub async fn process_one(
@@ -226,8 +236,8 @@ pub async fn process_one(
                     )
                     .await;
                 } else {
-                    let empty = TextPayload::default();
-                    let payload = Some(serde_json::to_value(&empty)?);
+                    let fallback = text_payload_for_empty_llm_response();
+                    let payload = Some(serde_json::to_value(&fallback)?);
                     let updated_row = block_on_db_tokio(pool, move |conn| {
                         diesel::update(
                             chat_messages::table
@@ -264,8 +274,9 @@ pub async fn process_one(
                         %project_id,
                         %session_id,
                         %placeholder_ai_message_id,
-                        "Model returned no text, tools, or thinking; marked placeholder as Completed"
+                        "Model returned no text, tools, or thinking; saved fallback message and marked Completed"
                     );
+                    return Ok(GenerateOutcome::Completed(fallback));
                 }
             }
             Ok(GenerateOutcome::Completed(text_payload))
