@@ -1,8 +1,9 @@
 use crate::database::PooledConn;
 use crate::models::chat_messages::{
-    ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatMessageType, ChatSessionRoleType,
+    ChatAgentType, ChatMessageRow, ChatMessageStatus, ChatSessionRoleType,
 };
 use crate::schema::chat_messages;
+use crate::services::chat_worker::agent::nested_branch_history::SessionHistoryLoad;
 use crate::services::chat_worker::llm::history::UPSTREAM_EXCLUDED_MESSAGE_TYPES;
 use crate::services::chat_worker::llm::tools::{
     analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool,
@@ -12,7 +13,6 @@ use crate::services::units as units_definitions;
 use diesel::dsl::not;
 use diesel::prelude::*;
 use diesel::result::Error;
-use serde_json::Value;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
@@ -33,14 +33,18 @@ pub fn load_history(
     conn: &mut PooledConn,
     session_id: Uuid,
     _thread_anchor_message_id: Option<Uuid>,
-) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
+) -> Result<SessionHistoryLoad, Error> {
     // Apply planner/user filter in SQL before LIMIT. Otherwise the last FETCH_LIMIT rows can be
     // almost entirely developer (or other) sub-agent messages, and we drop planner tool-call /
     // tool-result pairs from context — or worse, keep a tool result without its invoker turn.
     // AI rows require `agent = Planner` so nested sub-agent Text/tool rows never appear here.
     let rows = chat_messages::table
         .filter(chat_messages::chat_session_id.eq(session_id))
-        .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
+        .filter(
+            chat_messages::status
+                .eq(ChatMessageStatus::Completed)
+                .or(chat_messages::status.eq(ChatMessageStatus::Failed)),
+        )
         .filter(not(
             chat_messages::type_.eq_any(UPSTREAM_EXCLUDED_MESSAGE_TYPES)
         ))
@@ -59,14 +63,16 @@ pub fn load_history(
         .select(ChatMessageRow::as_select())
         .load::<ChatMessageRow>(conn)?;
 
-    let filtered: Vec<_> = rows
-        .into_iter()
-        .take(HISTORY_LIMIT as usize)
-        .map(|row| (row.role, row.type_, row.payload))
+    let filtered_rows: Vec<ChatMessageRow> = rows.into_iter().take(HISTORY_LIMIT as usize).collect();
+    let db_rows_chronological: Vec<ChatMessageRow> = filtered_rows.into_iter().rev().collect();
+    let session_messages: Vec<_> = db_rows_chronological
+        .iter()
+        .map(|row| (row.role, row.type_, row.payload.clone()))
         .collect();
-
-    let out: Vec<_> = filtered.into_iter().rev().collect();
-    Ok(out)
+    Ok(SessionHistoryLoad {
+        session_messages,
+        db_rows_chronological,
+    })
 }
 
 // Any "15 minutes" / "15-minute" trace lookback wording in SYSTEM_PROMPT_CORE must match

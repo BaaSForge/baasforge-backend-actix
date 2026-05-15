@@ -2,7 +2,9 @@
 //! AI tool-result message types mapped to canonical tool names. Used by [`crate::services::chat_worker::agent_flow::context::SessionFlowContext`]
 //! (planner) and [`SubAgentBranchContext`] (nested agents); extend here as flow rules grow.
 
-use crate::models::chat_messages::{ChatMessageType, ChatSessionRoleType, TextPayload};
+use crate::models::chat_messages::{
+    ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload,
+};
 use crate::services::chat_worker::llm::tools::{
     analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool, create_unit,
     fetch_release_traces, finish_architecture_analysis, finish_implementation,
@@ -13,6 +15,9 @@ use crate::services::chat_worker::llm::tools::{
 use serde_json::Value;
 use std::collections::HashSet;
 
+/// `load_latest_production_release_units`, `list_unit_contexts`, and `list_modules_for_unit_contexts`.
+/// Nested-agent gates use [`FlowHistoryScan::discover_units_prerequisites_met`], which omits the
+/// modules tool when the latest successful **`list_unit_contexts`** payload has empty `context_slugs`.
 pub const DISCOVER_UNITS_TRIO: &[&str] = &[
     load_latest_production_release_units::TOOL_NAME,
     list_unit_contexts::TOOL_NAME,
@@ -23,6 +28,7 @@ pub const DISCOVER_UNITS_TRIO: &[&str] = &[
 pub struct FlowHistoryScan {
     assistant_requested: HashSet<String>,
     tool_row: HashSet<String>,
+    last_successful_list_unit_contexts_was_empty: Option<bool>,
 }
 
 impl FlowHistoryScan {
@@ -50,6 +56,19 @@ impl FlowHistoryScan {
         tool_names.iter().all(|t| self.ever_invoked(t))
     }
 
+    pub fn discover_units_prerequisites_met(&self) -> bool {
+        if !self.ever_invoked(load_latest_production_release_units::TOOL_NAME)
+            || !self.ever_invoked(list_unit_contexts::TOOL_NAME)
+        {
+            return false;
+        }
+        let modules_unnecessary = matches!(
+            self.last_successful_list_unit_contexts_was_empty,
+            Some(true)
+        );
+        modules_unnecessary || self.ever_invoked(list_modules_for_unit_contexts::TOOL_NAME)
+    }
+
     pub fn ingest_ai_message(
         &mut self,
         role: &ChatSessionRoleType,
@@ -65,6 +84,20 @@ impl FlowHistoryScan {
             }
         } else if let Some(name) = tool_name_for_ai_tool_result_type(msg_type) {
             self.record_tool_row_name(name);
+            if *msg_type == ChatMessageType::ToolListUnitContexts {
+                if let Ok(Some(ChatMessagePayload::ToolListUnitContexts(p))) =
+                    ChatMessagePayload::from_value(msg_type, payload.clone())
+                {
+                    let ok = p
+                        .error
+                        .as_ref()
+                        .map_or(true, |e| e.trim().is_empty());
+                    if ok {
+                        self.last_successful_list_unit_contexts_was_empty =
+                            Some(p.context_slugs.is_empty());
+                    }
+                }
+            }
         }
     }
 
@@ -151,6 +184,7 @@ impl std::ops::Deref for SubAgentBranchContext {
 mod tests {
     use super::*;
     use crate::models::chat_messages::RequestedToolCall;
+    use crate::services::chat_worker::llm::tools::list_unit_contexts::ToolListUnitContextsPayload;
 
     fn user_text() -> (ChatSessionRoleType, ChatMessageType, Option<Value>) {
         (
@@ -194,6 +228,24 @@ mod tests {
 
     fn ai_tool_row(toolbar: ChatMessageType) -> (ChatSessionRoleType, ChatMessageType, Option<Value>) {
         (ChatSessionRoleType::Ai, toolbar, None)
+    }
+
+    fn ai_list_unit_contexts_row(
+        context_slugs: Vec<String>,
+        error: Option<String>,
+    ) -> (ChatSessionRoleType, ChatMessageType, Option<Value>) {
+        let p = ToolListUnitContextsPayload {
+            args: Default::default(),
+            context_slugs,
+            tool_call_id: None,
+            tool_name: Some(list_unit_contexts::TOOL_NAME.to_string()),
+            error,
+        };
+        (
+            ChatSessionRoleType::Ai,
+            ChatMessageType::ToolListUnitContexts,
+            Some(serde_json::to_value(&p).unwrap()),
+        )
     }
 
     fn ai_text_no_calls() -> (ChatSessionRoleType, ChatMessageType, Option<Value>) {
@@ -339,6 +391,48 @@ mod tests {
         ];
         let scan = FlowHistoryScan::from_sub_agent_branch_messages(&messages);
         assert!(!scan.all_invoked(DISCOVER_UNITS_TRIO));
+    }
+
+    #[test]
+    fn discover_prerequisites_met_without_modules_when_no_contexts() {
+        let messages = vec![
+            ai_tool_row(ChatMessageType::ToolFetchRelevantUnits),
+            ai_list_unit_contexts_row(vec![], None),
+        ];
+        let scan = FlowHistoryScan::from_sub_agent_branch_messages(&messages);
+        assert!(scan.discover_units_prerequisites_met());
+        assert!(!scan.ever_invoked(list_modules_for_unit_contexts::TOOL_NAME));
+    }
+
+    #[test]
+    fn discover_prerequisites_not_met_without_modules_when_contexts_exist() {
+        let messages = vec![
+            ai_tool_row(ChatMessageType::ToolFetchRelevantUnits),
+            ai_list_unit_contexts_row(vec!["billing".into()], None),
+        ];
+        let scan = FlowHistoryScan::from_sub_agent_branch_messages(&messages);
+        assert!(!scan.discover_units_prerequisites_met());
+    }
+
+    #[test]
+    fn discover_prerequisites_ignores_list_contexts_row_with_error_for_empty_skip() {
+        let messages = vec![
+            ai_tool_row(ChatMessageType::ToolFetchRelevantUnits),
+            ai_list_unit_contexts_row(vec![], Some("db".into())),
+        ];
+        let scan = FlowHistoryScan::from_sub_agent_branch_messages(&messages);
+        assert!(!scan.discover_units_prerequisites_met());
+    }
+
+    #[test]
+    fn discover_prerequisites_non_empty_after_empty_requires_modules() {
+        let messages = vec![
+            ai_tool_row(ChatMessageType::ToolFetchRelevantUnits),
+            ai_list_unit_contexts_row(vec![], None),
+            ai_list_unit_contexts_row(vec!["a".into()], None),
+        ];
+        let scan = FlowHistoryScan::from_sub_agent_branch_messages(&messages);
+        assert!(!scan.discover_units_prerequisites_met());
     }
 
     #[test]

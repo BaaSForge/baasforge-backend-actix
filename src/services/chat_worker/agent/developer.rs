@@ -1,7 +1,9 @@
 use crate::database::PooledConn;
-use crate::models::chat_messages::{ChatMessageType, ChatSessionRoleType};
+use crate::models::chat_messages::ChatMessageType;
 use crate::schema::chat_messages;
-use crate::services::chat_worker::agent::nested_branch_history::load_nested_branch_history;
+use crate::services::chat_worker::agent::nested_branch_history::{
+    load_nested_branch_history, SessionHistoryLoad,
+};
 use crate::services::chat_worker::llm::tools::{
     create_unit, finish_implementation, list_modules_for_unit_contexts, list_unit_contexts,
     load_latest_production_release_units, modify_unit, remove_unit,
@@ -62,7 +64,7 @@ pub fn load_history(
     conn: &mut PooledConn,
     session_id: Uuid,
     implement_solution_tool_message_id: Option<Uuid>,
-) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
+) -> Result<SessionHistoryLoad, Error> {
     let synthetic_first = match implement_solution_tool_message_id {
         None => None,
         Some(anchor) => synthetic_first_user_text(conn, session_id, anchor)?,

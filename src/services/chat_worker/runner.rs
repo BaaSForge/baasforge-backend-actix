@@ -9,16 +9,14 @@ use crate::routes::chat::message_queue::{
     self as chat_message_queue, ChatSessionQueueMessage, MAX_SUB_AGENT_STUCK_CONTINUATIONS,
     chat_dead_letter_spec, chat_retry_policy, parse_chat_routing_key,
 };
-use crate::routes::ws::events::{
-    ChatSessionMessageCreatedPayload, ChatSessionMessageStatusChangePayload, WsServerEvent,
-};
+use crate::routes::ws::events::{ChatSessionMessageCreatedPayload, WsServerEvent};
 use crate::routes::ws::redis::{is_message_stopped, publish_event_to_channel};
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::generation_lifecycle;
 use crate::services::chat_worker::llm::tools::{
-    ToolMessageContext, cascade_sub_agent_ai_text_failure_to_planner, spawn_tool_message_handler,
+    ToolMessageContext, spawn_tool_message_handler,
 };
 use crate::services::chat_worker::llm::{GenerateOutcome, build_llm_client};
 use crate::services::chat_worker::processor::process_one;
@@ -57,71 +55,20 @@ async fn set_message_failed_and_notify(
     agent: ChatAgentType,
     failure_reason: &str,
 ) {
-    let message_id = response_message_id;
-    let session_id_db = session_id;
-    let agent_db = agent.clone();
-    let db_ok = block_on_db_tokio(pool, move |conn| {
-        // Update if row exists; otherwise insert (LLM may have failed before first chunk, so no row yet).
-        diesel::insert_into(chat_messages::table)
-            .values((
-                chat_messages::id.eq(message_id),
-                chat_messages::chat_session_id.eq(session_id_db),
-                chat_messages::role.eq(ChatSessionRoleType::Ai),
-                chat_messages::type_.eq(ChatMessageType::Text),
-                chat_messages::payload.eq(None::<serde_json::Value>),
-                chat_messages::status.eq(ChatMessageStatus::Failed),
-                chat_messages::agent.eq(Some(agent_db)),
-            ))
-            .on_conflict(chat_messages::id)
-            .do_update()
-            .set(chat_messages::status.eq(ChatMessageStatus::Failed))
-            .execute(conn)
-    })
-    .await
-    .is_ok();
-
-    if db_ok {
-        let cascaded_planner_continuation = cascade_sub_agent_ai_text_failure_to_planner(
-            pool,
-            redis_conn,
-            Some(rabbit_publisher),
-            user_id,
-            project_id,
-            session_id,
-            response_message_id,
-            agent,
-            failure_reason.to_string(),
-        )
-        .await;
-        generation_lifecycle::notify_if_generation_loop_finished(
-            redis_conn,
-            user_id,
-            project_id,
-            session_id,
-            cascaded_planner_continuation,
-        )
-        .await;
-        let channel = user_channel(user_id);
-        let event =
-            WsServerEvent::ChatSessionMessageStatusChange(ChatSessionMessageStatusChangePayload {
-                project_id,
-                session_id,
-                message_id: response_message_id,
-                status: ChatMessageStatus::Failed,
-            });
-        let mut guard = redis_conn.lock().await;
-        if let Err(redis_e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
-            tracing::warn!(
-                "Failed to publish message status change to Redis: {}",
-                redis_e
-            );
-        }
-    } else {
-        tracing::error!(
-            %response_message_id,
-            "Failed to upsert message status to Failed in DB"
-        );
-    }
+    generation_lifecycle::fail_generating_placeholder_message(
+        pool,
+        redis_conn,
+        rabbit_publisher,
+        user_id,
+        project_id,
+        session_id,
+        response_message_id,
+        agent,
+        None,
+        failure_reason,
+        true,
+    )
+    .await;
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -275,14 +222,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .await;
 
             match &result {
-                Ok(outcome) => {
+                Ok((outcome, breaker_cascade)) => {
                     // Continuation is scheduled when LLM returned tool calls (tools eventually call
                     // maybe_complete_invoking_message), or when we re-queue a stuck nested sub-agent below.
                     let mut will_schedule_continuation = matches!(
                         outcome,
                         GenerateOutcome::Completed(p)
                             if p.requested_tool_calls.as_ref().is_some_and(|c| !c.is_empty())
-                    );
+                    ) || *breaker_cascade;
                     if !will_schedule_continuation
                         && payload.invoking_message_id.is_some()
                         && payload.sub_agent_stuck_continuation_count

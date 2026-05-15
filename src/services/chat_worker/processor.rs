@@ -7,10 +7,12 @@ use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
 use crate::services::chat_worker::agent::load_history_for_agent;
 use crate::services::chat_worker::agent_flow::resolve_for_agent;
+use crate::services::chat_worker::generation_lifecycle;
 use crate::services::chat_worker::llm::tools::{
     maybe_complete_invoking_message, tool_context_for_chat_session, with_tool_context,
 };
 use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient};
+use crate::services::chat_worker::circuit_breaker::{self, CircuitBreakerKind};
 use crate::services::releases::chat_session_stale_base_release;
 use diesel::prelude::*;
 use redis::aio::MultiplexedConnection;
@@ -53,14 +55,48 @@ pub async fn process_one(
     // [`ChatAgentType::SolutionAnalyzer`], [`ChatAgentType::ObservabilityAnalyzer`], and [`ChatAgentType::Developer`] that parent is the corresponding
     // async tool row id — used as history root for nested-only context.
     queue_invoking_message_id: Option<Uuid>,
-) -> Result<GenerateOutcome, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(GenerateOutcome, bool), Box<dyn std::error::Error + Send + Sync>> {
     let agent_for_history = agent.clone();
     let thread_anchor = queue_invoking_message_id;
-    let session_messages = block_on_db_tokio(pool, move |conn| {
+    let loaded = block_on_db_tokio(pool, move |conn| {
         load_history_for_agent(conn, session_id, agent_for_history, thread_anchor)
     })
     .await
     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+    if let Some(kind) = circuit_breaker::evaluate_before_llm(&agent, &loaded) {
+        let msg = kind.user_message();
+        tracing::warn!(
+            %session_id,
+            ?kind,
+            "chat circuit breaker tripped before LLM call"
+        );
+        let cascade_err = kind.cascade_error();
+        let breaker_cascade = generation_lifecycle::fail_generating_placeholder_message(
+            pool,
+            redis_conn,
+            rabbit_publisher,
+            user_id,
+            project_id,
+            session_id,
+            placeholder_ai_message_id,
+            agent.clone(),
+            Some(msg),
+            cascade_err,
+            false,
+        )
+        .await;
+        return Ok((
+            GenerateOutcome::Stopped(TextPayload {
+                text: String::new(),
+                requested_tool_calls: None,
+                thinking_blocks: None,
+            }),
+            breaker_cascade,
+        ));
+    }
+
+    let session_messages = loaded.session_messages;
 
     let stale_base_release = block_on_db_tokio(pool, move |conn| {
         chat_session_stale_base_release(conn, project_id, session_id)
@@ -151,7 +187,7 @@ pub async fn process_one(
                     );
                 }
             }
-            Ok(GenerateOutcome::Stopped(text_payload))
+            Ok((GenerateOutcome::Stopped(text_payload), false))
         }
         GenerateOutcome::Completed(text_payload) => {
             let has_content = !text_payload.text.is_empty();
@@ -281,10 +317,10 @@ pub async fn process_one(
                         %placeholder_ai_message_id,
                         "Model returned no text, tools, or thinking; saved fallback message and marked Completed"
                     );
-                    return Ok(GenerateOutcome::Completed(fallback));
+                    return Ok((GenerateOutcome::Completed(fallback), false));
                 }
             }
-            Ok(GenerateOutcome::Completed(text_payload))
+            Ok((GenerateOutcome::Completed(text_payload), false))
         }
     }
 }

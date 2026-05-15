@@ -30,6 +30,12 @@ use uuid::Uuid;
 
 const HISTORY_LIMIT: i64 = 50;
 
+#[derive(Debug)]
+pub struct SessionHistoryLoad {
+    pub session_messages: Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>,
+    pub db_rows_chronological: Vec<ChatMessageRow>,
+}
+
 /// All message ids in the subtree rooted at `anchor` (children follow `invoking_message_id` edges).
 pub fn subtree_message_ids(
     conn: &mut PooledConn,
@@ -73,9 +79,12 @@ pub fn load_nested_branch_history(
     expected_anchor_type: ChatMessageType,
     warn_label: &'static str,
     synthetic_first_user_text: Option<String>,
-) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
+) -> Result<SessionHistoryLoad, Error> {
     let Some(anchor) = anchor_tool_message_id else {
-        return Ok(vec![]);
+        return Ok(SessionHistoryLoad {
+            session_messages: vec![],
+            db_rows_chronological: vec![],
+        });
     };
 
     let tool_ok = chat_messages::table
@@ -94,7 +103,10 @@ pub fn load_nested_branch_history(
             "{}::load_history: expected id of nested analyze tool row in session; returning empty history",
             warn_label
         );
-        return Ok(vec![]);
+        return Ok(SessionHistoryLoad {
+            session_messages: vec![],
+            db_rows_chronological: vec![],
+        });
     }
 
     let synthetic_prefix = synthetic_first_user_text.and_then(|s| {
@@ -128,25 +140,29 @@ pub fn load_nested_branch_history(
             .load(conn)?
     };
 
-    let mut mapped: Vec<_> = rows
-        .into_iter()
-        .map(|row| (row.role, row.type_, row.payload))
-        .collect();
-
-    if mapped.len() > HISTORY_LIMIT as usize {
-        let start = mapped.len() - HISTORY_LIMIT as usize;
-        mapped.drain(..start);
+    let mut db_rows_chronological = rows;
+    if db_rows_chronological.len() > HISTORY_LIMIT as usize {
+        let start = db_rows_chronological.len() - HISTORY_LIMIT as usize;
+        db_rows_chronological.drain(..start);
     }
 
+    let mut session_messages: Vec<_> = db_rows_chronological
+        .iter()
+        .map(|row| (row.role, row.type_, row.payload.clone()))
+        .collect();
+
     if let Some(prefix) = synthetic_prefix {
-        mapped.insert(0, prefix);
-        while mapped.len() > HISTORY_LIMIT as usize {
-            if mapped.len() <= 1 {
+        session_messages.insert(0, prefix);
+        while session_messages.len() > HISTORY_LIMIT as usize {
+            if session_messages.len() <= 1 {
                 break;
             }
-            mapped.remove(1);
+            session_messages.remove(1);
         }
     }
 
-    Ok(mapped)
+    Ok(SessionHistoryLoad {
+        session_messages,
+        db_rows_chronological,
+    })
 }

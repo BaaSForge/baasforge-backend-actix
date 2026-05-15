@@ -1,7 +1,9 @@
 use crate::database::PooledConn;
-use crate::models::chat_messages::{ChatMessageType, ChatSessionRoleType};
+use crate::models::chat_messages::ChatMessageType;
 use crate::schema::chat_messages;
-use crate::services::chat_worker::agent::nested_branch_history::load_nested_branch_history;
+use crate::services::chat_worker::agent::nested_branch_history::{
+    load_nested_branch_history, SessionHistoryLoad,
+};
 use crate::services::chat_worker::llm::tools::{
     analyze_observability_tool::ToolAnalyzeObservabilityArgs, fetch_release_traces,
     finish_observability_analysis, load_latest_production_release_units,
@@ -76,7 +78,7 @@ pub fn load_history(
     conn: &mut PooledConn,
     session_id: Uuid,
     analyze_observability_tool_message_id: Option<Uuid>,
-) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
+) -> Result<SessionHistoryLoad, Error> {
     let synthetic_first = match analyze_observability_tool_message_id {
         None => None,
         Some(anchor) => synthetic_first_user_text(conn, session_id, anchor)?,

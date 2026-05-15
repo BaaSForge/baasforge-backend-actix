@@ -6,17 +6,17 @@ mod planner;
 mod session_stale_base_release;
 mod solution_analyzer;
 
+pub use nested_branch_history::SessionHistoryLoad;
 pub use session_stale_base_release::{system_prompt_for_agent, tool_names_for_llm_session};
 
 use crate::database::PooledConn;
-use crate::models::chat_messages::{ChatAgentType, ChatMessageType, ChatSessionRoleType};
+use crate::models::chat_messages::ChatAgentType;
 use crate::services::chat_worker::llm::history::{
     filter_session_messages_for_upstream_llm,
     remove_tool_result_messages_without_matching_assistant_tool_use,
     trim_assistant_requested_tool_calls_to_match_following_tool_results,
 };
 use diesel::result::Error;
-use serde_json::Value;
 use uuid::Uuid;
 
 pub fn tool_names_for_agent(agent: &ChatAgentType) -> &'static [&'static str] {
@@ -45,8 +45,11 @@ pub fn load_history_for_agent(
     session_id: Uuid,
     agent: ChatAgentType,
     thread_anchor_message_id: Option<Uuid>,
-) -> Result<Vec<(ChatSessionRoleType, ChatMessageType, Option<Value>)>, Error> {
-    let mut messages = match agent {
+) -> Result<SessionHistoryLoad, Error> {
+    let SessionHistoryLoad {
+        mut session_messages,
+        db_rows_chronological,
+    } = match agent {
         ChatAgentType::Planner => planner::load_history(conn, session_id, thread_anchor_message_id),
         ChatAgentType::ArchitectureAnalyzer => {
             architecture_analyzer::load_history(conn, session_id, thread_anchor_message_id)
@@ -61,8 +64,11 @@ pub fn load_history_for_agent(
             observability_analyzer::load_history(conn, session_id, thread_anchor_message_id)
         }
     }?;
-    messages = filter_session_messages_for_upstream_llm(messages);
-    remove_tool_result_messages_without_matching_assistant_tool_use(&mut messages);
-    trim_assistant_requested_tool_calls_to_match_following_tool_results(&mut messages);
-    Ok(messages)
+    session_messages = filter_session_messages_for_upstream_llm(session_messages);
+    remove_tool_result_messages_without_matching_assistant_tool_use(&mut session_messages);
+    trim_assistant_requested_tool_calls_to_match_following_tool_results(&mut session_messages);
+    Ok(SessionHistoryLoad {
+        session_messages,
+        db_rows_chronological,
+    })
 }

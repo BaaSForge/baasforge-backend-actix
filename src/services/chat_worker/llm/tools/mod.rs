@@ -225,6 +225,12 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
     ]
 }
 
+fn queue_tool_name_registered(name: &str) -> bool {
+    tool_queue_registry()
+        .iter()
+        .any(|(registered_name, _, _)| *registered_name == name)
+}
+
 pub use crate::services::chat_worker::agent::tool_names_for_llm_session;
 
 fn tool_queue_registry_for_agent(
@@ -542,7 +548,17 @@ pub async fn execute_tool_async(
     let cb = TOOL_CONTEXT
         .try_with(|ctx| ctx.callbacks.get(name).cloned())
         .map_err(|_| "tools: TOOL_CONTEXT not set (call with_tool_context first)".to_string())?
-        .ok_or_else(|| format!("Unknown tool or callback not registered: {}", name))?;
+        .ok_or_else(|| {
+            if queue_tool_name_registered(name) {
+                format!(
+                    "Tool `{}` is not enabled for this turn (flow step / tool gate, or wrong agent). \
+If the system prompt describes prerequisites or a tool gate, call those tools first; otherwise use only tools declared for this agent.",
+                    name
+                )
+            } else {
+                format!("Unknown tool or callback not registered: {}", name)
+            }
+        })?;
     cb(args, tool_call_id).await?;
     Ok("Request queued.".to_string())
 }

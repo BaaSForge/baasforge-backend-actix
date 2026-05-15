@@ -1,6 +1,4 @@
-use crate::services::chat_worker::agent_flow::{
-    SubAgentBranchContext, DISCOVER_UNITS_TRIO,
-};
+use crate::services::chat_worker::agent_flow::SubAgentBranchContext;
 use crate::services::chat_worker::agent_flow::engine::{FlowDefinition, FlowStep};
 use crate::services::chat_worker::llm::tools::{
     finish_architecture_analysis, list_modules_for_unit_contexts, list_unit_contexts,
@@ -10,13 +8,15 @@ use crate::services::chat_worker::llm::tools::{
 const FLOW_ID: &str = "architecture_analyzer_gate";
 
 fn gate_prompt(ctx: &SubAgentBranchContext) -> Option<String> {
-    if ctx.all_invoked(DISCOVER_UNITS_TRIO) {
+    if ctx.discover_units_prerequisites_met() {
         return None;
     }
     Some(
         "## Tool gate (system)\n\
-        **finish_architecture_analysis** is available only after you have called **load_latest_production_release_units**, \
-        **list_unit_contexts**, and **list_modules_for_unit_contexts** at least once each in this nested run."
+        Before **finish_architecture_analysis** unlocks, you must call **load_latest_production_release_units** once \
+        and **list_unit_contexts** once in this nested run. If **list_unit_contexts** returned at least one context slug, \
+        you must also call **list_modules_for_unit_contexts** once before unlock. If it returned an empty list of context slugs, \
+        **list_modules_for_unit_contexts** is not mandatory for unlock."
             .to_string(),
     )
 }
@@ -25,7 +25,7 @@ pub static ARCHITECTURE_ANALYZER_FLOW: FlowDefinition<SubAgentBranchContext> = F
     id: FLOW_ID,
     steps: &[FlowStep {
         id: "ready_to_finish",
-        when: |ctx| ctx.all_invoked(DISCOVER_UNITS_TRIO),
+        when: |ctx| ctx.discover_units_prerequisites_met(),
         allowed_tools: |_| {
             vec![
                 load_latest_production_release_units::TOOL_NAME,
