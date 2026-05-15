@@ -13,9 +13,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-/// Planner-facing: one short line—exact units to create or change this run. Do not paste the full solution analysis.
 pub const ARG_DIRECTIVE_DESCRIPTION: &str =
-    "Exact scope for this run: which units to create or modify and what to implement.";
+    "Short orchestration handoff for the programmer: what this run must deliver, scope (units/areas or reference to agreed solution analysis), and non-negotiable constraints (e.g. production-ready, user-required routes/shapes, preserve existing contracts). Plain language only. Do NOT paste code, prescribe handlers/state/build order, or micromanage how to implement—the programmer decides those within their role.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolImplementSolutionArgs {
@@ -42,7 +41,7 @@ pub const TOOL_NAME: &str = "implement_solution_tool";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Run the programmer agent asynchronously: create or modify units per the agreed solution. Pass the full directive (exact units and changes).",
+        description: "Run the programmer agent asynchronously to implement the agreed solution. Pass a short directive: outcomes, scope, and constraints only—the programmer owns implementation details. Never paste code or micromanage design.",
         parameters: params_schema(),
     }
 }
