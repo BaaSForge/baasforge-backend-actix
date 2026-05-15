@@ -5,13 +5,13 @@ use crate::services::chat_worker::agent::SessionHistoryLoad;
 use crate::services::chat_worker::agent_flow::tool_name_for_ai_tool_result_type;
 use serde_json::Value;
 
-pub const SAME_TOOL_FAILURE_STREAK_LEN: usize = 5;
+pub const SAME_TOOL_FAILURE_STREAK_LEN: usize = 10;
 
 pub const MAX_PLANNER_TURN_MESSAGES: usize = 100;
 
 pub const MAX_SUBAGENT_THREAD_MESSAGES: usize = 100;
 
-pub const MAX_FAILED_TOOL_INVOCATIONS_PER_TURN: usize = 20;
+pub const MAX_FAILED_TOOL_INVOCATIONS_PER_TURN: usize = 30;
 
 pub const SAME_TOOL_FAILURE_STREAK_MESSAGE: &str = "The assistant hit the same failing tool several times in a row, so we stopped the run to avoid a loop. Please rephrase what you want, adjust the goal, or try again in a moment.";
 
