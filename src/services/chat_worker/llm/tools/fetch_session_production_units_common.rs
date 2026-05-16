@@ -1,5 +1,5 @@
 use crate::libs::unit_slug::{
-    normalize_full_unit_id_arg, parse_unit_path_only, validate_full_unit_id_for_tool,
+    UnitPath, normalize_full_unit_id_arg, parse_unit_path_only, validate_full_unit_id_for_tool,
 };
 use crate::models::projects::ProjectUnitResponse;
 use std::collections::HashSet;
@@ -39,7 +39,17 @@ pub fn normalize_dedupe_unit_paths(raw: &[String]) -> Vec<String> {
     out
 }
 
-pub fn parse_unit_paths(raw: &[String]) -> Result<Vec<crate::libs::unit_slug::UnitPath>, String> {
+pub fn unit_path_key(p: &UnitPath) -> String {
+    format!(
+        "{}.{}.{}.{}",
+        p.context_slug,
+        p.module_slug,
+        p.unit_type.as_slug(),
+        p.unit_name_slug
+    )
+}
+
+pub fn parse_unit_paths(raw: &[String]) -> Result<Vec<UnitPath>, String> {
     let mut paths = Vec::new();
     let mut errors = Vec::new();
     for path_str in raw {
@@ -89,10 +99,7 @@ pub fn missing_unit_ids_message(requested: &[String], units: &[ProjectUnitRespon
     }
 }
 
-pub fn missing_unit_paths_message(
-    paths: &[crate::libs::unit_slug::UnitPath],
-    units: &[ProjectUnitResponse],
-) -> Option<String> {
+pub fn missing_unit_paths_message(paths: &[UnitPath], units: &[ProjectUnitResponse]) -> Option<String> {
     let found: HashSet<(
         &str,
         &str,
@@ -118,13 +125,7 @@ pub fn missing_unit_paths_message(
             p.unit_name_slug.as_str(),
         );
         if !found.contains(&key) {
-            missing.push(format!(
-                "{}.{}.{}.{}",
-                p.context_slug,
-                p.module_slug,
-                p.unit_type.as_slug(),
-                p.unit_name_slug
-            ));
+            missing.push(unit_path_key(p));
         }
     }
     if missing.is_empty() {

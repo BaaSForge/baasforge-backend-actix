@@ -119,6 +119,25 @@ Retry once; if it persists, the session may need a new message."
                 .and_then(|scan| discover_units_tool_lock_reason(scan, tool_name)),
         }
     }
+
+    pub fn developer_mutate_load_prerequisite_error(
+        &self,
+        tool_name: &str,
+        args: &Value,
+    ) -> Option<String> {
+        if self.agent != ChatAgentType::Developer {
+            return None;
+        }
+        let scan = self.sub_agent_scan.as_ref()?;
+        if !matches!(tool_name, modify_unit::TOOL_NAME | remove_unit::TOOL_NAME) {
+            return None;
+        }
+        if !scan.discover_units_prerequisites_met() {
+            return None;
+        }
+        scan.mutate_prerequisite_for_unit_id_in_args(tool_name, args)
+            .err()
+    }
 }
 
 fn agents_that_expose_tool(tool_name: &str) -> Vec<&'static str> {

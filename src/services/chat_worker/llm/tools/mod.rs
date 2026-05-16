@@ -651,6 +651,18 @@ pub async fn execute_tool_async(
     args: Value,
     tool_call_id: Option<String>,
 ) -> Result<String, BoxError> {
+    if let Some(lock_msg) = TOOL_CONTEXT
+        .try_with(|ctx| {
+            ctx.gate
+                .as_ref()
+                .and_then(|g| g.developer_mutate_load_prerequisite_error(name, &args))
+        })
+        .ok()
+        .flatten()
+    {
+        return Err(lock_msg.into());
+    }
+
     let cb = TOOL_CONTEXT
         .try_with(|ctx| ctx.callbacks.get(name).cloned())
         .map_err(|_| "tools: TOOL_CONTEXT not set (call with_tool_context first)".to_string())?

@@ -2,16 +2,21 @@
 //! AI tool-result message types mapped to canonical tool names. Used by [`crate::services::chat_worker::agent_flow::context::SessionFlowContext`]
 //! (planner) and [`SubAgentBranchContext`] (nested agents); extend here as flow rules grow.
 
+use crate::libs::unit_slug::{normalize_full_unit_id_arg, parse_unit_path};
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload,
 };
+use crate::services::chat_worker::agent_flow::discover_units_gate;
 use crate::services::chat_worker::llm::tools::{
     analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool, create_unit,
     fetch_release_traces, finish_architecture_analysis, finish_implementation,
     finish_observability_analysis, finish_solution_analysis, implement_solution_tool,
     list_modules_for_unit_contexts, list_unit_contexts, load_latest_production_release_units,
-    load_latest_specific_production_release_units, load_latest_releases,
-    load_specific_production_release_units, modify_unit, remove_unit,
+    load_latest_specific_production_release_units,
+    load_latest_releases, load_specific_production_release_units, modify_unit, remove_unit,
+};
+use crate::services::chat_worker::llm::tools::fetch_session_production_units_common::{
+    normalize_dedupe_unit_paths, unit_path_key,
 };
 use serde_json::Value;
 use std::collections::HashSet;
@@ -30,6 +35,7 @@ pub struct FlowHistoryScan {
     assistant_requested: HashSet<String>,
     tool_row: HashSet<String>,
     last_successful_list_unit_contexts_was_empty: Option<bool>,
+    successfully_loaded_latest_specific_unit_paths: HashSet<String>,
 }
 
 impl FlowHistoryScan {
@@ -59,6 +65,35 @@ impl FlowHistoryScan {
 
     pub fn last_list_unit_contexts_had_no_slugs(&self) -> Option<bool> {
         self.last_successful_list_unit_contexts_was_empty
+    }
+
+    pub fn unit_path_loaded_via_latest_specific(&self, unit_path: &str) -> bool {
+        let key = unit_path.trim().to_ascii_lowercase();
+        self.successfully_loaded_latest_specific_unit_paths
+            .contains(&key)
+    }
+
+    pub fn mutate_prerequisite_for_unit_id_in_args(
+        &self,
+        tool_name: &str,
+        args: &Value,
+    ) -> Result<(), String> {
+        let Some(unit_id) = args.get("unit_id").and_then(|v| v.as_str()) else {
+            return Ok(());
+        };
+        let unit_id = normalize_full_unit_id_arg(unit_id);
+        if unit_id.is_empty() {
+            return Ok(());
+        }
+        let path = parse_unit_path(&unit_id)?;
+        let path_key = unit_path_key(&path);
+        if self.unit_path_loaded_via_latest_specific(&path_key) {
+            Ok(())
+        } else {
+            Err(discover_units_gate::mutate_unit_locked_until_load_message(
+                tool_name, &path_key,
+            ))
+        }
     }
 
     pub fn discover_units_prerequisites_met(&self) -> bool {
@@ -100,6 +135,23 @@ impl FlowHistoryScan {
                     if ok {
                         self.last_successful_list_unit_contexts_was_empty =
                             Some(p.context_slugs.is_empty());
+                    }
+                }
+            } else if *msg_type == ChatMessageType::ToolFetchLatestSpecificProductionReleaseUnits
+            {
+                if let Ok(Some(
+                    ChatMessagePayload::ToolFetchLatestSpecificProductionReleaseUnits(p),
+                )) = ChatMessagePayload::from_value(msg_type, payload.clone())
+                {
+                    let ok = p
+                        .error
+                        .as_ref()
+                        .map_or(true, |e| e.trim().is_empty());
+                    if ok {
+                        for path in normalize_dedupe_unit_paths(&p.args.unit_paths) {
+                            self.successfully_loaded_latest_specific_unit_paths
+                                .insert(path);
+                        }
                     }
                 }
             }
@@ -196,6 +248,10 @@ mod tests {
     use super::*;
     use crate::models::chat_messages::RequestedToolCall;
     use crate::services::chat_worker::llm::tools::list_unit_contexts::ToolListUnitContextsPayload;
+    use crate::services::chat_worker::llm::tools::load_latest_specific_production_release_units::{
+        ToolFetchLatestSpecificProductionReleaseUnitsArgs,
+        ToolFetchLatestSpecificProductionReleaseUnitsPayload,
+    };
 
     fn user_text() -> (ChatSessionRoleType, ChatMessageType, Option<Value>) {
         (
@@ -503,6 +559,92 @@ mod tests {
         ]);
         assert!(scan_both.ever_invoked(fetch_release_traces::TOOL_NAME));
         assert!(scan_both.ever_invoked(load_latest_production_release_units::TOOL_NAME));
+    }
+
+    fn ai_latest_specific_load_row(
+        unit_paths: Vec<String>,
+        error: Option<String>,
+    ) -> (ChatSessionRoleType, ChatMessageType, Option<Value>) {
+        let p = ToolFetchLatestSpecificProductionReleaseUnitsPayload {
+            args: ToolFetchLatestSpecificProductionReleaseUnitsArgs { unit_paths },
+            units: vec![],
+            tool_call_id: None,
+            tool_name: Some(load_latest_specific_production_release_units::TOOL_NAME.to_string()),
+            error,
+        };
+        (
+            ChatSessionRoleType::Ai,
+            ChatMessageType::ToolFetchLatestSpecificProductionReleaseUnits,
+            Some(serde_json::to_value(&p).unwrap()),
+        )
+    }
+
+    #[test]
+    fn mutate_prerequisite_requires_successful_latest_specific_load_for_path() {
+        let unit_id = "demo.greeter.api.greeter-api.1";
+        let path = "demo.greeter.api.greeter-api";
+        let scan_empty = FlowHistoryScan::from_sub_agent_branch_messages(&[]);
+        assert!(
+            scan_empty
+                .mutate_prerequisite_for_unit_id_in_args(
+                    modify_unit::TOOL_NAME,
+                    &serde_json::json!({ "unit_id": unit_id }),
+                )
+                .is_err()
+        );
+
+        let scan_loaded = FlowHistoryScan::from_sub_agent_branch_messages(&[
+            ai_latest_specific_load_row(vec![path.into()], None),
+        ]);
+        assert!(
+            scan_loaded
+                .mutate_prerequisite_for_unit_id_in_args(
+                    remove_unit::TOOL_NAME,
+                    &serde_json::json!({ "unit_id": unit_id }),
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn mutate_prerequisite_ignores_failed_latest_specific_load() {
+        let unit_id = "demo.greeter.api.greeter-api.1";
+        let scan = FlowHistoryScan::from_sub_agent_branch_messages(&[ai_latest_specific_load_row(
+            vec!["demo.greeter.api.greeter-api".into()],
+            Some("No unit found".into()),
+        )]);
+        assert!(
+            scan.mutate_prerequisite_for_unit_id_in_args(
+                modify_unit::TOOL_NAME,
+                &serde_json::json!({ "unit_id": unit_id }),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn mutate_prerequisite_accepts_path_in_multi_path_load() {
+        let scan = FlowHistoryScan::from_sub_agent_branch_messages(&[ai_latest_specific_load_row(
+            vec![
+                "auth.users.api.users".into(),
+                "demo.greeter.api.greeter-api".into(),
+            ],
+            None,
+        )]);
+        assert!(
+            scan.mutate_prerequisite_for_unit_id_in_args(
+                modify_unit::TOOL_NAME,
+                &serde_json::json!({ "unit_id": "demo.greeter.api.greeter-api.2" }),
+            )
+            .is_ok()
+        );
+        assert!(
+            scan.mutate_prerequisite_for_unit_id_in_args(
+                modify_unit::TOOL_NAME,
+                &serde_json::json!({ "unit_id": "billing.core.api.invoice.1" }),
+            )
+            .is_err()
+        );
     }
 
     #[test]
