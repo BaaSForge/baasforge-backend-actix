@@ -236,6 +236,72 @@ pub fn is_known_queue_tool(name: &str) -> bool {
         .any(|(registered_name, _, _)| *registered_name == name)
 }
 
+fn queue_registry_entry_exact(
+    tool_name: &str,
+) -> Option<(&'static str, ChatMessageType, PayloadFromArgsFn)> {
+    tool_queue_registry()
+        .iter()
+        .find(|(registered_name, _, _)| *registered_name == tool_name)
+        .map(|(n, t, f)| (*n, *t, *f))
+}
+
+/// Resolves a registry row for LLM tool names, including common singular/plural hallucinations.
+fn queue_registry_entry_for_tool_name(
+    tool_name: &str,
+) -> Option<(&'static str, ChatMessageType, PayloadFromArgsFn)> {
+    if let Some(entry) = queue_registry_entry_exact(tool_name) {
+        return Some(entry);
+    }
+    let plural = format!("{tool_name}s");
+    if let Some(entry) = queue_registry_entry_exact(&plural) {
+        return Some(entry);
+    }
+    tool_name
+        .strip_suffix('s')
+        .and_then(queue_registry_entry_exact)
+}
+
+fn prequeue_tool_failure_payload(
+    tool_name: &str,
+    tool_call_id: Option<String>,
+    raw_arguments: &Value,
+    error: &str,
+) -> (ChatMessageType, Value) {
+    let minimal = serde_json::json!({
+        "error": error,
+        "tool_name": tool_name,
+        "tool_call_id": tool_call_id,
+        "raw_arguments": raw_arguments,
+    });
+    let Some((_, message_type, payload_from_args)) = queue_registry_entry_for_tool_name(tool_name)
+    else {
+        let fallback = list_unit_contexts::ToolListUnitContextsPayload {
+            args: Default::default(),
+            context_slugs: vec![],
+            tool_call_id,
+            tool_name: Some(tool_name.to_string()),
+            error: Some(error.to_string()),
+        };
+        return (
+            list_unit_contexts::MESSAGE_TYPE,
+            serde_json::to_value(fallback).unwrap_or(minimal),
+        );
+    };
+    if let Ok(chat_payload) = payload_from_args(
+        raw_arguments.clone(),
+        tool_call_id.clone(),
+        tool_name,
+    ) {
+        if let Ok(mut value) = serde_json::to_value(&chat_payload) {
+            if let Value::Object(ref mut map) = value {
+                map.insert("error".to_string(), Value::String(error.to_string()));
+                return (message_type, value);
+            }
+        }
+    }
+    (message_type, minimal)
+}
+
 pub use crate::services::chat_worker::agent::tool_names_for_llm_session;
 
 fn tool_queue_registry_for_agent(
@@ -460,6 +526,45 @@ async fn persist_tool_args_parse_failure(
     .await;
 }
 
+#[cfg(test)]
+mod prequeue_failure_tests {
+    use super::*;
+    use crate::models::chat_messages::ChatMessageType;
+
+    #[test]
+    fn unknown_tool_uses_error_field_not_text_payload() {
+        let (message_type, payload) = prequeue_tool_failure_payload(
+            "not_a_real_tool",
+            Some("call-1".into()),
+            &serde_json::json!({}),
+            "Unknown tool",
+        );
+        assert_ne!(message_type, ChatMessageType::Text);
+        assert_eq!(payload.get("error").and_then(|v| v.as_str()), Some("Unknown tool"));
+        assert_eq!(
+            payload.get("tool_name").and_then(|v| v.as_str()),
+            Some("not_a_real_tool")
+        );
+        assert!(payload.get("text").is_none());
+    }
+
+    #[test]
+    fn singular_hallucination_maps_to_fetch_units_type() {
+        let (message_type, payload) = prequeue_tool_failure_payload(
+            "load_latest_production_release_unit",
+            None,
+            &serde_json::json!({"query": "test"}),
+            "not registered",
+        );
+        assert_eq!(message_type, ChatMessageType::ToolFetchRelevantUnits);
+        assert_eq!(payload.get("error").and_then(|v| v.as_str()), Some("not registered"));
+        assert_eq!(
+            payload.get("tool_name").and_then(|v| v.as_str()),
+            Some("load_latest_production_release_unit")
+        );
+    }
+}
+
 /// When [`execute_tool_async`] fails before a normal tool row exists (e.g. callback not registered,
 /// queue publish error), insert a Failed child under the invoking AI Text row so
 /// [`maybe_complete_invoking_message`] can mark the parent Failed instead of leaving it stuck in
@@ -478,34 +583,12 @@ pub async fn persist_tool_execution_failure(
     raw_arguments: &Value,
     error: &str,
 ) {
-    let message_type = tool_queue_registry()
-        .iter()
-        .find(|(name, _, _)| *name == tool_name)
-        .map(|(_, t, _)| *t)
-        .unwrap_or(ChatMessageType::Text);
-    let payload = if message_type == ChatMessageType::Text {
-        let text = format!(
-            "Tool `{}` could not be executed: {}",
-            tool_name,
-            error.trim()
-        );
-        serde_json::to_value(TextPayload {
-            text,
-            ..Default::default()
-        })
-        .unwrap_or_else(|_| {
-            serde_json::json!({
-                "text": format!("Tool `{}` could not be executed.", tool_name),
-            })
-        })
-    } else {
-        serde_json::json!({
-            "error": error,
-            "tool_name": tool_name,
-            "tool_call_id": tool_call_id,
-            "raw_arguments": raw_arguments,
-        })
-    };
+    let (message_type, payload) = prequeue_tool_failure_payload(
+        tool_name,
+        tool_call_id,
+        raw_arguments,
+        error,
+    );
     persist_failed_tool_child_message(
         pool,
         redis_conn,
