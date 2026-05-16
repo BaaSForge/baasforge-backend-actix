@@ -1,14 +1,20 @@
 use super::implement_solution_tool;
 use super::{BoxError, ToolSpec, maybe_complete_invoking_message};
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
+use crate::libs::unit_slug::{
+    LLM_FULL_UNIT_ID_ITEM_DESCRIPTION, LLM_MUTATED_UNIT_IDS_DESCRIPTION, normalize_full_unit_id_arg,
+    validate_full_unit_id_for_tool,
+};
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessagePayload, ChatMessageResponse, ChatMessageRow, ChatMessageStatus,
     ChatMessageType,
 };
+use crate::models::projects::ProjectUnitResponse;
 use crate::routes::ws::events::{ChatSessionMessageUpdatedPayload, WsServerEvent};
 use crate::routes::ws::redis::publish_event_to_channel;
 use crate::routes::ws::user_channel;
 use crate::schema::chat_messages;
+use crate::services::chat_worker::db::load_related_units_for_chat_session_by_full_ids;
 use crate::services::chat_worker::llm::tools::ToolImplementSolutionPayload;
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
@@ -33,8 +39,12 @@ pub struct ToolFinishImplementationPayload {
 
 pub const ARG_DETAILED_REPORT_DESCRIPTION: &str = "Complete implementation report for the planner and user: what was created, modified, or removed (unit identities and behavior), how it satisfies the directive, and any caveats—not a short recap. Write this only after all implementation tool calls are done; omit trial-and-error, exploration steps, and intermediate reasoning.";
 
+pub const ARG_MUTATED_UNIT_IDS_DESCRIPTION: &str = LLM_MUTATED_UNIT_IDS_DESCRIPTION;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFinishImplementationArgs {
+    #[schemars(description = ARG_MUTATED_UNIT_IDS_DESCRIPTION)]
+    pub mutated_unit_ids: Vec<String>,
     #[schemars(description = ARG_DETAILED_REPORT_DESCRIPTION)]
     pub detailed_report: String,
 }
@@ -46,7 +56,7 @@ pub const TOOL_NAME: &str = "finish_implementation";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Call when implementation is done. Pass detailed_report: the full account of what was done (not a brief summary) so the planner can continue.",
+        description: "Call when implementation is done. Pass mutated_unit_ids as an array of full dot-separated unit id strings for every unit you successfully created, modified, or removed (or [] if none), plus detailed_report: the full account of what was done (not a brief summary) so the planner can continue.",
         parameters: params_schema(),
     }
 }
@@ -55,12 +65,20 @@ fn params_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
+            "mutated_unit_ids": {
+                "type": "array",
+                "description": ARG_MUTATED_UNIT_IDS_DESCRIPTION,
+                "items": {
+                    "type": "string",
+                    "description": LLM_FULL_UNIT_ID_ITEM_DESCRIPTION
+                }
+            },
             "detailed_report": {
                 "type": "string",
                 "description": ARG_DETAILED_REPORT_DESCRIPTION
             }
         },
-        "required": ["detailed_report"]
+        "required": ["mutated_unit_ids", "detailed_report"]
     })
 }
 
@@ -74,7 +92,12 @@ pub fn payload_from_args(
     tool_call_id: Option<String>,
     tool_name: &str,
 ) -> Result<ChatMessagePayload, BoxError> {
-    let args = serde_json::from_value::<ToolFinishImplementationArgs>(args).unwrap_or_default();
+    let mut args = serde_json::from_value::<ToolFinishImplementationArgs>(args).unwrap_or_default();
+    args.mutated_unit_ids = args
+        .mutated_unit_ids
+        .into_iter()
+        .map(|id| normalize_full_unit_id_arg(&id))
+        .collect();
     Ok(ChatMessagePayload::ToolFinishImplementation(
         ToolFinishImplementationPayload {
             args,
@@ -102,7 +125,34 @@ pub async fn handler(
         }
     };
 
-    let (developer_text_id, implement_tool_id, planner_text_id, implement_payload) =
+    let full_ids: Vec<String> = finish_payload
+        .args
+        .mutated_unit_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+
+    let mutated_unit_ids_validation_error: Option<String> = {
+        let mut err = None;
+        for (i, id) in finish_payload.args.mutated_unit_ids.iter().enumerate() {
+            let t = id.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if let Err(msg) = validate_full_unit_id_for_tool(t) {
+                err = Some(format!(
+                    "finish_implementation: mutated_unit_ids[{i}] invalid: {msg}"
+                ));
+                break;
+            }
+        }
+        err
+    };
+
+    let resolve_mutation_units = mutated_unit_ids_validation_error.is_none();
+
+    let (developer_text_id, implement_tool_id, planner_text_id, implement_payload, mutated_units) =
         block_on_db_tokio(&pool, move |conn| {
             let finish_row: ChatMessageRow = chat_messages::table
                 .filter(chat_messages::id.eq(message_id))
@@ -156,20 +206,118 @@ pub async fn handler(
                 _ => return Err(diesel::result::Error::NotFound),
             };
 
+            let mutated_units = if resolve_mutation_units {
+                load_related_units_for_chat_session_by_full_ids(conn, project_id, session_id, &full_ids)?
+            } else {
+                vec![]
+            };
+
             Ok::<_, diesel::result::Error>((
                 developer_text_id,
                 implement_tool_id,
                 planner_text_id,
                 implement_payload,
+                mutated_units,
             ))
         })
         .await
         .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
 
+    if let Some(err) = mutated_unit_ids_validation_error {
+        let finish_out = ToolFinishImplementationPayload {
+            args: finish_payload.args.clone(),
+            tool_call_id: finish_payload.tool_call_id.clone(),
+            tool_name: finish_payload.tool_name.clone(),
+            error: Some(err.clone()),
+        };
+        let merged = ToolImplementSolutionPayload {
+            args: implement_payload.args.clone(),
+            mutated_units,
+            detailed_report: finish_payload.args.detailed_report.clone(),
+            tool_call_id: implement_payload.tool_call_id.clone(),
+            tool_name: implement_payload.tool_name.clone(),
+            error: Some(err),
+        };
+        let merged_json = serde_json::to_value(&merged).map_err(|e| -> BoxError {
+            format!("serialize implement solution payload: {}", e).into()
+        })?;
+        let finish_json = serde_json::to_value(&finish_out).map_err(|e| -> BoxError {
+            format!("serialize finish_implementation payload: {}", e).into()
+        })?;
+
+        let (implement_updated, finish_updated) = block_on_db_tokio(&pool, move |conn| {
+            let implement_updated =
+                diesel::update(chat_messages::table.filter(chat_messages::id.eq(implement_tool_id)))
+                    .set((
+                        chat_messages::payload.eq(Some(merged_json)),
+                        chat_messages::status.eq(ChatMessageStatus::Completed),
+                    ))
+                    .returning(ChatMessageRow::as_returning())
+                    .get_result(conn)?;
+
+            let finish_updated =
+                diesel::update(chat_messages::table.filter(chat_messages::id.eq(message_id)))
+                    .set((
+                        chat_messages::payload.eq(Some(finish_json)),
+                        chat_messages::status.eq(ChatMessageStatus::Completed),
+                    ))
+                    .returning(ChatMessageRow::as_returning())
+                    .get_result(conn)?;
+
+            Ok::<_, diesel::result::Error>((implement_updated, finish_updated))
+        })
+        .await
+        .map_err(|e: BlockingDbError| -> BoxError { Box::new(e) })?;
+
+        let channel = user_channel(user_id);
+        for row in [implement_updated, finish_updated] {
+            let message = ChatMessageResponse::from(row);
+            let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
+                project_id,
+                session_id,
+                message,
+            });
+            let mut guard = redis_conn.lock().await;
+            if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+                tracing::warn!(
+                    "finish_implementation: failed to publish message update: {}",
+                    e
+                );
+            }
+        }
+
+        maybe_complete_invoking_message(
+            &pool,
+            &redis_conn,
+            rabbit_publisher.as_ref(),
+            developer_text_id,
+            user_id,
+            project_id,
+            session_id,
+            false,
+        )
+        .await;
+
+        maybe_complete_invoking_message(
+            &pool,
+            &redis_conn,
+            rabbit_publisher.as_ref(),
+            planner_text_id,
+            user_id,
+            project_id,
+            session_id,
+            true,
+        )
+        .await;
+
+        return Ok(());
+    }
+
     let detailed_report = finish_payload.args.detailed_report.clone();
 
     let merged = ToolImplementSolutionPayload {
         args: implement_payload.args,
+        mutated_units,
         detailed_report,
         tool_call_id: implement_payload.tool_call_id,
         tool_name: Some(implement_solution_tool::TOOL_NAME.to_string()),

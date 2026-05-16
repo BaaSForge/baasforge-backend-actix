@@ -2,6 +2,7 @@ use crate::database::DbPool;
 use crate::models::chat_messages::{
     ChatAgentType, ChatMessagePayload, ChatMessageType, ChatSessionRoleType,
 };
+use crate::models::projects::ProjectUnitResponse;
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::services::chat_worker::llm::tools::{BoxError, ToolSpec};
 use crate::services::message_queue::SharedRabbitPublisher;
@@ -25,6 +26,7 @@ pub struct ToolImplementSolutionArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolImplementSolutionPayload {
     pub args: ToolImplementSolutionArgs,
+    pub mutated_units: Vec<ProjectUnitResponse>,
     pub detailed_report: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -73,6 +75,7 @@ pub fn payload_from_args(
     Ok(ChatMessagePayload::ToolImplementSolution(
         ToolImplementSolutionPayload {
             args,
+            mutated_units: vec![],
             detailed_report: String::new(),
             tool_call_id,
             tool_name: Some(tool_name.to_string()),

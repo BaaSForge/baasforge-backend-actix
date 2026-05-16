@@ -60,6 +60,17 @@ pub const LLM_RELEVANT_UNIT_IDS_DESCRIPTION: &str = concat!(
     "Use an empty array when there are no related units.",
 );
 
+/// `finish_implementation.mutated_unit_ids`: units this run created, modified, or removed (successful mutations only).
+pub const LLM_MUTATED_UNIT_IDS_DESCRIPTION: &str = concat!(
+    "Full unit ids this implementation run created, modified, or removed: each element is one full unit id string ",
+    "(dot-separated: context.module.kind.name.revision)",
+    "Include every unit you successfully created, modified, or removed. ",
+    "Slug segments are lowercase; prefer copying tool output exactly. ",
+    "The last segment is only the revision number (decimal digits), with no `v`, `rev`, or other prefix ",
+    "(e.g. `demo.greeter.api.greeter-api.1`; not `...v1` or `...rev1`). ",
+    "Use an empty array when the directive required no unit mutations.",
+);
+
 /// Per-item schema description for a single full unit id in an array.
 pub const LLM_FULL_UNIT_ID_ITEM_DESCRIPTION: &str = concat!(
     "Full unit id (dot-separated: context.module.kind.name.revision). ",
