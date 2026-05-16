@@ -30,6 +30,12 @@ declare module "@sdk" {
      */
     getApiUnitTriggerUrl(args: { unitPathOrId: ApiUnitPathOrId }): string;
 
+    /**
+     * Returns a runtime env var value.
+     * Encrypted values are decrypted before return.
+     */
+    getSecureEnv(key: string): string;
+
     // -------------------------------------------------------------------------
     // Actor primitives
     // -------------------------------------------------------------------------
@@ -397,7 +403,7 @@ declare module "@sdk" {
 
   export interface ActorMetadata {
     handlers?: string[];
-    maxIdleTime?: string;
+    maxIdleTime?: string | number;
     alarms?: string[];
     stateLimit?: string;
     retry?: RetryPolicy;
