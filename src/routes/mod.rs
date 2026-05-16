@@ -4,6 +4,7 @@ pub mod observability;
 pub mod package;
 pub mod payment;
 pub mod project;
+pub mod runtime_env_vars;
 pub mod purchase;
 pub mod test;
 pub mod ws;
@@ -271,6 +272,34 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         "/projects/{id}",
                         web::get()
                             .to(project::handle_get_project)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/runtime-env-vars",
+                        web::get()
+                            .to(runtime_env_vars::handle_list_project_runtime_env_vars)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/runtime-env-vars",
+                        web::put()
+                            .to(runtime_env_vars::handle_upsert_project_runtime_env_vars)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/runtime-env-vars",
+                        web::delete()
+                            .to(runtime_env_vars::handle_delete_project_runtime_env_vars)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/runtime-env-vars/{key}/runtimes/{runtime_id}/reveal",
+                        web::get()
+                            .to(runtime_env_vars::handle_reveal_project_runtime_env_var)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )

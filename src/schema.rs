@@ -127,6 +127,27 @@ diesel::table! {
 }
 
 diesel::table! {
+    project_runtime_encryption_keys (runtime_id) {
+        runtime_id -> Uuid,
+        encryption_key -> Bytea,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    project_runtime_env_vars (id) {
+        id -> Uuid,
+        project_id -> Uuid,
+        runtime_id -> Uuid,
+        key -> Text,
+        stored_value -> Text,
+        is_encrypted -> Bool,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::PlatformEnvironmentType;
 
@@ -217,6 +238,9 @@ diesel::joinable!(chat_sessions -> users (user_id));
 diesel::joinable!(payments -> packages (package_id));
 diesel::joinable!(payments -> users (user_id));
 diesel::joinable!(project_releases -> projects (project_id));
+diesel::joinable!(project_runtime_encryption_keys -> project_runtimes (runtime_id));
+diesel::joinable!(project_runtime_env_vars -> project_runtimes (runtime_id));
+diesel::joinable!(project_runtime_env_vars -> projects (project_id));
 diesel::joinable!(project_runtimes -> project_releases (live_release_id));
 diesel::joinable!(project_runtimes -> projects (project_id));
 diesel::joinable!(project_units -> chat_sessions (chat_session_id));
@@ -231,6 +255,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     packages,
     payments,
     project_releases,
+    project_runtime_encryption_keys,
+    project_runtime_env_vars,
     project_runtimes,
     project_units,
     projects,

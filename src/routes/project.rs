@@ -43,6 +43,7 @@ use crate::services::releases::{
     project_release_id_for_revision_lane,
     recompute_user_message_edit_disabled_for_session_live_production,
 };
+use crate::services::runtime_secrets::insert_runtime_encryption_keys_for_runtimes;
 use crate::services::stage_release_from_controller::transaction_create_stage_release_from_controller;
 use crate::services::stage_runtime_release::{
     RuntimeDeployDenied, RuntimeDetachDenied, StageRuntimeDeployDenied,
@@ -302,7 +303,7 @@ pub async fn handle_create_project(
                 .returning(ProjectResponse::as_select())
                 .get_result(conn)?;
 
-            diesel::insert_into(project_runtimes::table)
+            let runtimes: Vec<ProjectRuntimeResponse> = diesel::insert_into(project_runtimes::table)
                 .values(&[
                     ProjectRuntimeInsert {
                         project_id: project.id,
@@ -323,7 +324,12 @@ pub async fn handle_create_project(
                         slug: Some("prod".to_string()),
                     },
                 ])
-                .execute(conn)?;
+                .returning(ProjectRuntimeResponse::as_returning())
+                .get_results(conn)?;
+
+            let runtime_ids: Vec<Uuid> = runtimes.iter().map(|r| r.id).collect();
+            insert_runtime_encryption_keys_for_runtimes(conn, &runtime_ids)
+                .map_err(|e| Error::QueryBuilderError(Box::new(e)))?;
 
             Ok(project)
         })
