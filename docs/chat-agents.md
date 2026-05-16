@@ -17,3 +17,9 @@ The purpose of using agents in our chat is to delegate complex decisions to **se
 Each agent can use **its own tools** in **its own context** (its own history) without polluting or interrupting the Planner’s context and history. Sub-agents can call multiple tools, revise their reasoning, try alternatives, and iterate until they are satisfied with a result. When they finish, they return a **single consolidated response** to the main Planner, which then decides how to proceed.
 
 This separation lets specialized work stay deep and iterative where it helps, while the Planner stays focused on orchestration and the big picture.
+
+## **IMPORTANT** — Environment variables
+
+- Unit code reads user-provided secrets and shared config only via **`sdk.getSecureEnv(key)`** — never hardcoded in source.
+- Agents use **`list_project_env_keys`** to see which keys exist (names only, never values).
+- **Planner:** Before **implement solution**, if the plan needs user-set variables, verify keys exist; if any are missing, stop and ask the user to add them in the dashboard under **Environment variables** (exact key names), then continue after confirmation.
