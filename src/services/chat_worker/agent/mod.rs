@@ -22,6 +22,18 @@ use crate::services::chat_worker::llm::history::{
 use diesel::result::Error;
 use uuid::Uuid;
 
+/// Display name for this agent in tool errors and cross-agent references (Orchestrator, Architecture
+/// Analyzer, Solution Analyzer, Programmer, Observability Analyzer).
+pub fn agent_prompt_role_name(agent: &ChatAgentType) -> &'static str {
+    match agent {
+        ChatAgentType::Planner => "Orchestrator",
+        ChatAgentType::ArchitectureAnalyzer => "Architecture Analyzer",
+        ChatAgentType::SolutionAnalyzer => "Solution Analyzer",
+        ChatAgentType::Developer => "Programmer",
+        ChatAgentType::ObservabilityAnalyzer => "Observability Analyzer",
+    }
+}
+
 pub fn tool_names_for_agent(agent: &ChatAgentType) -> &'static [&'static str] {
     match agent {
         ChatAgentType::Planner => planner::tool_names(),

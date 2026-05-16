@@ -105,6 +105,11 @@ pub async fn process_one(
     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
     let flow = resolve_for_agent(&agent, &session_messages);
+    let tool_gate = crate::services::chat_worker::agent_flow::ToolGateDiagnostics::build(
+        agent.clone(),
+        &session_messages,
+        &flow,
+    );
 
     let channel = user_channel(user_id);
     // Tool rows published from this LLM pass must reference `placeholder_ai_message_id` (this AI Text
@@ -120,6 +125,7 @@ pub async fn process_one(
         placeholder_ai_message_id,
         agent.clone(),
         &flow,
+        Some(tool_gate),
     );
     let outcome = with_tool_context(
         tool_ctx,

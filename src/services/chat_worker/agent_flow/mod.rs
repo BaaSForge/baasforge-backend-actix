@@ -1,7 +1,9 @@
 mod context;
+mod discover_units_gate;
 mod engine;
 pub mod flows;
 mod history_scan;
+mod tool_availability;
 
 use crate::models::chat_messages::{ChatAgentType, ChatMessageType, ChatSessionRoleType};
 use flows::architecture_analyzer_flow::ARCHITECTURE_ANALYZER_FLOW;
@@ -16,6 +18,7 @@ pub use engine::{FlowDefinition, FlowResolution, FlowStep, resolve_flow};
 pub use history_scan::{
     tool_name_for_ai_tool_result_type, FlowHistoryScan, SubAgentBranchContext, DISCOVER_UNITS_TRIO,
 };
+pub use tool_availability::ToolGateDiagnostics;
 
 #[derive(Debug, Clone)]
 pub struct AgentFlowSession {

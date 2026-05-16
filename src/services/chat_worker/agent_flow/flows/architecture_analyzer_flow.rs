@@ -1,4 +1,5 @@
 use crate::services::chat_worker::agent_flow::SubAgentBranchContext;
+use crate::services::chat_worker::agent_flow::discover_units_gate;
 use crate::services::chat_worker::agent_flow::engine::{FlowDefinition, FlowStep};
 use crate::services::chat_worker::llm::tools::{
     finish_architecture_analysis, list_modules_for_unit_contexts, list_unit_contexts,
@@ -11,14 +12,9 @@ fn gate_prompt(ctx: &SubAgentBranchContext) -> Option<String> {
     if ctx.discover_units_prerequisites_met() {
         return None;
     }
-    Some(
-        "## Tool gate (system)\n\
-        Before **finish_architecture_analysis** unlocks, you must call **load_latest_production_release_units** once \
-        and **list_unit_contexts** once in this nested run. If **list_unit_contexts** returned at least one context slug, \
-        you must also call **list_modules_for_unit_contexts** once before unlock. If it returned an empty list of context slugs, \
-        **list_modules_for_unit_contexts** is not mandatory for unlock."
-            .to_string(),
-    )
+    Some(discover_units_gate::gate_appendix(
+        &discover_units_gate::architecture_finish_locked(),
+    ))
 }
 
 pub static ARCHITECTURE_ANALYZER_FLOW: FlowDefinition<SubAgentBranchContext> = FlowDefinition {

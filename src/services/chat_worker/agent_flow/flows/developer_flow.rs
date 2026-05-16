@@ -1,6 +1,7 @@
 use crate::models::chat_messages::ChatAgentType;
 use crate::services::chat_worker::agent::tool_names_for_agent;
 use crate::services::chat_worker::agent_flow::SubAgentBranchContext;
+use crate::services::chat_worker::agent_flow::discover_units_gate;
 use crate::services::chat_worker::agent_flow::engine::{FlowDefinition, FlowStep};
 use crate::services::chat_worker::llm::tools::{
     list_modules_for_unit_contexts, list_unit_contexts, load_latest_production_release_units,
@@ -12,14 +13,9 @@ fn gate_prompt(ctx: &SubAgentBranchContext) -> Option<String> {
     if ctx.discover_units_prerequisites_met() {
         return None;
     }
-    Some(
-        "## Tool gate (system)\n\
-        Before **create_unit**, **modify_unit**, **remove_unit**, and **finish_implementation** unlock, you must call \
-        **load_latest_production_release_units** once and **list_unit_contexts** once in this run. If **list_unit_contexts** \
-        returned at least one context slug, you must also call **list_modules_for_unit_contexts** once before unlock. \
-        If it returned an empty list of context slugs, **list_modules_for_unit_contexts** is not mandatory for unlock."
-            .to_string(),
-    )
+    Some(discover_units_gate::gate_appendix(
+        &discover_units_gate::developer_mutate_finish_locked(),
+    ))
 }
 
 pub static DEVELOPER_FLOW: FlowDefinition<SubAgentBranchContext> = FlowDefinition {

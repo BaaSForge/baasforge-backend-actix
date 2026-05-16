@@ -56,6 +56,10 @@ impl FlowHistoryScan {
         tool_names.iter().all(|t| self.ever_invoked(t))
     }
 
+    pub fn last_list_unit_contexts_had_no_slugs(&self) -> Option<bool> {
+        self.last_successful_list_unit_contexts_was_empty
+    }
+
     pub fn discover_units_prerequisites_met(&self) -> bool {
         if !self.ever_invoked(load_latest_production_release_units::TOOL_NAME)
             || !self.ever_invoked(list_unit_contexts::TOOL_NAME)

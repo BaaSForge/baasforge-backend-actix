@@ -113,12 +113,15 @@ pub struct ToolSpec {
 pub struct ToolContext {
     /// Map from tool name (e.g. each module’s `TOOL_NAME`) to callback that publishes to the queue.
     pub callbacks: HashMap<String, OnToolCall>,
+    /// Flow step and prerequisite state for detailed errors when a tool is locked or unknown.
+    pub gate: Option<crate::services::chat_worker::agent_flow::ToolGateDiagnostics>,
 }
 
 impl Default for ToolContext {
     fn default() -> Self {
         Self {
             callbacks: HashMap::new(),
+            gate: None,
         }
     }
 }
@@ -226,7 +229,8 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
     ]
 }
 
-fn queue_tool_name_registered(name: &str) -> bool {
+/// Whether `name` is a registered queue-based tool (see [`tool_queue_registry`]).
+pub fn is_known_queue_tool(name: &str) -> bool {
     tool_queue_registry()
         .iter()
         .any(|(registered_name, _, _)| *registered_name == name)
@@ -270,6 +274,7 @@ pub fn tool_context_for_chat_session(
     invoking_message_id: Uuid,
     agent: ChatAgentType,
     flow: &crate::services::chat_worker::agent_flow::AgentFlowSession,
+    gate: Option<crate::services::chat_worker::agent_flow::ToolGateDiagnostics>,
 ) -> ToolContext {
     let mut callbacks = HashMap::new();
     for (name, message_type, payload_from_args) in tool_queue_registry_for_agent(&agent, flow) {
@@ -347,7 +352,7 @@ pub fn tool_context_for_chat_session(
             }) as OnToolCall,
         );
     }
-    ToolContext { callbacks }
+    ToolContext { callbacks, gate }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -550,15 +555,23 @@ pub async fn execute_tool_async(
         .try_with(|ctx| ctx.callbacks.get(name).cloned())
         .map_err(|_| "tools: TOOL_CONTEXT not set (call with_tool_context first)".to_string())?
         .ok_or_else(|| {
-            if queue_tool_name_registered(name) {
-                format!(
-                    "Tool `{}` is not enabled for this turn (flow step / tool gate, or wrong agent). \
-If the system prompt describes prerequisites or a tool gate, call those tools first; otherwise use only tools declared for this agent.",
-                    name
-                )
-            } else {
-                format!("Unknown tool or callback not registered: {}", name)
-            }
+            TOOL_CONTEXT
+                .try_with(|ctx| {
+                    ctx.gate
+                        .as_ref()
+                        .map(|g| g.explain_unavailable(name))
+                })
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| {
+                    if is_known_queue_tool(name) {
+                        format!(
+                            "Tool `{name}` is locked for this turn (flow step / tool gate, or wrong agent)."
+                        )
+                    } else {
+                        format!("Unknown tool `{name}`: not a registered platform tool.")
+                    }
+                })
         })?;
     cb(args, tool_call_id).await?;
     Ok("Request queued.".to_string())
