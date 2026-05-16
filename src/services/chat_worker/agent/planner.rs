@@ -7,7 +7,7 @@ use crate::services::chat_worker::agent::nested_branch_history::SessionHistoryLo
 use crate::services::chat_worker::llm::history::UPSTREAM_EXCLUDED_MESSAGE_TYPES;
 use crate::services::chat_worker::llm::tools::{
     analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool,
-    implement_solution_tool, load_latest_releases,
+    implement_solution_tool, list_project_env_keys, load_latest_releases,
 };
 use crate::services::units as units_definitions;
 use diesel::dsl::not;
@@ -26,6 +26,7 @@ pub fn tool_names() -> &'static [&'static str] {
         analyze_observability_tool::TOOL_NAME,
         implement_solution_tool::TOOL_NAME,
         load_latest_releases::TOOL_NAME,
+        list_project_env_keys::TOOL_NAME,
     ]
 }
 

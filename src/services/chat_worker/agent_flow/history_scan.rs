@@ -11,7 +11,8 @@ use crate::services::chat_worker::llm::tools::{
     analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool, create_unit,
     fetch_release_traces, finish_architecture_analysis, finish_implementation,
     finish_observability_analysis, finish_solution_analysis, implement_solution_tool,
-    list_modules_for_unit_contexts, list_unit_contexts, load_latest_production_release_units,
+    list_modules_for_unit_contexts, list_project_env_keys, list_unit_contexts,
+    load_latest_production_release_units,
     load_latest_specific_production_release_units,
     load_latest_releases, load_specific_production_release_units, modify_unit, remove_unit,
 };
@@ -201,6 +202,7 @@ pub fn tool_name_for_ai_tool_result_type(typ: &ChatMessageType) -> Option<&'stat
             load_latest_specific_production_release_units::TOOL_NAME
         }
         ChatMessageType::ToolListUnitContexts => list_unit_contexts::TOOL_NAME,
+        ChatMessageType::ToolListProjectEnvKeys => list_project_env_keys::TOOL_NAME,
         ChatMessageType::ToolListModulesForUnitContexts => {
             list_modules_for_unit_contexts::TOOL_NAME
         }

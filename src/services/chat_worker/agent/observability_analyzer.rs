@@ -6,7 +6,7 @@ use crate::services::chat_worker::agent::nested_branch_history::{
 };
 use crate::services::chat_worker::llm::tools::{
     analyze_observability_tool::ToolAnalyzeObservabilityArgs, fetch_release_traces,
-    finish_observability_analysis, load_latest_production_release_units,
+    finish_observability_analysis, list_project_env_keys, load_latest_production_release_units,
 };
 use crate::services::unit_technical_reviewer::rule_checker;
 use crate::services::units as units_definitions;
@@ -66,6 +66,7 @@ pub fn tool_names() -> &'static [&'static str] {
         // TODO: we might need to add `load_release_units` tool instead of `load_latest_production_release_units` as the whole job of observability analyzer is to analyze the a release not the production units.
         load_latest_production_release_units::TOOL_NAME,
         fetch_release_traces::TOOL_NAME,
+        list_project_env_keys::TOOL_NAME,
         finish_observability_analysis::TOOL_NAME,
     ]
 }

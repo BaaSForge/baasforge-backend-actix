@@ -32,6 +32,7 @@ pub mod finish_observability_analysis;
 pub mod finish_solution_analysis;
 pub mod implement_solution_tool;
 pub mod list_modules_for_unit_contexts;
+pub mod list_project_env_keys;
 pub mod list_unit_contexts;
 pub mod load_latest_production_release_units;
 pub mod load_latest_specific_production_release_units;
@@ -52,6 +53,7 @@ pub use finish_observability_analysis::ToolFinishObservabilityAnalysisPayload;
 pub use finish_solution_analysis::ToolFinishSolutionAnalysisPayload;
 pub use implement_solution_tool::ToolImplementSolutionPayload;
 pub use list_modules_for_unit_contexts::ToolListModulesForUnitContextsPayload;
+pub use list_project_env_keys::ToolListProjectEnvKeysPayload;
 pub use list_unit_contexts::ToolListUnitContextsPayload;
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
 pub use load_latest_specific_production_release_units::ToolFetchLatestSpecificProductionReleaseUnitsPayload;
@@ -185,6 +187,11 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             list_modules_for_unit_contexts::TOOL_NAME,
             list_modules_for_unit_contexts::MESSAGE_TYPE,
             list_modules_for_unit_contexts::payload_from_args,
+        ),
+        (
+            list_project_env_keys::TOOL_NAME,
+            list_project_env_keys::MESSAGE_TYPE,
+            list_project_env_keys::payload_from_args,
         ),
         (
             analyze_architecture_tool::TOOL_NAME,
@@ -629,6 +636,7 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
         fetch_release_traces::spec(),
         list_unit_contexts::spec(),
         list_modules_for_unit_contexts::spec(),
+        list_project_env_keys::spec(),
         analyze_architecture_tool::spec(),
         finish_architecture_analysis::spec(),
         analyze_solution_tool::spec(),
@@ -936,6 +944,10 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                 (
                     list_modules_for_unit_contexts::MESSAGE_TYPE,
                     wrap_handler_with_payload(list_modules_for_unit_contexts::handler),
+                ),
+                (
+                    list_project_env_keys::MESSAGE_TYPE,
+                    wrap_handler_with_payload(list_project_env_keys::handler),
                 ),
                 (
                     analyze_architecture_tool::MESSAGE_TYPE,

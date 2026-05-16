@@ -82,6 +82,7 @@ fn is_tool_result_type(type_: &ChatMessageType) -> bool {
             | ChatMessageType::ToolFetchReleaseTraces
             | ChatMessageType::ToolListUnitContexts
             | ChatMessageType::ToolListModulesForUnitContexts
+            | ChatMessageType::ToolListProjectEnvKeys
             | ChatMessageType::ToolAnalyzeArchitecture
             | ChatMessageType::ToolFinishArchitectureAnalysis
             | ChatMessageType::ToolAnalyzeSolution
@@ -178,6 +179,11 @@ fn tool_result_from_payload(
             serde_json::to_string(p).unwrap_or_default(),
         ),
         Some(ChatMessagePayload::ToolListModulesForUnitContexts(p)) => (
+            p.tool_call_id.clone(),
+            p.tool_name.clone(),
+            serde_json::to_string(p).unwrap_or_default(),
+        ),
+        Some(ChatMessagePayload::ToolListProjectEnvKeys(p)) => (
             p.tool_call_id.clone(),
             p.tool_name.clone(),
             serde_json::to_string(p).unwrap_or_default(),

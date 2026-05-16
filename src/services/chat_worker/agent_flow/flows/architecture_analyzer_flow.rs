@@ -2,8 +2,8 @@ use crate::services::chat_worker::agent_flow::SubAgentBranchContext;
 use crate::services::chat_worker::agent_flow::discover_units_gate;
 use crate::services::chat_worker::agent_flow::engine::{FlowDefinition, FlowStep};
 use crate::services::chat_worker::llm::tools::{
-    finish_architecture_analysis, list_modules_for_unit_contexts, list_unit_contexts,
-    load_latest_production_release_units,
+    finish_architecture_analysis, list_modules_for_unit_contexts, list_project_env_keys,
+    list_unit_contexts, load_latest_production_release_units,
 };
 
 const FLOW_ID: &str = "architecture_analyzer_gate";
@@ -27,6 +27,7 @@ pub static ARCHITECTURE_ANALYZER_FLOW: FlowDefinition<SubAgentBranchContext> = F
                 load_latest_production_release_units::TOOL_NAME,
                 list_unit_contexts::TOOL_NAME,
                 list_modules_for_unit_contexts::TOOL_NAME,
+                list_project_env_keys::TOOL_NAME,
                 finish_architecture_analysis::TOOL_NAME,
             ]
         },
@@ -40,6 +41,7 @@ pub static ARCHITECTURE_ANALYZER_FLOW: FlowDefinition<SubAgentBranchContext> = F
                 load_latest_production_release_units::TOOL_NAME,
                 list_unit_contexts::TOOL_NAME,
                 list_modules_for_unit_contexts::TOOL_NAME,
+                list_project_env_keys::TOOL_NAME,
             ]
         },
         prompt_appendix: gate_prompt,

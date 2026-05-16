@@ -18,7 +18,8 @@ use crate::services::chat_worker::llm::tools::{
     ToolFinishArchitectureAnalysisPayload,
     ToolFinishImplementationPayload, ToolFinishObservabilityAnalysisPayload,
     ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload,
-    ToolListModulesForUnitContextsPayload, ToolListUnitContextsPayload, ToolModifyUnitPayload,
+    ToolListModulesForUnitContextsPayload, ToolListProjectEnvKeysPayload,
+    ToolListUnitContextsPayload, ToolModifyUnitPayload,
     ToolRemoveUnitPayload,
 };
 
@@ -140,6 +141,7 @@ pub enum ChatMessageType {
     ToolFetchReleaseTraces,
     ToolListUnitContexts,
     ToolListModulesForUnitContexts,
+    ToolListProjectEnvKeys,
     ToolAnalyzeArchitecture,
     ToolFinishArchitectureAnalysis,
     ToolAnalyzeSolution,
@@ -211,6 +213,7 @@ pub enum ChatMessagePayload {
     ToolRemoveUnit(ToolRemoveUnitPayload),
     ToolListUnitContexts(ToolListUnitContextsPayload),
     ToolListModulesForUnitContexts(ToolListModulesForUnitContextsPayload),
+    ToolListProjectEnvKeys(ToolListProjectEnvKeysPayload),
 }
 
 impl ChatMessagePayload {
@@ -246,6 +249,7 @@ impl ChatMessagePayload {
             ChatMessagePayload::ToolListModulesForUnitContexts(_) => {
                 "ToolListModulesForUnitContexts"
             }
+            ChatMessagePayload::ToolListProjectEnvKeys(_) => "ToolListProjectEnvKeys",
             ChatMessagePayload::ToolCreateUnit(_) => "ToolCreateUnit",
             ChatMessagePayload::ToolModifyUnit(_) => "ToolModifyUnit",
             ChatMessagePayload::ToolRemoveUnit(_) => "ToolRemoveUnit",
@@ -306,6 +310,10 @@ impl ChatMessagePayload {
             ChatMessageType::ToolListModulesForUnitContexts => {
                 let p = serde_json::from_value::<ToolListModulesForUnitContextsPayload>(v)?;
                 ChatMessagePayload::ToolListModulesForUnitContexts(p)
+            }
+            ChatMessageType::ToolListProjectEnvKeys => {
+                let p = serde_json::from_value::<ToolListProjectEnvKeysPayload>(v)?;
+                ChatMessagePayload::ToolListProjectEnvKeys(p)
             }
             ChatMessageType::ToolAnalyzeArchitecture => {
                 let p = serde_json::from_value::<ToolAnalyzeArchitecturePayload>(v)?;

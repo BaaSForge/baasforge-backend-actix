@@ -21,8 +21,10 @@ use crate::models::projects::{
     PlatformEnvironmentType, ProjectReleaseResponse, ProjectUnitResponse, ProjectUnitRow,
     ProjectUnitType,
 };
+use crate::models::runtime_env_vars::{ProjectRuntimeEnvVarRow, RuntimeEnvKeySummary};
 use crate::schema::{
-    chat_messages, chat_sessions, project_releases, project_runtimes, project_units, projects,
+    chat_messages, chat_sessions, project_releases, project_runtime_env_vars, project_runtimes,
+    project_units, projects,
 };
 use chrono::{DateTime, Utc};
 use diesel::OptionalExtension;
@@ -380,6 +382,33 @@ pub fn list_distinct_context_slugs_visible_tip_units(
         .filter(|c| seen.insert(c.clone()))
         .collect();
     out.sort();
+    Ok(out)
+}
+
+/// Env var keys for a project grouped by key (all runtimes). Secret values are never loaded.
+pub fn list_project_env_key_summaries(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+) -> Result<Vec<RuntimeEnvKeySummary>, diesel::result::Error> {
+    let rows: Vec<ProjectRuntimeEnvVarRow> = project_runtime_env_vars::table
+        .filter(project_runtime_env_vars::project_id.eq(project_id))
+        .select(ProjectRuntimeEnvVarRow::as_select())
+        .order((
+            project_runtime_env_vars::key.asc(),
+            project_runtime_env_vars::runtime_id.asc(),
+        ))
+        .load(conn)?;
+
+    let mut by_key: HashMap<String, RuntimeEnvKeySummary> = HashMap::new();
+    for row in rows {
+        let entry = by_key.entry(row.key.clone()).or_insert_with(|| RuntimeEnvKeySummary {
+            key: row.key.clone(),
+            is_encrypted: false,
+        });
+        entry.is_encrypted |= row.is_encrypted;
+    }
+    let mut out: Vec<_> = by_key.into_values().collect();
+    out.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(out)
 }
 

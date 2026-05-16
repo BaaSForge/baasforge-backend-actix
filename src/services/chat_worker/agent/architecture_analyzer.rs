@@ -5,8 +5,8 @@ use crate::services::chat_worker::agent::nested_branch_history::{
     load_nested_branch_history, SessionHistoryLoad,
 };
 use crate::services::chat_worker::llm::tools::{
-    finish_architecture_analysis, list_modules_for_unit_contexts, list_unit_contexts,
-    load_latest_production_release_units,
+    finish_architecture_analysis, list_modules_for_unit_contexts, list_project_env_keys,
+    list_unit_contexts, load_latest_production_release_units,
 };
 use crate::services::units as units_definitions;
 use diesel::OptionalExtension;
@@ -44,6 +44,7 @@ pub fn tool_names() -> &'static [&'static str] {
         load_latest_production_release_units::TOOL_NAME,
         list_unit_contexts::TOOL_NAME,
         list_modules_for_unit_contexts::TOOL_NAME,
+        list_project_env_keys::TOOL_NAME,
         finish_architecture_analysis::TOOL_NAME,
     ]
 }

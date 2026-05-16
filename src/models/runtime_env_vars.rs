@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use diesel::Insertable;
 use diesel::Queryable;
 use diesel::Selectable;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Insertable)]
@@ -45,6 +45,13 @@ pub struct ProjectRuntimeEnvVarRow {
     pub is_encrypted: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Key metadata for LLM tools (no secret values).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeEnvKeySummary {
+    pub key: String,
+    pub is_encrypted: bool,
 }
 
 #[derive(Serialize)]

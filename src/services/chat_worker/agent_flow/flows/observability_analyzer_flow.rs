@@ -1,7 +1,8 @@
 use crate::services::chat_worker::agent_flow::SubAgentBranchContext;
 use crate::services::chat_worker::agent_flow::engine::{FlowDefinition, FlowStep};
 use crate::services::chat_worker::llm::tools::{
-    fetch_release_traces, finish_observability_analysis, load_latest_production_release_units,
+    fetch_release_traces, finish_observability_analysis, list_project_env_keys,
+    load_latest_production_release_units,
 };
 
 const FLOW_ID: &str = "observability_analyzer_gate";
@@ -43,6 +44,7 @@ pub static OBSERVABILITY_ANALYZER_FLOW: FlowDefinition<SubAgentBranchContext> = 
                 vec![
                     fetch_release_traces::TOOL_NAME,
                     load_latest_production_release_units::TOOL_NAME,
+                    list_project_env_keys::TOOL_NAME,
                     finish_observability_analysis::TOOL_NAME,
                 ]
             },
@@ -55,6 +57,7 @@ pub static OBSERVABILITY_ANALYZER_FLOW: FlowDefinition<SubAgentBranchContext> = 
                 vec![
                     fetch_release_traces::TOOL_NAME,
                     load_latest_production_release_units::TOOL_NAME,
+                    list_project_env_keys::TOOL_NAME,
                 ]
             },
             prompt_appendix: prompt_no_finish,
@@ -63,7 +66,12 @@ pub static OBSERVABILITY_ANALYZER_FLOW: FlowDefinition<SubAgentBranchContext> = 
     fallback: FlowStep {
         id: "traces_first",
         when: |_| true,
-        allowed_tools: |_| vec![fetch_release_traces::TOOL_NAME],
+        allowed_tools: |_| {
+            vec![
+                fetch_release_traces::TOOL_NAME,
+                list_project_env_keys::TOOL_NAME,
+            ]
+        },
         prompt_appendix: prompt_trace_only,
     },
 };

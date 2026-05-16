@@ -4,7 +4,7 @@ use crate::services::chat_worker::agent_flow::context::SessionFlowContext;
 use crate::services::chat_worker::agent_flow::engine::{FlowDefinition, FlowStep};
 use crate::services::chat_worker::llm::tools::{
     analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool,
-    load_latest_releases,
+    list_project_env_keys, load_latest_releases,
 };
 
 const FLOW_ID: &str = "planner_flow";
@@ -30,6 +30,7 @@ fn tools_discover(_ctx: &SessionFlowContext) -> Vec<&'static str> {
         analyze_architecture_tool::TOOL_NAME,
         analyze_observability_tool::TOOL_NAME,
         load_latest_releases::TOOL_NAME,
+        list_project_env_keys::TOOL_NAME,
     ]
 }
 
@@ -39,6 +40,7 @@ fn tools_plan_solution(_ctx: &SessionFlowContext) -> Vec<&'static str> {
         analyze_observability_tool::TOOL_NAME,
         analyze_solution_tool::TOOL_NAME,
         load_latest_releases::TOOL_NAME,
+        list_project_env_keys::TOOL_NAME,
     ]
 }
 
