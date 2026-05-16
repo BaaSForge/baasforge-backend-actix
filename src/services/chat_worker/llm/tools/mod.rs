@@ -23,6 +23,7 @@ pub mod analyze_architecture_tool;
 pub mod analyze_observability_tool;
 pub mod analyze_solution_tool;
 pub mod create_unit;
+pub mod developer_crud_unit_ids;
 pub mod fetch_release_traces;
 pub mod finish_architecture_analysis;
 pub mod finish_implementation;
@@ -1104,7 +1105,7 @@ pub async fn cascade_sub_agent_ai_text_failure_to_planner(
         return false;
     };
 
-    let Some(planner_invoker_id) = (match block_on_db_tokio(pool, move |conn| {
+    let Some((parent_tool_type, planner_invoker_id)) = (match block_on_db_tokio(pool, move |conn| {
         let tool_row = chat_messages::table
             .filter(chat_messages::id.eq(parent_tool_id))
             .filter(chat_messages::chat_session_id.eq(session_id))
@@ -1122,7 +1123,7 @@ pub async fn cascade_sub_agent_ai_text_failure_to_planner(
             );
             None
         }
-        Ok(Some((_, Some(pid)))) => Some(pid),
+        Ok(Some((t, Some(pid)))) => Some((t, pid)),
         Ok(Some((_, None))) => {
             tracing::warn!(
                 %parent_tool_id,
@@ -1159,6 +1160,18 @@ pub async fn cascade_sub_agent_ai_text_failure_to_planner(
         error,
     )
     .await;
+
+    if parent_tool_type == ChatMessageType::ToolImplementSolution {
+        implement_solution_tool::merge_sub_agent_failure_fallback_into_tool_row(
+            pool,
+            redis_conn,
+            user_id,
+            project_id,
+            session_id,
+            parent_tool_id,
+        )
+        .await;
+    }
 
     maybe_complete_invoking_message(
         pool,

@@ -6,7 +6,10 @@ mod planner;
 mod session_stale_base_release;
 mod solution_analyzer;
 
-pub use nested_branch_history::SessionHistoryLoad;
+pub use developer::tool_message_types as developer_tool_message_types;
+pub use nested_branch_history::{
+    load_nested_subtree_descendant_rows, subtree_message_ids, SessionHistoryLoad,
+};
 pub use session_stale_base_release::{system_prompt_for_agent, tool_names_for_llm_session};
 
 use crate::database::PooledConn;

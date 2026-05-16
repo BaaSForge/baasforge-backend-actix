@@ -57,6 +57,18 @@ pub fn tool_names() -> &'static [&'static str] {
     ]
 }
 
+pub fn tool_message_types() -> &'static [ChatMessageType] {
+    &[
+        load_latest_production_release_units::MESSAGE_TYPE,
+        list_unit_contexts::MESSAGE_TYPE,
+        list_modules_for_unit_contexts::MESSAGE_TYPE,
+        create_unit::MESSAGE_TYPE,
+        modify_unit::MESSAGE_TYPE,
+        remove_unit::MESSAGE_TYPE,
+        finish_implementation::MESSAGE_TYPE,
+    ]
+}
+
 /// Loads history **only** under the nested branch rooted at the `ToolImplementSolution` DB row.
 ///
 /// Prepends a synthetic user message: tool `directive` from the implement row (solution context is in planner history).

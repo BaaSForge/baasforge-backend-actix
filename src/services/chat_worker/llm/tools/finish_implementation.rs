@@ -1,3 +1,4 @@
+use super::developer_crud_unit_ids;
 use super::implement_solution_tool;
 use super::{BoxError, ToolSpec, maybe_complete_invoking_message};
 use crate::database::{BlockingDbError, DbPool, block_on_db_tokio};
@@ -125,13 +126,10 @@ pub async fn handler(
         }
     };
 
-    let full_ids: Vec<String> = finish_payload
-        .args
-        .mutated_unit_ids
-        .iter()
-        .map(|id| id.trim().to_string())
-        .filter(|id| !id.is_empty())
-        .collect();
+    let mut full_ids: Vec<String> = Vec::new();
+    for id in &finish_payload.args.mutated_unit_ids {
+        developer_crud_unit_ids::push_normalized_full_unit_id_unique(&mut full_ids, id);
+    }
 
     let mutated_unit_ids_validation_error: Option<String> = {
         let mut err = None;
@@ -237,6 +235,12 @@ pub async fn handler(
             tool_call_id: implement_payload.tool_call_id.clone(),
             tool_name: implement_payload.tool_name.clone(),
             error: Some(err),
+            incomplete_mutated_units_ids: implement_payload
+                .incomplete_mutated_units_ids
+                .clone(),
+            incomplete_detailed_report_fallback: implement_payload
+                .incomplete_detailed_report_fallback
+                .clone(),
         };
         let merged_json = serde_json::to_value(&merged).map_err(|e| -> BoxError {
             format!("serialize implement solution payload: {}", e).into()
@@ -322,6 +326,8 @@ pub async fn handler(
         tool_call_id: implement_payload.tool_call_id,
         tool_name: Some(implement_solution_tool::TOOL_NAME.to_string()),
         error: None,
+        incomplete_mutated_units_ids: vec![],
+        incomplete_detailed_report_fallback: None,
     };
 
     let merged_json = serde_json::to_value(&merged).map_err(|e| -> BoxError {

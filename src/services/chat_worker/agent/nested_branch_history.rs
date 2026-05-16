@@ -66,8 +66,63 @@ pub fn subtree_message_ids(
     Ok(ids)
 }
 
+/// Descendant [`ChatMessageRow`]s under `anchor` (excluding the anchor row), ordered by id ascending.
+/// Only **Completed**, **Failed**, and **Stopped** rows (excludes **Generating**), then tail-trimmed to at most `row_cap` rows.
+pub fn load_nested_subtree_descendant_rows(
+    conn: &mut PooledConn,
+    session_id: Uuid,
+    anchor: Uuid,
+    expected_anchor_type: ChatMessageType,
+    warn_label: &'static str,
+    row_cap: usize,
+) -> Result<Vec<ChatMessageRow>, Error> {
+    let tool_ok = chat_messages::table
+        .filter(chat_messages::id.eq(anchor))
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(chat_messages::type_.eq(expected_anchor_type))
+        .select(chat_messages::id)
+        .first::<Uuid>(conn)
+        .optional()?
+        .is_some();
+
+    if !tool_ok {
+        tracing::warn!(
+            %anchor,
+            %session_id,
+            "{}::load_nested_subtree_descendant_rows: anchor not found or wrong type in session",
+            warn_label
+        );
+        return Ok(vec![]);
+    }
+
+    let ids = subtree_message_ids(conn, session_id, anchor)?;
+    let ids: Vec<Uuid> = ids.into_iter().filter(|id| *id != anchor).collect();
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut rows: Vec<ChatMessageRow> = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(chat_messages::id.eq_any(&ids))
+        .filter(
+            chat_messages::status
+                .eq(ChatMessageStatus::Completed)
+                .or(chat_messages::status.eq(ChatMessageStatus::Failed))
+                .or(chat_messages::status.eq(ChatMessageStatus::Stopped)),
+        )
+        .order(chat_messages::id.asc())
+        .select(ChatMessageRow::as_select())
+        .load(conn)?;
+
+    if rows.len() > row_cap {
+        let start = rows.len() - row_cap;
+        rows.drain(..start);
+    }
+    Ok(rows)
+}
+
 /// Loads history under the nested branch rooted at the given tool message id:
-/// **Completed**, **Failed**, **Generating**, and **Stopped** rows so assistant `tool_use` turns,
+/// **Completed**, **Failed**, and **Stopped** rows only (excludes **Generating**) so assistant `tool_use` turns,
 /// tool validation failures, and user-stopped runs still pair with their tool results on replay.
 ///
 /// When `anchor_tool_message_id` is missing, the row is not the expected tool type, or it is not in
@@ -87,28 +142,6 @@ pub fn load_nested_branch_history(
         });
     };
 
-    let tool_ok = chat_messages::table
-        .filter(chat_messages::id.eq(anchor))
-        .filter(chat_messages::chat_session_id.eq(session_id))
-        .filter(chat_messages::type_.eq(expected_anchor_type))
-        .select(chat_messages::id)
-        .first::<Uuid>(conn)
-        .optional()?
-        .is_some();
-
-    if !tool_ok {
-        tracing::warn!(
-            %anchor,
-            %session_id,
-            "{}::load_history: expected id of nested analyze tool row in session; returning empty history",
-            warn_label
-        );
-        return Ok(SessionHistoryLoad {
-            session_messages: vec![],
-            db_rows_chronological: vec![],
-        });
-    }
-
     let synthetic_prefix = synthetic_first_user_text.and_then(|s| {
         let t = s.trim();
         if t.is_empty() {
@@ -121,30 +154,14 @@ pub fn load_nested_branch_history(
         ))
     });
 
-    let ids = subtree_message_ids(conn, session_id, anchor)?;
-    let ids: Vec<Uuid> = ids.into_iter().filter(|id| *id != anchor).collect();
-    let rows: Vec<ChatMessageRow> = if ids.is_empty() {
-        vec![]
-    } else {
-        chat_messages::table
-            .filter(chat_messages::chat_session_id.eq(session_id))
-            .filter(chat_messages::id.eq_any(ids))
-            .filter(
-                chat_messages::status
-                    .eq(ChatMessageStatus::Completed)
-                    .or(chat_messages::status.eq(ChatMessageStatus::Failed))
-                    .or(chat_messages::status.eq(ChatMessageStatus::Stopped)),
-            )
-            .order(chat_messages::id.asc())
-            .select(ChatMessageRow::as_select())
-            .load(conn)?
-    };
-
-    let mut db_rows_chronological = rows;
-    if db_rows_chronological.len() > HISTORY_LIMIT as usize {
-        let start = db_rows_chronological.len() - HISTORY_LIMIT as usize;
-        db_rows_chronological.drain(..start);
-    }
+    let db_rows_chronological = load_nested_subtree_descendant_rows(
+        conn,
+        session_id,
+        anchor,
+        expected_anchor_type,
+        warn_label,
+        HISTORY_LIMIT as usize,
+    )?;
 
     let mut session_messages: Vec<_> = db_rows_chronological
         .iter()

@@ -239,15 +239,11 @@ mod tests {
     }
 
     #[test]
-    fn planner_five_same_tool_failures_after_last_user_trips() {
-        let rows = vec![
-            user_text(),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "a"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "b"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "c"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "d"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "e"),
-        ];
+    fn planner_ten_same_tool_failures_after_last_user_trips() {
+        let mut rows = vec![user_text()];
+        rows.extend((0..SAME_TOOL_FAILURE_STREAK_LEN).map(|i| {
+            ai_tool_failed(ChatMessageType::ToolListUnitContexts, &format!("{i}"))
+        }));
         let t = same_tool_failure_streak_tripped(&rows, CircuitBreakerScope::PlannerTurnAfterLastUser);
         assert_eq!(t, Some(list_unit_contexts::TOOL_NAME));
     }
@@ -268,8 +264,8 @@ mod tests {
     }
 
     #[test]
-    fn nested_five_same_tool_failures_trips_without_user_row() {
-        let rows: Vec<_> = (0..5)
+    fn nested_ten_same_tool_failures_trips_without_user_row() {
+        let rows: Vec<_> = (0..SAME_TOOL_FAILURE_STREAK_LEN)
             .map(|_| ai_tool_failed(ChatMessageType::ToolFetchReleaseTraces, "x"))
             .collect();
         let t = same_tool_failure_streak_tripped(&rows, CircuitBreakerScope::NestedSubagentBranch);
@@ -278,15 +274,14 @@ mod tests {
 
     #[test]
     fn assistant_text_between_failures_does_not_reset_streak() {
-        let rows = vec![
+        let mut rows = vec![
             ai_tool_failed(ChatMessageType::ToolListUnitContexts, "1"),
             ai_tool_failed(ChatMessageType::ToolListUnitContexts, "2"),
             assistant_text_ok(),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "3"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "4"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "5"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "6"),
         ];
+        rows.extend((3..=SAME_TOOL_FAILURE_STREAK_LEN).map(|i| {
+            ai_tool_failed(ChatMessageType::ToolListUnitContexts, &format!("{i}"))
+        }));
         assert_eq!(
             same_tool_failure_streak_tripped(&rows, CircuitBreakerScope::NestedSubagentBranch),
             Some(list_unit_contexts::TOOL_NAME)
@@ -295,7 +290,7 @@ mod tests {
 
     #[test]
     fn text_weaving_same_pattern_as_user_scenario_trips() {
-        let rows = vec![
+        let mut rows = vec![
             assistant_text_ok(),
             ai_tool_failed(ChatMessageType::ToolListUnitContexts, "1"),
             ai_tool_failed(ChatMessageType::ToolListUnitContexts, "2"),
@@ -303,9 +298,10 @@ mod tests {
             ai_tool_failed(ChatMessageType::ToolListUnitContexts, "3"),
             assistant_text_ok(),
             assistant_text_ok(),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "4"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "5"),
         ];
+        rows.extend((4..=SAME_TOOL_FAILURE_STREAK_LEN).map(|i| {
+            ai_tool_failed(ChatMessageType::ToolListUnitContexts, &format!("{i}"))
+        }));
         assert_eq!(
             same_tool_failure_streak_tripped(&rows, CircuitBreakerScope::NestedSubagentBranch),
             Some(list_unit_contexts::TOOL_NAME)
@@ -313,15 +309,11 @@ mod tests {
     }
 
     #[test]
-    fn five_consecutive_failures_after_other_message_trips() {
-        let rows = vec![
-            assistant_text_ok(),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "1"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "2"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "3"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "4"),
-            ai_tool_failed(ChatMessageType::ToolListUnitContexts, "5"),
-        ];
+    fn ten_consecutive_failures_after_other_message_trips() {
+        let mut rows = vec![assistant_text_ok()];
+        rows.extend((1..=SAME_TOOL_FAILURE_STREAK_LEN).map(|i| {
+            ai_tool_failed(ChatMessageType::ToolListUnitContexts, &format!("{i}"))
+        }));
         assert_eq!(
             same_tool_failure_streak_tripped(&rows, CircuitBreakerScope::NestedSubagentBranch),
             Some(list_unit_contexts::TOOL_NAME)
@@ -350,7 +342,7 @@ mod tests {
 
     #[test]
     fn completed_with_error_counts_as_failed() {
-        let rows: Vec<_> = (0..5)
+        let rows: Vec<_> = (0..SAME_TOOL_FAILURE_STREAK_LEN)
             .map(|_| {
                 row(
                     ChatSessionRoleType::Ai,
@@ -441,7 +433,14 @@ mod tests {
     #[test]
     fn planner_turn_over_max_failed_tools_trips() {
         let mut db = vec![user_text()];
-        db.extend((0..21).map(|_| ai_tool_failed(ChatMessageType::ToolListUnitContexts, "e")));
+        db.extend((0..MAX_FAILED_TOOL_INVOCATIONS_PER_TURN + 1).map(|i| {
+            let type_ = if i % 2 == 0 {
+                ChatMessageType::ToolListUnitContexts
+            } else {
+                ChatMessageType::ToolListModulesForUnitContexts
+            };
+            ai_tool_failed(type_, "e")
+        }));
         let load = SessionHistoryLoad {
             session_messages: vec![],
             db_rows_chronological: db,
@@ -454,8 +453,15 @@ mod tests {
 
     #[test]
     fn nested_branch_over_max_failed_tools_trips() {
-        let rows: Vec<_> = (0..21)
-            .map(|_| ai_tool_failed(ChatMessageType::ToolListUnitContexts, "e"))
+        let rows: Vec<_> = (0..MAX_FAILED_TOOL_INVOCATIONS_PER_TURN + 1)
+            .map(|i| {
+                let type_ = if i % 2 == 0 {
+                    ChatMessageType::ToolListUnitContexts
+                } else {
+                    ChatMessageType::ToolListModulesForUnitContexts
+                };
+                ai_tool_failed(type_, "e")
+            })
             .collect();
         let load = SessionHistoryLoad {
             session_messages: vec![(
@@ -475,7 +481,14 @@ mod tests {
     fn max_messages_checked_before_failed_tool_count() {
         let mut db = vec![user_text()];
         db.extend((0..101).map(|_| assistant_text_ok()));
-        db.extend((0..21).map(|_| ai_tool_failed(ChatMessageType::ToolListUnitContexts, "e")));
+        db.extend((0..MAX_FAILED_TOOL_INVOCATIONS_PER_TURN + 1).map(|i| {
+            let type_ = if i % 2 == 0 {
+                ChatMessageType::ToolListUnitContexts
+            } else {
+                ChatMessageType::ToolListModulesForUnitContexts
+            };
+            ai_tool_failed(type_, "e")
+        }));
         let load = SessionHistoryLoad {
             session_messages: vec![],
             db_rows_chronological: db,
