@@ -12,6 +12,9 @@ use crate::services::observability::{
     JaegerQueryError, JaegerQueryFilters, MAX_LOOKBACK_MINUTES, ObservabilityService,
     query_jaeger_traces,
 };
+use crate::services::trace_secrets_masking::{
+    load_project_trace_mask_secrets_diesel, mask_jaeger_spans,
+};
 use diesel::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -275,7 +278,7 @@ pub async fn handler(
         limit_per_service: LIMIT_PER_SERVICE,
     };
 
-    let spans = match query_jaeger_traces(&base_url, &filters).await {
+    let mut spans = match query_jaeger_traces(&base_url, &filters).await {
         Ok(m) => m
             .into_iter()
             .flat_map(|(_, spans)| spans)
@@ -301,6 +304,22 @@ pub async fn handler(
             .await;
         }
     };
+
+    let mask_project_id = _project_id;
+    match block_on_db_tokio(&pool, move |conn| {
+        load_project_trace_mask_secrets_diesel(conn, mask_project_id)
+    })
+    .await
+    {
+        Ok(secrets) => mask_jaeger_spans(&mut spans, &secrets),
+        Err(e) => {
+            log::error!(
+                "[fetch_release_traces] failed to load mask secrets project_id={}: {:?}",
+                _project_id,
+                e
+            );
+        }
+    }
 
     let full_payload = ToolFetchReleaseTracesPayload {
         args,

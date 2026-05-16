@@ -230,14 +230,6 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                     .route("", web::get().to(ws::handle_ws)),
             )
             .service(
-                web::scope("/api/v1/observability")
-                    .wrap(from_fn(auth_closed_guard_middleware))
-                    .route(
-                        "/traces",
-                        web::post().to(observability::handle_query_jaeger_traces),
-                    ),
-            )
-            .service(
                 web::scope("/api/v1/platform")
                     .route(
                         "/projects",
@@ -349,6 +341,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         "/projects/{id}/traces/by-ids",
                         web::post()
                             .to(project::handle_load_project_traces_by_ids)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/traces/query",
+                        web::post()
+                            .to(observability::handle_query_jaeger_traces)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )

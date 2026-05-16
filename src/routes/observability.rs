@@ -1,12 +1,17 @@
+use crate::database;
 use crate::libs::api_response::{api_error, api_success};
 use crate::routes::AppContext;
 use crate::services::observability::{
     DEFAULT_LIMIT_PER_SERVICE, DEFAULT_LOOKBACK_MINUTES, JaegerQueryError, JaegerQueryFilters,
     MAX_LIMIT_PER_SERVICE, MAX_LOOKBACK_MINUTES, ObservabilityService, query_jaeger_traces,
 };
+use crate::services::trace_secrets_masking::{
+    load_project_trace_mask_secrets_diesel, mask_jaeger_by_service,
+};
 use actix_web::{HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,8 +33,10 @@ pub struct JaegerTracesQueryBody {
 
 pub async fn handle_query_jaeger_traces(
     context: web::Data<AppContext>,
+    path: web::Path<Uuid>,
     body: web::Json<JaegerTracesQueryBody>,
 ) -> HttpResponse {
+    let project_id = path.into_inner();
     let JaegerTracesQueryBody {
         trace_id,
         release_id,
@@ -88,11 +95,28 @@ pub async fn handle_query_jaeger_traces(
         limit_per_service,
     };
 
-    let by_service =
+    let mut by_service =
         match query_jaeger_traces(&context.settings.jaeger_query_base_url, &filters).await {
             Ok(v) => v,
             Err(e) => return jaeger_error_to_response(e),
         };
+
+    match database::block_on_db(&context.pool, move |conn| {
+        load_project_trace_mask_secrets_diesel(conn, project_id)
+    })
+    .await
+    {
+        Ok(secrets) => mask_jaeger_by_service(&mut by_service, &secrets),
+        Err(e) => {
+            log::error!(
+                "[handle_query_jaeger_traces] failed to load mask secrets project_id={}: {:?}",
+                project_id,
+                e
+            );
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    }
 
     HttpResponse::Ok().json(api_success(
         "Jaeger traces fetched successfully",

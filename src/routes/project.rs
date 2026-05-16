@@ -44,6 +44,9 @@ use crate::services::releases::{
     recompute_user_message_edit_disabled_for_session_live_production,
 };
 use crate::services::runtime_secrets::insert_runtime_encryption_keys_for_runtimes;
+use crate::services::trace_secrets_masking::{
+    load_project_trace_mask_secrets_diesel, mask_trace_json,
+};
 use crate::services::stage_release_from_controller::transaction_create_stage_release_from_controller;
 use crate::services::stage_runtime_release::{
     RuntimeDeployDenied, RuntimeDetachDenied, StageRuntimeDeployDenied,
@@ -2133,6 +2136,23 @@ pub async fn handle_load_project_traces_by_ids(
         }
     }
 
+    let mask_secrets = match database::block_on_db(&context.pool, move |conn| {
+        load_project_trace_mask_secrets_diesel(conn, project_id)
+    })
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!(
+                "[handle_load_project_traces_by_ids] failed to load mask secrets project_id={}: {:?}",
+                project_id,
+                e
+            );
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
     let jaeger_base = context.settings.jaeger_query_base_url.clone();
     let fetched = match try_join_all(uniq.iter().map(|tid| {
         let base = jaeger_base.clone();
@@ -2297,7 +2317,7 @@ pub async fn handle_load_project_traces_by_ids(
 
         let entry = LoadedProjectTraceEntry {
             trace_id: p.trace_id,
-            trace: p.trace,
+            trace: mask_trace_json(p.trace, &mask_secrets),
             release,
             runtime,
             unit,
