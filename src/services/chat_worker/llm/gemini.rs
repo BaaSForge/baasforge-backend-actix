@@ -30,7 +30,8 @@ use super::tools::{
     create_unit, fetch_release_traces, finish_architecture_analysis, finish_implementation,
     finish_observability_analysis, finish_solution_analysis, implement_solution_tool,
     list_modules_for_unit_contexts, list_unit_contexts, load_latest_production_release_units,
-    load_latest_releases, modify_unit, remove_unit,
+    load_latest_specific_production_release_units, load_latest_releases,
+    load_specific_production_release_units, modify_unit, remove_unit,
 };
 use super::{BoxError, GeminiThinkingEnv};
 use serde_json::Value;
@@ -43,6 +44,14 @@ fn gemini_declaration_fns_by_name() -> &'static [(
         (
             load_latest_production_release_units::TOOL_NAME,
             load_latest_production_release_units::gemini_declaration,
+        ),
+        (
+            load_specific_production_release_units::TOOL_NAME,
+            load_specific_production_release_units::gemini_declaration,
+        ),
+        (
+            load_latest_specific_production_release_units::TOOL_NAME,
+            load_latest_specific_production_release_units::gemini_declaration,
         ),
         (
             load_latest_releases::TOOL_NAME,

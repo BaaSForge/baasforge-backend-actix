@@ -123,6 +123,24 @@ pub fn validate_full_unit_id_revision_segment(unit_id: &str) -> Result<(), Strin
     Ok(())
 }
 
+/// Parses a four-segment unit path only: `context.module.unit_type.unit_name` (no revision).
+/// Rejects full unit ids (five segments).
+pub fn parse_unit_path_only(s: &str) -> Result<UnitPath, String> {
+    let parts: Vec<&str> = s.split('.').filter(|p| !p.is_empty()).collect();
+    if parts.len() == 5 {
+        return Err(
+            "expected exactly four dot-separated segments (context.module.unit_type.unit_name) with no revision; got a full unit id (five segments).".to_string()
+        );
+    }
+    if parts.len() != 4 {
+        return Err(format!(
+            "expected exactly four dot-separated segments (context.module.unit_type.unit_name); got {}",
+            parts.len()
+        ));
+    }
+    parse_unit_path_four_segments(parts[0], parts[1], parts[2], parts[3], s)
+}
+
 /// Parses a [`UnitPath`] from a string.
 ///
 /// - **Full unit id** — five segments, last segment the revision as **decimal digits only** (no
@@ -162,6 +180,16 @@ pub fn parse_unit_path(s: &str) -> Result<UnitPath, String> {
             ));
         }
     };
+    parse_unit_path_four_segments(a, b, c, d, s)
+}
+
+fn parse_unit_path_four_segments(
+    a: &str,
+    b: &str,
+    c: &str,
+    d: &str,
+    original: &str,
+) -> Result<UnitPath, String> {
     for (name, val) in [
         ("context_slug", a),
         ("module_slug", b),
@@ -169,8 +197,8 @@ pub fn parse_unit_path(s: &str) -> Result<UnitPath, String> {
     ] {
         if !is_valid_slug(val) {
             return Err(format!(
-                "invalid unit path: `{}` segment `{}` is not a valid slug (must match `{}`)",
-                name, val, SLUG_PATTERN
+                "invalid unit path `{}`: `{}` segment `{}` is not a valid slug (must match `{}`)",
+                original, name, val, SLUG_PATTERN
             ));
         }
     }
@@ -181,8 +209,8 @@ pub fn parse_unit_path(s: &str) -> Result<UnitPath, String> {
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "invalid unit path: unit_type `{}` is unknown; valid values are {}",
-            c, valid
+            "invalid unit path `{}`: unit_type `{}` is unknown; valid values are {}",
+            original, c, valid
         )
     })?;
     Ok(UnitPath {

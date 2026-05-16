@@ -10,7 +10,8 @@ use crate::services::chat_worker::llm::tools::{
     fetch_release_traces, finish_architecture_analysis, finish_implementation,
     finish_observability_analysis, finish_solution_analysis, implement_solution_tool,
     list_modules_for_unit_contexts, list_unit_contexts, load_latest_production_release_units,
-    load_latest_releases, modify_unit, remove_unit,
+    load_latest_specific_production_release_units, load_latest_releases,
+    load_specific_production_release_units, modify_unit, remove_unit,
 };
 use serde_json::Value;
 use std::collections::HashSet;
@@ -141,6 +142,12 @@ pub fn tool_name_for_ai_tool_result_type(typ: &ChatMessageType) -> Option<&'stat
         ChatMessageType::ToolAnalyzeObservability => analyze_observability_tool::TOOL_NAME,
         ChatMessageType::ToolFetchLatestReleases => load_latest_releases::TOOL_NAME,
         ChatMessageType::ToolFetchRelevantUnits => load_latest_production_release_units::TOOL_NAME,
+        ChatMessageType::ToolFetchSpecificProductionReleaseUnits => {
+            load_specific_production_release_units::TOOL_NAME
+        }
+        ChatMessageType::ToolFetchLatestSpecificProductionReleaseUnits => {
+            load_latest_specific_production_release_units::TOOL_NAME
+        }
         ChatMessageType::ToolListUnitContexts => list_unit_contexts::TOOL_NAME,
         ChatMessageType::ToolListModulesForUnitContexts => {
             list_modules_for_unit_contexts::TOOL_NAME

@@ -13,7 +13,9 @@ use crate::models::projects::{
 use crate::services::chat_worker::llm::tools::{
     ToolAnalyzeArchitecturePayload, ToolAnalyzeObservabilityPayload, ToolAnalyzeSolutionPayload,
     ToolCreateUnitPayload, ToolFetchLatestReleasesPayload, ToolFetchReleaseTracesPayload,
-    ToolFetchRelevantUnitsPayload, ToolFinishArchitectureAnalysisPayload,
+    ToolFetchLatestSpecificProductionReleaseUnitsPayload,
+    ToolFetchRelevantUnitsPayload, ToolFetchSpecificProductionReleaseUnitsPayload,
+    ToolFinishArchitectureAnalysisPayload,
     ToolFinishImplementationPayload, ToolFinishObservabilityAnalysisPayload,
     ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload,
     ToolListModulesForUnitContextsPayload, ToolListUnitContextsPayload, ToolModifyUnitPayload,
@@ -132,6 +134,8 @@ pub enum ChatMessageType {
     ReleaseControllerBox,
     RejectControllerBox,
     ToolFetchRelevantUnits,
+    ToolFetchSpecificProductionReleaseUnits,
+    ToolFetchLatestSpecificProductionReleaseUnits,
     ToolFetchLatestReleases,
     ToolFetchReleaseTraces,
     ToolListUnitContexts,
@@ -185,6 +189,10 @@ pub enum ChatMessagePayload {
     ReleaseControllerBox(ReleaseControllerBoxPayload),
     RejectControllerBox(RejectControllerBoxPayload),
     ToolFetchRelevantUnits(ToolFetchRelevantUnitsPayload),
+    ToolFetchSpecificProductionReleaseUnits(ToolFetchSpecificProductionReleaseUnitsPayload),
+    ToolFetchLatestSpecificProductionReleaseUnits(
+        ToolFetchLatestSpecificProductionReleaseUnitsPayload,
+    ),
     ToolFetchLatestReleases(ToolFetchLatestReleasesPayload),
     ToolFetchReleaseTraces(ToolFetchReleaseTracesPayload),
     // `ToolListUnitContexts` / `ToolListModulesForUnitContexts` use permissive `args` + defaults.
@@ -214,6 +222,12 @@ impl ChatMessagePayload {
             ChatMessagePayload::ReleaseControllerBox(_) => "ReleaseControllerBox",
             ChatMessagePayload::RejectControllerBox(_) => "RejectControllerBox",
             ChatMessagePayload::ToolFetchRelevantUnits(_) => "ToolFetchRelevantUnits",
+            ChatMessagePayload::ToolFetchSpecificProductionReleaseUnits(_) => {
+                "ToolFetchSpecificProductionReleaseUnits"
+            }
+            ChatMessagePayload::ToolFetchLatestSpecificProductionReleaseUnits(_) => {
+                "ToolFetchLatestSpecificProductionReleaseUnits"
+            }
             ChatMessagePayload::ToolFetchLatestReleases(_) => "ToolFetchLatestReleases",
             ChatMessagePayload::ToolFetchReleaseTraces(_) => "ToolFetchReleaseTraces",
             ChatMessagePayload::ToolAnalyzeArchitecture(_) => "ToolAnalyzeArchitecture",
@@ -265,6 +279,17 @@ impl ChatMessagePayload {
             ChatMessageType::ToolFetchRelevantUnits => {
                 let p = serde_json::from_value::<ToolFetchRelevantUnitsPayload>(v)?;
                 ChatMessagePayload::ToolFetchRelevantUnits(p)
+            }
+            ChatMessageType::ToolFetchSpecificProductionReleaseUnits => {
+                let p =
+                    serde_json::from_value::<ToolFetchSpecificProductionReleaseUnitsPayload>(v)?;
+                ChatMessagePayload::ToolFetchSpecificProductionReleaseUnits(p)
+            }
+            ChatMessageType::ToolFetchLatestSpecificProductionReleaseUnits => {
+                let p = serde_json::from_value::<
+                    ToolFetchLatestSpecificProductionReleaseUnitsPayload,
+                >(v)?;
+                ChatMessagePayload::ToolFetchLatestSpecificProductionReleaseUnits(p)
             }
             ChatMessageType::ToolFetchLatestReleases => {
                 let p = serde_json::from_value::<ToolFetchLatestReleasesPayload>(v)?;

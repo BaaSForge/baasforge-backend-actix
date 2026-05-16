@@ -733,6 +733,38 @@ pub fn load_related_units_for_chat_session_by_full_ids(
     Ok(out)
 }
 
+/// Latest revision of each logical unit path in the session **effective** set (baseline production
+/// release at chat creation plus session creates/modifies/removes). Order follows `paths`; omits
+/// paths with no visible unit (including soft-deleted).
+pub fn load_effective_units_for_chat_session_by_unit_paths(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    paths: &[UnitPath],
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    if paths.is_empty() {
+        return Ok(vec![]);
+    }
+    let effective = load_effective_units_for_chat_session(conn, project_id, session_id)?;
+    let by_key: HashMap<LogicalUnitKey, ProjectUnitResponse> = effective
+        .into_iter()
+        .map(|u| (logical_unit_key_from_row(&u.row), u))
+        .collect();
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let key = (
+            path.context_slug.clone(),
+            path.module_slug.clone(),
+            path.unit_type,
+            path.unit_name_slug.clone(),
+        );
+        if let Some(u) = by_key.get(&key) {
+            out.push(u.clone());
+        }
+    }
+    Ok(out)
+}
+
 pub fn load_latest_releases(
     conn: &mut PooledConn,
     project_id: Uuid,

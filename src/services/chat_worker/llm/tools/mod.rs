@@ -25,6 +25,7 @@ pub mod analyze_solution_tool;
 pub mod create_unit;
 pub mod developer_crud_unit_ids;
 pub mod fetch_release_traces;
+pub mod fetch_session_production_units_common;
 pub mod finish_architecture_analysis;
 pub mod finish_implementation;
 pub mod finish_observability_analysis;
@@ -33,7 +34,9 @@ pub mod implement_solution_tool;
 pub mod list_modules_for_unit_contexts;
 pub mod list_unit_contexts;
 pub mod load_latest_production_release_units;
+pub mod load_latest_specific_production_release_units;
 pub mod load_latest_releases;
+pub mod load_specific_production_release_units;
 pub mod modify_unit;
 pub mod remove_unit;
 
@@ -51,7 +54,9 @@ pub use implement_solution_tool::ToolImplementSolutionPayload;
 pub use list_modules_for_unit_contexts::ToolListModulesForUnitContextsPayload;
 pub use list_unit_contexts::ToolListUnitContextsPayload;
 pub use load_latest_production_release_units::ToolFetchRelevantUnitsPayload;
+pub use load_latest_specific_production_release_units::ToolFetchLatestSpecificProductionReleaseUnitsPayload;
 pub use load_latest_releases::ToolFetchLatestReleasesPayload;
+pub use load_specific_production_release_units::ToolFetchSpecificProductionReleaseUnitsPayload;
 pub use modify_unit::ToolModifyUnitPayload;
 pub use remove_unit::ToolRemoveUnitPayload;
 
@@ -150,6 +155,16 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             load_latest_production_release_units::TOOL_NAME,
             load_latest_production_release_units::MESSAGE_TYPE,
             load_latest_production_release_units::payload_from_args,
+        ),
+        (
+            load_specific_production_release_units::TOOL_NAME,
+            load_specific_production_release_units::MESSAGE_TYPE,
+            load_specific_production_release_units::payload_from_args,
+        ),
+        (
+            load_latest_specific_production_release_units::TOOL_NAME,
+            load_latest_specific_production_release_units::MESSAGE_TYPE,
+            load_latest_specific_production_release_units::payload_from_args,
         ),
         (
             load_latest_releases::TOOL_NAME,
@@ -608,6 +623,8 @@ pub async fn persist_tool_execution_failure(
 pub fn all_tool_specs() -> Vec<ToolSpec> {
     vec![
         load_latest_production_release_units::spec(),
+        load_specific_production_release_units::spec(),
+        load_latest_specific_production_release_units::spec(),
         load_latest_releases::spec(),
         fetch_release_traces::spec(),
         list_unit_contexts::spec(),
@@ -881,6 +898,16 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                 (
                     load_latest_production_release_units::MESSAGE_TYPE,
                     wrap_handler_with_payload(load_latest_production_release_units::handler),
+                ),
+                (
+                    load_specific_production_release_units::MESSAGE_TYPE,
+                    wrap_handler_with_payload(load_specific_production_release_units::handler),
+                ),
+                (
+                    load_latest_specific_production_release_units::MESSAGE_TYPE,
+                    wrap_handler_with_payload(
+                        load_latest_specific_production_release_units::handler,
+                    ),
                 ),
                 (
                     load_latest_releases::MESSAGE_TYPE,
