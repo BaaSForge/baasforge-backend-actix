@@ -188,6 +188,7 @@ unit_technical_reviewer = [
     "dep:oxc_semantic",
     "dep:oxc_syntax",
 ]
+unit_module_body_checker = ["unit_technical_reviewer"]
 
 [lints.clippy]
 disallowed_methods = "deny"

@@ -17,5 +17,5 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "Building unit_technical_reviewer (release, --features unit_technical_reviewer)..."
-CARGO_BUILD_RUSTC_WRAPPER= cargo build --release --bin unit_technical_reviewer --features unit_technical_reviewer
+CARGO_BUILD_RUSTC_WRAPPER= cargo build --release --bin unit_technical_reviewer --features unit_technical_reviewer,unit_module_body_checker
 echo "Done: target/release/unit_technical_reviewer"

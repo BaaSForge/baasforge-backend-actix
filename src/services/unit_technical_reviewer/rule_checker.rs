@@ -262,6 +262,15 @@ pub fn rules_prompt() -> String {
         crate::services::units::common::rules::hint_entries(),
     );
 
+    #[cfg(feature = "unit_module_body_checker")]
+    {
+        out.push_str("## 6. Module Body (No Import-Time Side Effects)\n\n");
+        append_hints(
+            &mut out,
+            crate::services::unit_module_body_checker::hint_entries(),
+        );
+    }
+
     out
 }
 

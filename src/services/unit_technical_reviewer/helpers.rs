@@ -29,6 +29,24 @@ pub use crate::services::unit_technical_reviewer::rule_checker::{
     UnitOperation, compile_ts_to_js, extract_unit_dependencies, run_rule_check,
 };
 
+/// Runs [`run_rule_check`] and, when the `unit_module_body_checker` feature is enabled,
+/// [`crate::services::unit_module_body_checker::run_check`].
+pub fn run_all_rule_checks(
+    operation: UnitOperation,
+    unit_type: &str,
+    code: &str,
+    old_code: Option<&str>,
+) -> Vec<String> {
+    let mut errors = run_rule_check(operation, unit_type, code, old_code);
+    #[cfg(feature = "unit_module_body_checker")]
+    if !code.is_empty() {
+        errors.extend(crate::services::unit_module_body_checker::run_check(
+            unit_type, code,
+        ));
+    }
+    errors
+}
+
 pub async fn load_tool_message_row(
     pool: &DbPool,
     tool_message_id: Uuid,

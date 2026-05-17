@@ -11,7 +11,8 @@ use crate::services::chat_worker::llm::tools::UnitSubTaskStatus;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::helpers::{
     BoxError, RedisConn, UnitOperation, broadcast_message_updated, extract_remove_unit_payload,
-    load_tool_message_row, run_rule_check, trigger_llm_continuation, update_tool_message_payload,
+    load_tool_message_row, run_all_rule_checks, trigger_llm_continuation,
+    update_tool_message_payload,
 };
 use crate::services::unit_technical_reviewer::queue::UnitReviewerQueueMessage;
 use diesel::prelude::*;
@@ -56,7 +57,7 @@ pub async fn process_remove_unit_rule_check(
 
     // Remove has no new code; old_code is the existing unit source.
     let old_code = parent_opt.as_ref().and_then(|p| p.code.as_deref());
-    let rule_errors = run_rule_check(UnitOperation::Remove, &message.unit_type, "", old_code);
+    let rule_errors = run_all_rule_checks(UnitOperation::Remove, &message.unit_type, "", old_code);
 
     if rule_errors.is_empty() {
         match parent_opt {

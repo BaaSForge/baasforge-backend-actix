@@ -10,7 +10,8 @@ use crate::services::chat_worker::llm::tools::UnitSubTaskStatus;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::unit_technical_reviewer::helpers::{
     BoxError, RedisConn, UnitOperation, broadcast_message_updated, compile_ts_to_js,
-    extract_create_unit_payload, extract_unit_dependencies, load_tool_message_row, run_rule_check,
+    extract_create_unit_payload, extract_unit_dependencies, load_tool_message_row,
+    run_all_rule_checks,
     trigger_llm_continuation, update_tool_message_payload,
 };
 use crate::services::unit_technical_reviewer::queue::{
@@ -106,7 +107,7 @@ pub async fn process_create_unit_rule_check(
     let invoking_message_id = row.invoking_message_id;
     let mut payload = extract_create_unit_payload(&row)?;
 
-    let rule_errors = run_rule_check(
+    let rule_errors = run_all_rule_checks(
         UnitOperation::Create,
         &message.unit_type,
         &message.code,

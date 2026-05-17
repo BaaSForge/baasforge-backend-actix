@@ -10,5 +10,6 @@ pub mod runtime_secrets;
 pub mod trace_secrets_masking;
 pub mod stage_release_from_controller;
 pub mod stage_runtime_release;
+pub mod unit_module_body_checker;
 pub mod unit_technical_reviewer;
 pub mod units;
