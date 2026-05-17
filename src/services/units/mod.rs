@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod api;
+pub mod common;
 pub mod queue_worker;
 pub mod type_extractor;
 pub mod typescript_json_schema;
@@ -37,7 +38,7 @@ macro_rules! define_unit_kind_slugs {
     };
 }
 
-define_unit_kind_slugs!("api", "workflow", "queue_worker", "actor");
+define_unit_kind_slugs!("api", "workflow", "queue_worker", "actor", "common");
 
 /// Prose for LLM tool parameters (`unit_type` on `create_unit` JSON schema `description`).
 pub fn unit_type_description_for_tools() -> String {
@@ -53,6 +54,7 @@ pub fn all_briefs() -> String {
         (workflow::TITLE, workflow::BRIEF),
         (queue_worker::TITLE, queue_worker::BRIEF),
         (actor::TITLE, actor::BRIEF),
+        (common::TITLE, common::BRIEF),
     ];
     ROWS.iter()
         .map(|(title, brief)| format!("### {title}\n\n{brief}\n"))
@@ -65,6 +67,7 @@ pub fn all_details() -> String {
         (workflow::TITLE, workflow::DETAIL),
         (queue_worker::TITLE, queue_worker::DETAIL),
         (actor::TITLE, actor::DETAIL),
+        (common::TITLE, common::DETAIL),
     ];
     ROWS.iter()
         .map(|(title, detail)| format!("### {title}\n\n{detail}\n"))
@@ -77,6 +80,7 @@ pub fn all_code_examples() -> String {
         (workflow::TITLE, workflow::CODE_EXAMPLES),
         (queue_worker::TITLE, queue_worker::CODE_EXAMPLES),
         (actor::TITLE, actor::CODE_EXAMPLES),
+        (common::TITLE, common::CODE_EXAMPLES),
     ];
     ROWS.iter()
         .map(|(title, example)| format!("### {title}\n\n{example}\n"))
@@ -89,6 +93,7 @@ pub fn all_communications() -> String {
         (workflow::TITLE, workflow::COMMUNICATION),
         (queue_worker::TITLE, queue_worker::COMMUNICATION),
         (actor::TITLE, actor::COMMUNICATION),
+        (common::TITLE, common::COMMUNICATION),
     ];
     ROWS.iter()
         .map(|(title, comm)| format!("### {title}\n\n{comm}\n"))
@@ -112,6 +117,7 @@ pub fn all_runtimes() -> String {
         (workflow::TITLE, workflow::RUNTIME),
         (queue_worker::TITLE, queue_worker::RUNTIME),
         (actor::TITLE, actor::RUNTIME),
+        (common::TITLE, common::RUNTIME),
     ];
     let per_kind: String = ROWS
         .iter()
@@ -126,6 +132,7 @@ pub fn all_metadata() -> String {
         (workflow::TITLE, workflow::METADATA),
         (queue_worker::TITLE, queue_worker::METADATA),
         (actor::TITLE, actor::METADATA),
+        (common::TITLE, common::METADATA),
     ];
     ROWS.iter()
         .map(|(title, meta)| format!("### {title}\n\n{meta}\n"))
@@ -180,5 +187,6 @@ pub async fn build_unit_metadata(
         crate::models::projects::ProjectUnitType::Actor => {
             actor::build_unit_metadata(pool, project_id, session_id, input.code).await
         }
+        crate::models::projects::ProjectUnitType::Common => None,
     }
 }

@@ -9,8 +9,8 @@
 use oxc_ast::ast::{
     CallExpression, Declaration, ExportAllDeclaration, ExportDefaultDeclarationKind,
     ExportNamedDeclaration, Expression, Function, IdentifierReference, ImportDeclaration,
-    ImportDeclarationSpecifier, ModuleExportName, Program, Statement, TSType, TSTypeName,
-    UnaryExpression,
+    ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement,
+    TSType, TSTypeName, UnaryExpression,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_syntax::operator::UnaryOperator;
@@ -207,6 +207,51 @@ pub fn export_all_source<'a>(e: &'a ExportAllDeclaration<'a>) -> &'a str {
 }
 
 // ── Import utilities ──────────────────────────────────────────────────────────────────────────
+
+/// `unit_type` segment of `@units/<context>.<module>.<unit_type>.<unit_name>`, if well-formed.
+pub fn unit_type_slug_from_units_import(source: &str) -> Option<&str> {
+    let path = source.strip_prefix("@units/")?;
+    let segments: Vec<&str> = path.split('.').filter(|p| !p.is_empty()).collect();
+    if segments.len() == 4 {
+        Some(segments[2])
+    } else {
+        None
+    }
+}
+
+pub fn is_units_import_from_common(source: &str) -> bool {
+    unit_type_slug_from_units_import(source) == Some("common")
+}
+
+/// `true` when the import binds at least one runtime (non-type-only) symbol.
+pub fn units_import_has_runtime_binding(decl: &ImportDeclaration) -> bool {
+    if decl.import_kind == ImportOrExportKind::Type {
+        return false;
+    }
+    let Some(specifiers) = &decl.specifiers else {
+        return true;
+    };
+    for spec in specifiers.iter() {
+        match spec {
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(_)
+            | ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => return true,
+            ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                if s.import_kind == ImportOrExportKind::Value {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Keep in compiled JS: runtime imports from `@units/…common…` only.
+pub fn should_preserve_compiled_import(decl: &ImportDeclaration) -> bool {
+    let source = decl.source.value.as_str();
+    source.starts_with("@units/")
+        && units_import_has_runtime_binding(decl)
+        && is_units_import_from_common(source)
+}
 
 /// Returns all `ImportDeclaration` nodes in the program, in source order.
 pub fn get_import_declarations<'a>(program: &'a Program<'a>) -> Vec<&'a ImportDeclaration<'a>> {

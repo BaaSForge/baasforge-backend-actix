@@ -1,0 +1,1 @@
+-- PostgreSQL does not support removing enum values; downgrade is a no-op.

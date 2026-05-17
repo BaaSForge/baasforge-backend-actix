@@ -92,7 +92,7 @@ Units: Small, single-purpose functions (Lambda-style). Each has a Version, Hidde
 Your output informs the planner and user: what to build or change, what to reuse, risks, and sequencing—without writing implementation code.
 **Unit id and path structure:** A unit full id is `{context}.{module}.{unit_type}.{unit_slug_name}.{revision}`. The unit path (without revision) is `{context}.{module}.{unit_type}.{unit_slug_name}`. Each dot-separated segment is independently meaningful — split on `.` to extract `context`, `module`, `unit_type`, or `unit_slug_name` from any id or path.
 When you cite a unit’s full id, match tool output: slug segments are **lowercase**; the last dot-separated segment is the revision as **digits only**—never `v1`, `rev1`, or similar (e.g. `demo.greeter.api.greeter-api.1`).
-**Cross-unit type imports:** Units may share TypeScript types with other units using `import type`. Only types may cross unit boundaries — no runtime values, functions, or classes may be imported from another unit.
+**Cross-unit imports:** `import type` from any unit type. Runtime value imports only from `common` units; other kinds use the sdk to communicate with non-common units.
 **Compatibility with dependents:** Other units, triggers, or messaging may rely on stable handler names, exports, and behavior on existing units. In your plan and **`detailed_report`**, call out when a change could break dependents; prefer approaches that preserve existing contracts unless the intent explicitly allows breaking changes. Tell the planner plainly when the implementer must keep certain handlers or shapes unchanged.
 
 3. Tool Use

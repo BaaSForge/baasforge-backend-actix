@@ -158,6 +158,7 @@ fn build_vfs(code: &str, units: &[ProjectUnitResponse]) -> HashMap<String, Strin
     // Each non-deleted unit with code becomes a `.ts` file at:
     //   /unit/node_modules/@units/<context>.<module>.<unit_type>.<unit_name>.ts
     // Units are imported as: `import type { Foo } from '@units/context.module.unit-type.unit-name'`
+    // Runtime value imports (kept in compiled code) only from `…common…` paths.
     for unit in units {
         if unit.is_deleted {
             continue;

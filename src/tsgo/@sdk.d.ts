@@ -413,18 +413,17 @@ declare module "@sdk" {
 }
 
 // -----------------------------------------------------------------------------
-// Cross-unit type imports
+// Cross-unit imports (`@units/…`)
 //
-// Units can import types (and only types) from other units via:
+// Path: `@units/<context>.<module>.<unit_type>.<unit_name>`
 //
-//   import type { IncrementInput, IncrementOutput }
-//     from "@units/counter.core.actor.counter-actor";
-//   import type { Input, Output }
-//     from "@units/counter.core.workflow.increment-workflow";
+//   import type { IncrementInput } from "@units/counter.core.actor.counter";
+//   import { normalizeSlug } from "@units/shared.utils.common.helpers";
 //
-// This is compile-time only (stripped at runtime). `import type` is the only
-// form allowed — value imports are rejected by the platform's lint rules.
-// Never put a runtime `import` (without `type`) from `@units/...`.
+// `import type` from any unit type is compile-time only (erased). Runtime
+// `import { … }` is allowed only when `unit_type` is `common`; those imports are
+// kept in compiled code. Value imports from api/workflow/actor/queue_worker units
+// are rejected — use the sdk methods for runtime coupling between those kinds.
 // -----------------------------------------------------------------------------
 
 declare module "@units/*" {

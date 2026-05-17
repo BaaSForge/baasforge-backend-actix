@@ -27,6 +27,13 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
              (e.g. `process.env`, `process.exit`, `process.argv`).",
         ),
         (
+            "Cross-unit `@units/` imports",
+            "Path shape: `@units/<context>.<module>.<unit_type>.<unit_name>`. \
+             `import type { … }` from any unit type is allowed. \
+             Runtime `import { … }` (without `type`) is allowed only when the path's `unit_type` segment is `common`. \
+             No default or namespace imports from `@units/…`.",
+        ),
+        (
             "Only supported `node:*` imports",
             "Only the following named exports from Node built-in modules are supported — \
              no other `node:*` modules or names may be imported. \
@@ -57,7 +64,12 @@ use super::ast_utils;
 
 #[cfg(feature = "unit_technical_reviewer")]
 pub(super) fn rules() -> Vec<Rule> {
-    vec![no_console, no_process, only_allowed_node_imports]
+    vec![
+        no_console,
+        no_process,
+        only_allowed_cross_unit_imports,
+        only_allowed_node_imports,
+    ]
 }
 
 // ── Rules ─────────────────────────────────────────────────────────────────────────────────────
@@ -108,6 +120,50 @@ fn no_process(input: &RuleInput) -> Vec<String> {
     } else {
         vec![]
     }
+}
+
+#[cfg(feature = "unit_technical_reviewer")]
+fn only_allowed_cross_unit_imports(input: &RuleInput) -> Vec<String> {
+    let Some(program) = input.program else {
+        return vec![];
+    };
+
+    let mut errors: Vec<String> = Vec::new();
+
+    for decl in ast_utils::get_import_declarations(program) {
+        let source = decl.source.value.as_str();
+        if !source.starts_with("@units/") {
+            continue;
+        }
+
+        if ast_utils::unit_type_slug_from_units_import(source).is_none() {
+            errors.push(format!(
+                "Import from `{source}` is invalid; expected `@units/<context>.<module>.<unit_type>.<unit_name>` (four segments after `@units/`)"
+            ));
+            continue;
+        }
+
+        if ast_utils::has_namespace_import_from(program, source) {
+            errors.push(format!(
+                "Namespace import from `{source}` is not allowed; use named imports"
+            ));
+        }
+        if ast_utils::has_default_import_from(program, source) {
+            errors.push(format!(
+                "Default import from `{source}` is not allowed; use named imports"
+            ));
+        }
+
+        if ast_utils::units_import_has_runtime_binding(decl)
+            && !ast_utils::is_units_import_from_common(source)
+        {
+            errors.push(format!(
+                "Runtime import from `{source}` is not allowed; value imports from other units must use a `common` unit (`…module.common.unit-name`). Use `import type` for types from other unit kinds, or the sdk for runtime coupling between non-common units"
+            ));
+        }
+    }
+
+    errors
 }
 
 #[cfg(feature = "unit_technical_reviewer")]

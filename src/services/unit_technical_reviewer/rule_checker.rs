@@ -64,6 +64,7 @@ pub fn compile_ts_to_js(ts_source: &str) -> Result<String, String> {
     use oxc_parser::Parser;
     use oxc_semantic::SemanticBuilder;
     use oxc_span::SourceType;
+    use oxc_ast::ast::Statement;
     use oxc_transformer::{TransformOptions, Transformer};
     use std::path::Path;
 
@@ -105,6 +106,11 @@ pub fn compile_ts_to_js(ts_source: &str) -> Result<String, String> {
             .join("; ");
         return Err(format!("Transform error: {msg}"));
     }
+
+    program.body.retain(|stmt| match stmt {
+        Statement::ImportDeclaration(decl) => ast_utils::should_preserve_compiled_import(decl),
+        _ => true,
+    });
 
     Ok(Codegen::new().build(&program).code)
 }
@@ -248,6 +254,12 @@ pub fn rules_prompt() -> String {
     append_hints(
         &mut out,
         crate::services::units::queue_worker::rules::hint_entries(),
+    );
+
+    out.push_str("### Common Units\n\n");
+    append_hints(
+        &mut out,
+        crate::services::units::common::rules::hint_entries(),
     );
 
     out
@@ -400,6 +412,7 @@ fn unit_type_rules(unit_type: &str) -> Vec<Rule> {
         "workflow" => crate::services::units::workflow::rules::rules(),
         "queue_worker" => crate::services::units::queue_worker::rules::rules(),
         "actor" => crate::services::units::actor::rules::rules(),
+        "common" => crate::services::units::common::rules::rules(),
         _ => vec![],
     }
 }
