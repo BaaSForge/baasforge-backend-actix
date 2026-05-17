@@ -425,3 +425,88 @@ fn unit_type_rules(unit_type: &str) -> Vec<Rule> {
         _ => vec![],
     }
 }
+
+#[cfg(all(test, feature = "unit_technical_reviewer"))]
+mod compile_tests {
+    use super::ast_utils::ALLOWED_NODE_IMPORTS;
+    use super::compile_ts_to_js;
+
+    #[test]
+    fn preserves_runtime_import_for_every_allowed_node_export() {
+        for (source, names) in ALLOWED_NODE_IMPORTS {
+            for &name in *names {
+                let ts = format!(
+                    r#"import {{ {name} }} from "{source}";
+export function useIt() {{ return {name}; }}
+"#
+                );
+                let js = compile_ts_to_js(&ts).unwrap_or_else(|e| {
+                    panic!("compile failed for `{name}` from `{source}`: {e}");
+                });
+                assert!(
+                    js.contains(&format!("from \"{source}\""))
+                        || js.contains(&format!("from '{source}'")),
+                    "expected runtime import of `{name}` from `{source}` to be kept, got:\n{js}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preserves_combined_runtime_imports_per_allowed_node_module() {
+        for (source, names) in ALLOWED_NODE_IMPORTS {
+            let imports = names.join(", ");
+            let refs: Vec<String> = names.iter().map(|n| format!("typeof {n}")).collect();
+            let ts = format!(
+                "import {{ {imports} }} from \"{source}\";\nexport function useAll() {{ return [{refs}]; }}\n",
+                refs = refs.join(", ")
+            );
+            let js = compile_ts_to_js(&ts).unwrap_or_else(|e| {
+                panic!("compile failed for combined import from `{source}`: {e}");
+            });
+            assert!(
+                js.contains(source),
+                "expected combined runtime import from `{source}` to be kept, got:\n{js}"
+            );
+            for &name in *names {
+                assert!(
+                    js.contains(name),
+                    "expected `{name}` in combined import from `{source}`, got:\n{js}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preserves_aliased_runtime_node_imports() {
+        let cases = [
+            ("node:querystring", "parse", "parseQuerystring"),
+            ("node:timers/promises", "setTimeout", "setTimeoutPromise"),
+        ];
+        for (source, imported, local) in cases {
+            let ts = format!(
+                r#"import {{ {imported} as {local} }} from "{source}";
+export function useIt() {{ return {local}; }}
+"#
+            );
+            let js = compile_ts_to_js(&ts).expect("compile");
+            assert!(
+                js.contains(source) && js.contains(imported),
+                "expected aliased import `{imported} as {local}` from `{source}` to be kept, got:\n{js}"
+            );
+        }
+    }
+
+    #[test]
+    fn strips_type_only_and_disallowed_node_imports() {
+        let ts = r#"
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { readFile } from "node:fs";
+
+export function noop() {}
+"#;
+        let js = compile_ts_to_js(ts).expect("compile");
+        assert!(!js.contains("node:http"), "type-only import should be stripped:\n{js}");
+        assert!(!js.contains("node:fs"), "disallowed import should be stripped:\n{js}");
+    }
+}

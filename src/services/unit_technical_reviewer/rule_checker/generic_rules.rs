@@ -171,49 +171,10 @@ fn only_allowed_node_imports(input: &RuleInput) -> Vec<String> {
         return vec![];
     };
 
-    // Static allowlist: module source → permitted imported names (original, not aliases).
-    const ALLOWED: &[(&str, &[&str])] = &[
-        ("node:http", &["IncomingMessage", "ServerResponse"]),
-        ("node:querystring", &["parse"]),
-        ("node:stream/consumers", &["text"]),
-        ("node:url", &["URL"]),
-        (
-            "node:crypto",
-            &[
-                "randomUUID",
-                "randomBytes",
-                "randomInt",
-                "randomFillSync",
-                "createHash",
-                "createHmac",
-                "getHashes",
-                "getCiphers",
-                "pbkdf2Sync",
-                "scryptSync",
-                "timingSafeEqual",
-                "createCipheriv",
-                "createDecipheriv",
-                "subtle",
-                "getRandomValues",
-                "webcrypto",
-            ],
-        ),
-        ("node:buffer", &["Buffer"]),
-        ("node:util", &["TextEncoder", "TextDecoder"]),
-        ("node:timers/promises", &["setTimeout"]),
-    ];
-
     let mut errors: Vec<String> = Vec::new();
 
     for src in ast_utils::get_node_module_import_sources(program) {
-        // Reject any node: module not in the allowlist.
-        let Some(allowed_names) =
-            ALLOWED.iter().find_map(
-                |(mod_src, names)| {
-                    if *mod_src == src { Some(*names) } else { None }
-                },
-            )
-        else {
+        let Some(allowed_names) = ast_utils::allowed_names_for_node_import(src) else {
             errors.push(format!(
                 "Import from `{src}` is not supported in units; \
                  only node:http, node:querystring, node:stream/consumers, node:url, \

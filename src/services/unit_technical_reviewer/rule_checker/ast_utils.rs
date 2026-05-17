@@ -208,6 +208,56 @@ pub fn export_all_source<'a>(e: &'a ExportAllDeclaration<'a>) -> &'a str {
 
 // ── Import utilities ──────────────────────────────────────────────────────────────────────────
 
+/// Supported `node:*` import sources and their permitted named exports (original names, not aliases).
+pub const ALLOWED_NODE_IMPORTS: &[(&str, &[&str])] = &[
+    ("node:http", &["IncomingMessage", "ServerResponse"]),
+    ("node:querystring", &["parse"]),
+    ("node:stream/consumers", &["text"]),
+    ("node:url", &["URL"]),
+    (
+        "node:crypto",
+        &[
+            "randomUUID",
+            "randomBytes",
+            "randomInt",
+            "randomFillSync",
+            "createHash",
+            "createHmac",
+            "getHashes",
+            "getCiphers",
+            "pbkdf2Sync",
+            "scryptSync",
+            "timingSafeEqual",
+            "createCipheriv",
+            "createDecipheriv",
+            "subtle",
+            "getRandomValues",
+            "webcrypto",
+        ],
+    ),
+    ("node:buffer", &["Buffer"]),
+    ("node:util", &["TextEncoder", "TextDecoder"]),
+    ("node:timers/promises", &["setTimeout"]),
+];
+
+pub fn is_allowed_node_import_source(source: &str) -> bool {
+    ALLOWED_NODE_IMPORTS
+        .iter()
+        .any(|(mod_src, _)| *mod_src == source)
+}
+
+pub fn allowed_names_for_node_import(source: &str) -> Option<&'static [&'static str]> {
+    ALLOWED_NODE_IMPORTS
+        .iter()
+        .find_map(|(mod_src, names)| {
+            if *mod_src == source {
+                Some(*names)
+            } else {
+                None
+            }
+        })
+}
+
 /// `unit_type` segment of `@units/<context>.<module>.<unit_type>.<unit_name>`, if well-formed.
 pub fn unit_type_slug_from_units_import(source: &str) -> Option<&str> {
     let path = source.strip_prefix("@units/")?;
@@ -259,12 +309,16 @@ pub fn units_import_has_runtime_binding(decl: &ImportDeclaration) -> bool {
     false
 }
 
-/// Keep in compiled JS: runtime imports from `@units/…common…` only.
+/// Keep in compiled JS: runtime imports from `@units/…common…` and allowlisted `node:*` modules.
 pub fn should_preserve_compiled_import(decl: &ImportDeclaration) -> bool {
+    if !units_import_has_runtime_binding(decl) {
+        return false;
+    }
     let source = decl.source.value.as_str();
-    source.starts_with("@units/")
-        && units_import_has_runtime_binding(decl)
-        && is_units_import_from_common(source)
+    if source.starts_with("@units/") {
+        return is_units_import_from_common(source);
+    }
+    is_allowed_node_import_source(source)
 }
 
 /// Returns all `ImportDeclaration` nodes in the program, in source order.
