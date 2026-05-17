@@ -223,6 +223,20 @@ pub fn is_units_import_from_common(source: &str) -> bool {
     unit_type_slug_from_units_import(source) == Some("common")
 }
 
+/// `true` for bare (`import "…"`), namespace (`import * as …`), or default (`import x from "…"`)
+/// forms — every `@units/` import must use explicit named specifiers (`import { a }` / `import type { T }`).
+pub fn units_import_without_named_specifiers(decl: &ImportDeclaration) -> bool {
+    let Some(specifiers) = &decl.specifiers else {
+        return true;
+    };
+    if specifiers.is_empty() {
+        return true;
+    }
+    !specifiers.iter().any(|spec| {
+        matches!(spec, ImportDeclarationSpecifier::ImportSpecifier(_))
+    })
+}
+
 /// `true` when the import binds at least one runtime (non-type-only) symbol.
 pub fn units_import_has_runtime_binding(decl: &ImportDeclaration) -> bool {
     if decl.import_kind == ImportOrExportKind::Type {

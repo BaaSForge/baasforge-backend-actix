@@ -31,7 +31,8 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
             "Path shape: `@units/<context>.<module>.<unit_type>.<unit_name>`. \
              `import type { … }` from any unit type is allowed. \
              Runtime `import { … }` (without `type`) is allowed only when the path's `unit_type` segment is `common`. \
-             No default or namespace imports from `@units/…`.",
+             Every `@units/…` import must name bindings: `import { … }` or `import type { … }`. \
+             Forbidden: bare `import \"@units/…\"`, `import * as … from \"@units/…\"`, and `import x from \"@units/…\"`.",
         ),
         (
             "Only supported `node:*` imports",
@@ -143,15 +144,13 @@ fn only_allowed_cross_unit_imports(input: &RuleInput) -> Vec<String> {
             continue;
         }
 
-        if ast_utils::has_namespace_import_from(program, source) {
+        if ast_utils::units_import_without_named_specifiers(decl) {
             errors.push(format!(
-                "Namespace import from `{source}` is not allowed; use named imports"
+                "Import from `{source}` must list named bindings, e.g. `import {{ fn }} from \"{source}\"` \
+                 or `import type {{ T }} from \"{source}\"`; bare (`import \"…\"`), namespace (`import * as …`), \
+                 and default (`import x from …`) forms are forbidden"
             ));
-        }
-        if ast_utils::has_default_import_from(program, source) {
-            errors.push(format!(
-                "Default import from `{source}` is not allowed; use named imports"
-            ));
+            continue;
         }
 
         if ast_utils::units_import_has_runtime_binding(decl)

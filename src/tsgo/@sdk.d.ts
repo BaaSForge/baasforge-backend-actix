@@ -420,10 +420,10 @@ declare module "@sdk" {
 //   import type { IncrementInput } from "@units/counter.core.actor.counter";
 //   import { normalizeSlug } from "@units/shared.utils.common.helpers";
 //
-// `import type` from any unit type is compile-time only (erased). Runtime
+// `import type { … }` from any unit type is compile-time only (erased). Runtime
 // `import { … }` is allowed only when `unit_type` is `common`; those imports are
-// kept in compiled code. Value imports from api/workflow/actor/queue_worker units
-// are rejected — use the sdk methods for runtime coupling between those kinds.
+// kept in compiled code. Every `@units/…` import must use named bindings — no bare
+// `import "@units/…"`, `import * as …`, or default import from `@units/…`.
 // -----------------------------------------------------------------------------
 
 declare module "@units/*" {

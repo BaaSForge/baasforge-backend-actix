@@ -12,6 +12,11 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
              `import { fn } from '@units/<context>.<module>.common.<name>'`. \
              Use `import type` for types from any unit type.",
         ),
+        (
+            "Name every `@units/` import",
+            "Always use explicit named bindings — `import { sym }` or `import type { T }`. \
+             Never bare `import '@units/…'`, `import * as ns from '@units/…'`, or `import x from '@units/…'`.",
+        ),
     ]
 }
 
