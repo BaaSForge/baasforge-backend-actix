@@ -25,6 +25,63 @@ use uuid::Uuid;
 const MAX_ENV_KEY_LEN: usize = 255;
 const MAX_ENV_VALUE_LEN: usize = 64 * 1024;
 
+fn dedupe_invalidations(invalidations: Vec<(Uuid, String)>) -> Vec<(Uuid, String)> {
+    let mut seen = HashSet::new();
+    invalidations
+        .into_iter()
+        .filter(|pair| seen.insert(pair.clone()))
+        .collect()
+}
+
+async fn notify_runtime_env_cache_invalidate(
+    context: &web::Data<AppContext>,
+    project_id: Uuid,
+    invalidations: &[(Uuid, String)],
+    op_label: &'static str,
+) {
+    let invalidations = dedupe_invalidations(invalidations.to_vec());
+    if invalidations.is_empty() {
+        return;
+    }
+    let subject = context.settings.runtime_nats_subject_env.as_str();
+    let Some(ref nats) = context.runtime_nats_publisher else {
+        tracing::warn!(
+            target: "runtime_nats",
+            op = op_label,
+            subject = %subject,
+            project_id = %project_id,
+            count = invalidations.len(),
+            "runtime NATS publisher not configured; runtimes will not invalidate env cache via NATS"
+        );
+        return;
+    };
+    tracing::info!(
+        target: "runtime_nats",
+        op = op_label,
+        subject = %subject,
+        project_id = %project_id,
+        count = invalidations.len(),
+        "notifying runtimes via NATS (env cache invalidation)"
+    );
+    for (runtime_id, key) in &invalidations {
+        if let Err(e) = nats
+            .publish_runtime_env_invalidate(subject, project_id, *runtime_id, key.as_str())
+            .await
+        {
+            tracing::warn!(
+                target: "runtime_nats",
+                op = op_label,
+                subject = %subject,
+                project_id = %project_id,
+                runtime_id = %runtime_id,
+                key = %key.as_str(),
+                error = %e,
+                "NATS env invalidation publish failed after DB success; runtime cache may be stale"
+            );
+        }
+    }
+}
+
 #[derive(Clone, Deserialize)]
 pub struct UpsertRuntimeEnvVarItem {
     pub key: String,
@@ -258,8 +315,11 @@ pub async fn handle_upsert_project_runtime_env_vars(
         })?;
 
         conn.transaction(|conn| {
+            let mut invalidations = Vec::new();
             for item in &items {
                 for (runtime_id, plaintext) in &item.runtime_values {
+                    invalidations.push((*runtime_id, item.key.clone()));
+
                     let key_row = ensure_runtime_encryption_key(conn, *runtime_id).map_err(|e| {
                         diesel::result::Error::QueryBuilderError(Box::new(e))
                     })?;
@@ -294,19 +354,31 @@ pub async fn handle_upsert_project_runtime_env_vars(
                         .execute(conn)?;
                 }
             }
-            Ok(items
-                .iter()
-                .map(|i| json!({ "key": i.key, "isEncrypted": i.is_encrypted }))
-                .collect::<Vec<_>>())
+            Ok((
+                invalidations,
+                items
+                    .iter()
+                    .map(|i| json!({ "key": i.key, "isEncrypted": i.is_encrypted }))
+                    .collect::<Vec<_>>(),
+            ))
         })
     })
     .await;
 
     match upsert_result {
-        Ok(saved) => HttpResponse::Ok().json(api_success(
-            "Runtime environment variables saved successfully",
-            json!({ "items": saved }),
-        )),
+        Ok((invalidations, saved)) => {
+            notify_runtime_env_cache_invalidate(
+                &context,
+                project_id,
+                &invalidations,
+                "upsert_runtime_env_vars",
+            )
+            .await;
+            HttpResponse::Ok().json(api_success(
+                "Runtime environment variables saved successfully",
+                json!({ "items": saved }),
+            ))
+        }
         Err(BlockingDbError::Query(diesel::result::Error::NotFound)) => HttpResponse::NotFound()
             .json(api_error("Project not found", json!({}))),
         Err(BlockingDbError::Query(diesel::result::Error::QueryBuilderError(e)))
@@ -373,7 +445,7 @@ pub async fn handle_delete_project_runtime_env_vars(
 
     let keys_for_response = keys.clone();
 
-    let deleted = match database::block_on_db(&context.pool, move |conn| {
+    let delete_result = match database::block_on_db(&context.pool, move |conn| {
         let runtime_ids: Vec<Uuid> = project_runtimes::table
             .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
             .filter(projects::owner_user_id.eq(user_id))
@@ -382,20 +454,27 @@ pub async fn handle_delete_project_runtime_env_vars(
             .load(conn)?;
 
         if runtime_ids.is_empty() {
-            return Ok(0);
+            return Ok((0usize, Vec::new()));
         }
 
-        diesel::delete(
+        let invalidations: Vec<(Uuid, String)> = runtime_ids
+            .iter()
+            .flat_map(|runtime_id| keys.iter().map(move |key| (*runtime_id, key.clone())))
+            .collect();
+
+        let deleted = diesel::delete(
             project_runtime_env_vars::table
                 .filter(project_runtime_env_vars::project_id.eq(project_id))
                 .filter(project_runtime_env_vars::key.eq_any(&keys))
-                .filter(project_runtime_env_vars::runtime_id.eq_any(runtime_ids)),
+                .filter(project_runtime_env_vars::runtime_id.eq_any(&runtime_ids)),
         )
-        .execute(conn)
+        .execute(conn)?;
+
+        Ok((deleted, invalidations))
     })
     .await
     {
-        Ok(n) => n,
+        Ok(v) => v,
         Err(_) => {
             log::error!("[handle_delete_project_runtime_env_vars] DB error");
             return HttpResponse::ServiceUnavailable()
@@ -403,9 +482,19 @@ pub async fn handle_delete_project_runtime_env_vars(
         }
     };
 
+    let (deleted, invalidations) = delete_result;
+
     if deleted == 0 {
         return HttpResponse::NotFound().json(api_error("Environment variables not found", json!({})));
     }
+
+    notify_runtime_env_cache_invalidate(
+        &context,
+        project_id,
+        &invalidations,
+        "delete_runtime_env_vars",
+    )
+    .await;
 
     HttpResponse::Ok().json(api_success(
         "Runtime environment variables deleted successfully",

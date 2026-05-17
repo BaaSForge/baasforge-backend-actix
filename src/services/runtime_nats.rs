@@ -77,11 +77,12 @@ impl RuntimeNatsPublisher {
         Ok(Self { jetstream })
     }
 
-    /// Publish arbitrary JSON to a subject that is bound to the runtime release JetStream stream.
+    /// Publish arbitrary JSON to a JetStream subject (core publish does not land in the stream).
     async fn publish_json<T: Serialize>(
         &self,
         subject: &str,
         payload: &T,
+        event_kind: &'static str,
     ) -> Result<(), RuntimeNatsPublishError> {
         let bytes = serde_json::to_vec(payload).map_err(RuntimeNatsPublishError::Serialize)?;
         let payload_json = String::from_utf8_lossy(&bytes);
@@ -89,7 +90,8 @@ impl RuntimeNatsPublisher {
             target: "runtime_nats",
             subject = %subject,
             payload = %payload_json,
-            "publishing runtime release deploy event via JetStream (for runtimes to consume)"
+            event_kind,
+            "publishing runtime event via JetStream (for runtimes to consume)"
         );
         self.jetstream
             .publish(subject.to_string(), bytes.into())
@@ -98,7 +100,8 @@ impl RuntimeNatsPublisher {
         tracing::info!(
             target: "runtime_nats",
             subject = %subject,
-            "runtime release deploy event published via JetStream successfully"
+            event_kind,
+            "runtime event published via JetStream successfully"
         );
         Ok(())
     }
@@ -157,7 +160,7 @@ impl RuntimeNatsPublisher {
                     deployed_release_id: Some(dr),
                     previous_release_id,
                 };
-                self.publish_json(subject, &payload).await
+                self.publish_json(subject, &payload, "release").await
             }
             None => {
                 tracing::info!(
@@ -174,7 +177,7 @@ impl RuntimeNatsPublisher {
                     deployed_release_id: None,
                     previous_release_id,
                 };
-                self.publish_json(subject, &payload).await
+                self.publish_json(subject, &payload, "release").await
             }
         }
     }
@@ -193,6 +196,31 @@ impl RuntimeNatsPublisher {
             deployed_release_id: Some(deployed_release_id),
             previous_release_id,
         };
-        self.publish_json(subject, &payload).await
+        self.publish_json(subject, &payload, "release").await
+    }
+}
+
+/// Payload published when a project runtime env var is created, updated, or deleted.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RuntimeEnvInvalidateEvent {
+    pub project_id: Uuid,
+    pub runtime_id: Uuid,
+    pub key: String,
+}
+
+impl RuntimeNatsPublisher {
+    pub async fn publish_runtime_env_invalidate(
+        &self,
+        subject: &str,
+        project_id: Uuid,
+        runtime_id: Uuid,
+        key: &str,
+    ) -> Result<(), RuntimeNatsPublishError> {
+        let payload = RuntimeEnvInvalidateEvent {
+            project_id,
+            runtime_id,
+            key: key.to_string(),
+        };
+        self.publish_json(subject, &payload, "env").await
     }
 }

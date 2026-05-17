@@ -104,6 +104,12 @@ pub struct Settings {
     pub runtime_nats_jetstream_stream_release: String,
     /// JetStream consumer name on that stream (used by the release listener).
     pub runtime_nats_jetstream_consumer_release: String,
+    /// Subject for JetStream env-cache invalidation publishes.
+    pub runtime_nats_subject_env: String,
+    /// JetStream stream name for env invalidation (listener creates the stream).
+    pub runtime_nats_jetstream_stream_env: String,
+    /// JetStream consumer on the env stream (used by the runtime env listener).
+    pub runtime_nats_jetstream_consumer_env: String,
     /// When `true`, every unit reviewer processing attempt returns an error immediately,
     /// exercising the full retry → dead-letter → fail_tool_message_and_continue path.
     /// Set `UNIT_REVIEWER_SIMULATE_FAILURE=true` in .env.local; absent or `false` disables it.
@@ -245,6 +251,32 @@ impl Settings {
         let runtime_nats_jetstream_consumer_release =
             runtime_nats_jetstream_consumer_release.to_string();
 
+        let runtime_nats_subject_env_raw = env::var("RUNTIME_NATS_SUBJECT_ENV")
+            .expect("RUNTIME_NATS_SUBJECT_ENV must be set");
+        let runtime_nats_subject_env = runtime_nats_subject_env_raw.trim();
+        if runtime_nats_subject_env.is_empty() {
+            return Err("RUNTIME_NATS_SUBJECT_ENV must not be empty".into());
+        }
+        let runtime_nats_subject_env = runtime_nats_subject_env.to_string();
+
+        let runtime_nats_jetstream_stream_env_raw =
+            env::var("RUNTIME_NATS_JETSTREAM_STREAM_ENV")
+                .expect("RUNTIME_NATS_JETSTREAM_STREAM_ENV must be set");
+        let runtime_nats_jetstream_stream_env = runtime_nats_jetstream_stream_env_raw.trim();
+        if runtime_nats_jetstream_stream_env.is_empty() {
+            return Err("RUNTIME_NATS_JETSTREAM_STREAM_ENV must not be empty".into());
+        }
+        let runtime_nats_jetstream_stream_env = runtime_nats_jetstream_stream_env.to_string();
+
+        let runtime_nats_jetstream_consumer_env_raw =
+            env::var("RUNTIME_NATS_JETSTREAM_CONSUMER_ENV")
+                .expect("RUNTIME_NATS_JETSTREAM_CONSUMER_ENV must be set");
+        let runtime_nats_jetstream_consumer_env = runtime_nats_jetstream_consumer_env_raw.trim();
+        if runtime_nats_jetstream_consumer_env.is_empty() {
+            return Err("RUNTIME_NATS_JETSTREAM_CONSUMER_ENV must not be empty".into());
+        }
+        let runtime_nats_jetstream_consumer_env = runtime_nats_jetstream_consumer_env.to_string();
+
         let unit_reviewer_simulate_failure: bool = match env::var("UNIT_REVIEWER_SIMULATE_FAILURE")
         {
             Ok(s) if s.trim().is_empty() => false,
@@ -296,6 +328,9 @@ impl Settings {
             runtime_nats_subject_release,
             runtime_nats_jetstream_stream_release,
             runtime_nats_jetstream_consumer_release,
+            runtime_nats_subject_env,
+            runtime_nats_jetstream_stream_env,
+            runtime_nats_jetstream_consumer_env,
             unit_reviewer_simulate_failure,
             base_runtime_endpoint,
             jaeger_query_base_url,

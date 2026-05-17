@@ -119,10 +119,13 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
             Some(url) => match RuntimeNatsPublisher::connect(url).await {
                 Ok(p) => {
                     log::info!(
-                        "[runtime_nats] Connected (JetStream stream={}, consumer={}, subject={})",
+                        "[runtime_nats] Connected (release: stream={}, consumer={}, subject={}; env: stream={}, consumer={}, subject={})",
                         settings.runtime_nats_jetstream_stream_release,
                         settings.runtime_nats_jetstream_consumer_release,
                         settings.runtime_nats_subject_release,
+                        settings.runtime_nats_jetstream_stream_env,
+                        settings.runtime_nats_jetstream_consumer_env,
+                        settings.runtime_nats_subject_env,
                     );
                     Some(Arc::new(p))
                 }
