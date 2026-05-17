@@ -58,7 +58,7 @@ fn collect_dts_files(base: &Path, dir: &Path, entries: &mut Vec<(String, String)
             let is_dts = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .map_or(false, |s| s.ends_with(".d.ts"));
+                .is_some_and(|s| s.ends_with(".d.ts"));
 
             if is_dts {
                 if let Some(path_str) = path.to_str() {

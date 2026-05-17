@@ -117,6 +117,7 @@ pub struct ToolSpec {
 
 /// Context for tool execution (callbacks keyed by TOOL_NAME). Set once per request via [`with_tool_context`].
 #[derive(Clone)]
+#[derive(Default)]
 pub struct ToolContext {
     /// Map from tool name (e.g. each module’s `TOOL_NAME`) to callback that publishes to the queue.
     pub callbacks: HashMap<String, OnToolCall>,
@@ -124,14 +125,6 @@ pub struct ToolContext {
     pub gate: Option<crate::services::chat_worker::agent_flow::ToolGateDiagnostics>,
 }
 
-impl Default for ToolContext {
-    fn default() -> Self {
-        Self {
-            callbacks: HashMap::new(),
-            gate: None,
-        }
-    }
-}
 
 tokio::task_local! {
     /// Task-local tool context so the LLM layer does not need to pass callbacks through.
@@ -313,14 +306,12 @@ fn prequeue_tool_failure_payload(
         raw_arguments.clone(),
         tool_call_id.clone(),
         tool_name,
-    ) {
-        if let Ok(mut value) = serde_json::to_value(&chat_payload) {
-            if let Value::Object(ref mut map) = value {
+    )
+        && let Ok(mut value) = serde_json::to_value(&chat_payload)
+            && let Value::Object(ref mut map) = value {
                 map.insert("error".to_string(), Value::String(error.to_string()));
                 return (message_type, value);
             }
-        }
-    }
     (message_type, minimal)
 }
 

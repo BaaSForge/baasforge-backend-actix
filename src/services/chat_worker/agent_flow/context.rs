@@ -209,11 +209,10 @@ impl SessionFlowContext {
         });
         let mut need = 0usize;
         for event in &self.events {
-            if let Some(min) = start_index {
-                if event.index < min {
+            if let Some(min) = start_index
+                && event.index < min {
                     continue;
                 }
-            }
             let Some(name) = event.tool_name.as_deref() else {
                 continue;
             };

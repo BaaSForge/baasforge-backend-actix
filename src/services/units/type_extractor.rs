@@ -27,6 +27,7 @@
 // The OXC-based implementation is compiled only when the
 // `unit_technical_reviewer` feature is enabled.
 
+#[cfg(feature = "unit_technical_reviewer")]
 use crate::models::projects::ProjectUnitResponse;
 
 #[cfg(feature = "unit_technical_reviewer")]

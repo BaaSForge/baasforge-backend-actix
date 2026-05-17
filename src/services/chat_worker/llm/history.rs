@@ -605,11 +605,10 @@ pub fn session_messages_to_upstream_entries(
                 }
             }
             (ChatSessionRoleType::System, ChatMessageType::RejectControllerBox) => {
-                if let Some(text) = reject_controller_box_upstream_notice(payload) {
-                    if !text.is_empty() {
+                if let Some(text) = reject_controller_box_upstream_notice(payload)
+                    && !text.is_empty() {
                         out.push(UpstreamHistoryEntry::System { text });
                     }
-                }
             }
             (ChatSessionRoleType::System, _) => {}
             _ => {

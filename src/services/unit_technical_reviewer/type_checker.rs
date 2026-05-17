@@ -376,14 +376,13 @@ fn find_tsgo_bin() -> Result<String, String> {
         return Ok(p.to_string_lossy().into_owned());
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(root) = exe.parent() {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(root) = exe.parent() {
             let p = root.join(&rel);
             if p.exists() {
                 return Ok(p.to_string_lossy().into_owned());
             }
         }
-    }
 
     Err(format!(
         "tsgo binary not found at {rel}. Run `cd tsgo && npm install`"

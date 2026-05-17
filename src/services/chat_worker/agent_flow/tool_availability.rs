@@ -60,9 +60,7 @@ The model may have hallucinated a tool name or used a name from another product.
             );
         }
 
-        if !tool_names_for_agent(&self.agent)
-            .iter()
-            .any(|n| *n == tool_name)
+        if !tool_names_for_agent(&self.agent).contains(&tool_name)
         {
             let owners = agents_that_expose_tool(tool_name);
             let owner_hint = if owners.is_empty() {
@@ -76,7 +74,7 @@ The model may have hallucinated a tool name or used a name from another product.
             );
         }
 
-        if self.allowed_tools.iter().any(|t| *t == tool_name) {
+        if self.allowed_tools.contains(&tool_name) {
             return format!(
                 "Tool `{tool_name}` is declared for this turn but could not be queued (internal error). \
 Retry once; if it persists, the session may need a new message."
@@ -162,7 +160,7 @@ fn agents_that_expose_tool(tool_name: &str) -> Vec<&'static str> {
     ];
     agents
         .into_iter()
-        .filter(|(_, names)| names.iter().any(|n| *n == tool_name))
+        .filter(|(_, names)| names.contains(&tool_name))
         .map(|(a, _)| agent_prompt_role_name(&a))
         .collect()
 }

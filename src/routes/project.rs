@@ -208,8 +208,8 @@ async fn notify_runtime_release(
             .await;
         }
         PlatformEnvironmentType::Prod => {
-            if let Some(deployed_id) = deployed_release_id {
-                if let Some(ref nats) = context.runtime_nats_publisher {
+            if let Some(deployed_id) = deployed_release_id
+                && let Some(ref nats) = context.runtime_nats_publisher {
                     let subject = context.settings.runtime_nats_subject_release.as_str();
                     if let Err(e) = nats
                         .publish_prod_release(subject, project_id, deployed_id, previous_release_id)
@@ -223,7 +223,6 @@ async fn notify_runtime_release(
                         );
                     }
                 }
-            }
             broadcast_production_live_release_changed(context, project_id).await;
         }
     }
@@ -918,7 +917,7 @@ async fn handle_detach_by_controller(
                 }
             };
             broadcast_stage_release_create_effects(
-                &context,
+                context,
                 project_id,
                 chat_session_id,
                 user_id,

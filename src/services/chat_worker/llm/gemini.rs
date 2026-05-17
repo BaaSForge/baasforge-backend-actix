@@ -351,7 +351,7 @@ pub async fn call_gemini_stream(
             UpstreamHistoryEntry::ToolResult {
                 tool_name, content, ..
             } => {
-                let response_value = match serde_json::from_str::<Value>(&content) {
+                let response_value = match serde_json::from_str::<Value>(content) {
                     Ok(v) => v,
                     Err(_) => serde_json::json!({ "text": content }),
                 };

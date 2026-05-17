@@ -132,22 +132,21 @@ impl FlowHistoryScan {
                     let ok = p
                         .error
                         .as_ref()
-                        .map_or(true, |e| e.trim().is_empty());
+                        .is_none_or(|e| e.trim().is_empty());
                     if ok {
                         self.last_successful_list_unit_contexts_was_empty =
                             Some(p.context_slugs.is_empty());
                     }
                 }
             } else if *msg_type == ChatMessageType::ToolFetchLatestSpecificProductionReleaseUnits
-            {
-                if let Ok(Some(
+                && let Ok(Some(
                     ChatMessagePayload::ToolFetchLatestSpecificProductionReleaseUnits(p),
                 )) = ChatMessagePayload::from_value(msg_type, payload.clone())
                 {
                     let ok = p
                         .error
                         .as_ref()
-                        .map_or(true, |e| e.trim().is_empty());
+                        .is_none_or(|e| e.trim().is_empty());
                     if ok {
                         for path in normalize_dedupe_unit_paths(&p.args.unit_paths) {
                             self.successfully_loaded_latest_specific_unit_paths
@@ -155,7 +154,6 @@ impl FlowHistoryScan {
                         }
                     }
                 }
-            }
         }
     }
 

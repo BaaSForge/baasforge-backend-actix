@@ -1,6 +1,7 @@
 use crate::database::DbPool;
 use crate::models::projects::ProjectUnitResponse;
 use crate::services::units::actor::metadata::ActorUnitMetadata;
+#[cfg(feature = "unit_technical_reviewer")]
 use crate::services::units::api::metadata::TypeScriptJsonSchemaPair;
 
 #[cfg(feature = "unit_technical_reviewer")]

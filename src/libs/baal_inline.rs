@@ -164,7 +164,7 @@ pub fn replace_baal_inline_tags(text: &str, format_one: impl Fn(&BaalInlineDecod
 
 /// Expand inline widgets for chat session titles and word-based truncation.
 pub fn expand_baal_inlines_for_chat_title(text: &str) -> String {
-    match replace_baal_inline_tags(text, |d| format_baal_inline_for_chat_title(d)) {
+    match replace_baal_inline_tags(text, format_baal_inline_for_chat_title) {
         Cow::Borrowed(s) => s.to_string(),
         Cow::Owned(s) => s,
     }
@@ -172,7 +172,7 @@ pub fn expand_baal_inlines_for_chat_title(text: &str) -> String {
 
 /// Expand inline widgets in user-authored text before sending to an LLM.
 pub fn expand_baal_inlines_for_llm_user_text(text: &str) -> String {
-    match replace_baal_inline_tags(text, |d| format_baal_inline_for_llm(d)) {
+    match replace_baal_inline_tags(text, format_baal_inline_for_llm) {
         Cow::Borrowed(s) => s.to_string(),
         Cow::Owned(s) => s,
     }

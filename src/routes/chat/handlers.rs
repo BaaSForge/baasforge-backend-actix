@@ -150,12 +150,11 @@ fn parse_chat_session_list_unit_token(item: &str) -> Result<ChatSessionListUnitF
     let s = normalize_full_unit_id_arg(item);
     let parts: Vec<&str> = s.split('.').filter(|p| !p.is_empty()).collect();
     if parts.len() == 5 && parts[4].chars().all(|c| c.is_ascii_digit()) {
-        validate_full_unit_id_revision_segment(&s).map_err(|e| e)?;
+        validate_full_unit_id_revision_segment(&s)?;
         return Ok(ChatSessionListUnitFilter::FullId(s));
     }
     parse_unit_path(&s)
         .map(ChatSessionListUnitFilter::Path)
-        .map_err(|e| e)
 }
 
 pub async fn handle_list_project_chat_sessions(
@@ -2487,11 +2486,10 @@ pub async fn handle_confirm_reject_controller(
                             continue;
                         }
                         stage_release_id_to_delete = p.stage_release.as_ref().map(|s| s.release.id);
-                        if let Some(pr) = p.prod_release.as_ref() {
-                            if !live_prod_ids.contains(&pr.release.id) {
+                        if let Some(pr) = p.prod_release.as_ref()
+                            && !live_prod_ids.contains(&pr.release.id) {
                                 prod_release_id_to_delete = Some(pr.release.id);
                             }
-                        }
                         p.stage_release = None;
                         p.prod_release = None;
                         p.is_disabled_due_to_reject = true;
@@ -2616,8 +2614,7 @@ pub async fn handle_confirm_reject_controller(
 
             if let (Some(stage_release_id), true) =
                 (stage_release_id_opt, !stage_runtime_ids_cleared.is_empty())
-            {
-                if let Some(ref nats) = context.runtime_nats_publisher {
+                && let Some(ref nats) = context.runtime_nats_publisher {
                     let subject = context.settings.runtime_nats_subject_release.as_str();
                     for runtime_id in stage_runtime_ids_cleared {
                         if let Err(e) = nats
@@ -2636,7 +2633,6 @@ pub async fn handle_confirm_reject_controller(
                         }
                     }
                 }
-            }
             HttpResponse::Ok().json(api_success("Reject confirmed", json!({})))
         }
         ConfirmRejectOutcome::SessionNotFound => {
@@ -2701,8 +2697,8 @@ pub async fn handle_truncate_chat_session_from_user_message(
             removed_message_ids,
             stage_runtime_nats,
         } => {
-            if let Some(ref nats) = context.runtime_nats_publisher {
-                if !stage_runtime_nats.is_empty() {
+            if let Some(ref nats) = context.runtime_nats_publisher
+                && !stage_runtime_nats.is_empty() {
                     let subject = context.settings.runtime_nats_subject_release.as_str();
                     for (runtime_id, cleared_stage_release_id) in stage_runtime_nats {
                         if let Err(e) = nats
@@ -2721,7 +2717,6 @@ pub async fn handle_truncate_chat_session_from_user_message(
                         }
                     }
                 }
-            }
 
             HttpResponse::Ok().json(api_success(
                 "Chat truncated",

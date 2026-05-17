@@ -229,7 +229,7 @@ pub async fn handler(
         }
         // ToolRemoveUnit skips generic on_tool_message_finished; call maybe_complete_invoking_message
         // here explicitly because the message is Completed and the LLM must continue.
-        if let (Some(inv_id), Some(ref publisher)) = (invoking_id, rabbit_publisher.as_ref()) {
+        if let (Some(inv_id), Some(publisher)) = (invoking_id, rabbit_publisher.as_ref()) {
             maybe_complete_invoking_message(
                 &pool,
                 &redis_conn,

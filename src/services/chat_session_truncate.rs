@@ -72,13 +72,12 @@ pub fn truncate_session_from_user_message(
             else {
                 continue;
             };
-            if let Some(pr) = p.prod_release {
-                if live_prod_ids.contains(&pr.release.id) {
+            if let Some(pr) = p.prod_release
+                && live_prod_ids.contains(&pr.release.id) {
                     return Ok(
                         TruncateSessionFromMessageOutcome::HasLiveProductionReleaseAfterAnchor,
                     );
                 }
-            }
         }
 
         let to_delete: Vec<ChatMessageRow> = chat_messages::table
@@ -111,11 +110,10 @@ pub fn truncate_session_from_user_message(
                     if let Some(s) = p.stage_release {
                         stage_release_ids.insert(s.release.id);
                     }
-                    if let Some(pr) = p.prod_release {
-                        if !live_prod_ids.contains(&pr.release.id) {
+                    if let Some(pr) = p.prod_release
+                        && !live_prod_ids.contains(&pr.release.id) {
                             prod_release_ids.insert(pr.release.id);
                         }
-                    }
                 }
                 ChatMessagePayload::RejectControllerBox(p) => {
                     for u in p.unit_changes {

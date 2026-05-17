@@ -205,11 +205,9 @@ fn tool_display_name_for_row(row: &ChatMessageRow) -> String {
         }
     }
     if let Some(v) = row.payload.as_ref().and_then(|p| p.get("tool_name").and_then(|x| x.as_str()))
-    {
-        if !v.is_empty() {
+        && !v.is_empty() {
             return v.to_string();
         }
-    }
     format!("{:?}", row.type_)
 }
 
@@ -235,13 +233,11 @@ fn nested_rows_to_detailed_report_fallback(rows: &[ChatMessageRow]) -> String {
                 .payload
                 .as_ref()
                 .and_then(|v| serde_json::from_value::<TextPayload>(v.clone()).ok())
-            {
-                if let Some(block) = format_requested_tool_calls_block(&tp) {
+                && let Some(block) = format_requested_tool_calls_block(&tp) {
                     parts.push(block);
                     i += 1;
                     continue;
                 }
-            }
             parts.push(serialize_row_as_json_line(row));
             i += 1;
         } else if row.role == ChatSessionRoleType::Ai && is_nested_branch_tool_result_type(&row.type_)

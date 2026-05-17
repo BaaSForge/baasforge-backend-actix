@@ -8,7 +8,9 @@
 
 use crate::database::DbPool;
 use crate::models::projects::ProjectUnitResponse;
-use crate::services::units::api::metadata::{ApiUnitMetadata, TypeScriptJsonSchemaPair};
+use crate::services::units::api::metadata::ApiUnitMetadata;
+#[cfg(feature = "unit_technical_reviewer")]
+use crate::services::units::api::metadata::TypeScriptJsonSchemaPair;
 
 // ── Async orchestration (loads units from DB) ─────────────────────────────────
 

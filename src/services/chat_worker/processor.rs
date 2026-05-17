@@ -12,7 +12,7 @@ use crate::services::chat_worker::llm::tools::{
     maybe_complete_invoking_message, tool_context_for_chat_session, with_tool_context,
 };
 use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient};
-use crate::services::chat_worker::circuit_breaker::{self, CircuitBreakerKind};
+use crate::services::chat_worker::circuit_breaker::{self};
 use crate::services::releases::chat_session_stale_base_release;
 use diesel::prelude::*;
 use redis::aio::MultiplexedConnection;

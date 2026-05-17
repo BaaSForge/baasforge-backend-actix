@@ -146,18 +146,16 @@ pub fn pick_unit_from_combined_snapshot(
         .map(normalize_full_unit_id_arg)
         .filter(|s| !s.is_empty());
 
-    if let Some(ref id) = uid {
-        if let Some(u) = combined.iter().find(|u| u.id == *id) {
+    if let Some(ref id) = uid
+        && let Some(u) = combined.iter().find(|u| u.id == *id) {
             return Some(u.clone());
         }
-    }
     if let Some(ref p) = upath {
         let parts: Vec<&str> = p.split('.').filter(|x| !x.is_empty()).collect();
-        if parts.len() == 5 && validate_full_unit_id_for_tool(p).is_ok() {
-            if let Some(u) = combined.iter().find(|u| u.id == *p) {
+        if parts.len() == 5 && validate_full_unit_id_for_tool(p).is_ok()
+            && let Some(u) = combined.iter().find(|u| u.id == *p) {
                 return Some(u.clone());
             }
-        }
         if let Ok(parsed) = parse_unit_path(p) {
             let want = (
                 parsed.context_slug.clone(),
@@ -328,11 +326,10 @@ fn release_unit_diff(
         .collect();
     let mut modified_current: Vec<ProjectUnitResponse> = Vec::new();
     for k in comb.keys() {
-        if let (Some(pb), Some(cb)) = (prev.get(k), comb.get(k)) {
-            if pb.id != cb.id {
+        if let (Some(pb), Some(cb)) = (prev.get(k), comb.get(k))
+            && pb.id != cb.id {
                 modified_current.push((*cb).clone());
             }
-        }
     }
 
     new_keys.sort_by(|a, b| logical_unit_sort_tuple(a).cmp(&logical_unit_sort_tuple(b)));
@@ -723,11 +720,10 @@ pub fn assistant_turn_has_live_production_release_with_live_ids(
         if p.assistant_turn_id != Some(tid) {
             continue;
         }
-        if let Some(pr) = p.prod_release {
-            if live_ids.contains(&pr.release.id) {
+        if let Some(pr) = p.prod_release
+            && live_ids.contains(&pr.release.id) {
                 return Ok(true);
             }
-        }
     }
     Ok(false)
 }

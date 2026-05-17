@@ -1,5 +1,6 @@
 use crate::database::DbPool;
 use crate::models::projects::ProjectUnitResponse;
+#[cfg(feature = "unit_technical_reviewer")]
 use crate::services::units::api::metadata::TypeScriptJsonSchemaPair;
 use crate::services::units::workflow::metadata::WorkflowUnitMetadata;
 
