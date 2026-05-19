@@ -90,6 +90,9 @@ pub struct Settings {
     pub gemini_thinking_level: Option<String>,
     /// Gemini 2.5: token budget; `-1` = dynamic. Omit env var to leave thinking off (unless level is set).
     pub gemini_thinking_budget: Option<i32>,
+    /// When `Some(N)`, the `(N+1)`th LLM `generate` call per chat session returns a simulated API error.
+    /// Env `LLM_SIMULATE_ERROR_AFTER_CALLS`: positive = threshold; `0` or `-1` = off.
+    pub llm_simulate_error_after_calls: Option<u32>,
     pub anthropic_api_key: Option<String>,
     pub anthropic_model: String,
     /// Anthropic extended thinking: present only when enabled (see `ANTHROPIC_THINKING_ENABLED`) and
@@ -277,6 +280,28 @@ impl Settings {
         }
         let runtime_nats_jetstream_consumer_env = runtime_nats_jetstream_consumer_env.to_string();
 
+        let llm_simulate_error_after_calls = {
+            let raw = env::var("LLM_SIMULATE_ERROR_AFTER_CALLS")
+                .or_else(|_| env::var("GEMINI_SIMULATE_ERROR_AFTER_CALLS"));
+            match raw {
+                Err(_) => None,
+                Ok(s) if s.trim().is_empty() => None,
+                Ok(s) => {
+                    let v: i32 = s
+                        .trim()
+                        .parse()
+                        .map_err(|_| {
+                            "LLM_SIMULATE_ERROR_AFTER_CALLS must be an integer (use 0 or -1 to disable)"
+                        })?;
+                    if v <= 0 {
+                        None
+                    } else {
+                        Some(v as u32)
+                    }
+                }
+            }
+        };
+
         let unit_reviewer_simulate_failure: bool = match env::var("UNIT_REVIEWER_SIMULATE_FAILURE")
         {
             Ok(s) if s.trim().is_empty() => false,
@@ -320,6 +345,7 @@ impl Settings {
             gemini_thinking_explicitly_disabled,
             gemini_thinking_level,
             gemini_thinking_budget,
+            llm_simulate_error_after_calls,
             anthropic_api_key,
             anthropic_model,
             anthropic_thinking_budget_tokens,
