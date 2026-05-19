@@ -38,7 +38,9 @@ use crate::schema::project_runtimes;
 use crate::schema::project_units;
 use crate::schema::projects;
 use crate::services::chat_session_truncate::{
-    TruncateSessionFromMessageOutcome, truncate_session_from_user_message,
+    RetryFailedPlannerTruncateOutcome, TruncateNatsContext, TruncateSessionFromMessageOutcome,
+    transaction_retry_failed_planner_truncate_and_reset_with_nats,
+    truncate_session_from_user_message_with_nats,
 };
 use crate::services::chat_worker::db::{
     ChatSessionListReleasePair, ChatSessionListUnitFilter, DraftUnitsAsOfReleaseControllerError,
@@ -767,87 +769,20 @@ pub async fn handle_retry_failed_planner_message(
         .user_id;
     let (project_id, session_id, message_id) = path.into_inner();
 
-    enum RetryPlannerOutcome {
-        SessionNotFound,
-        AlreadyGenerating,
-        MessageNotFound,
-        NotEligible { reason: &'static str },
-        Ok,
-    }
+    let nats_ctx = TruncateNatsContext {
+        publisher: context.runtime_nats_publisher.as_deref(),
+        subject: context.settings.runtime_nats_subject_release.as_str(),
+        project_id,
+    };
 
-    let outcome = match database::block_on_db(&context.pool, {
-        let session_id = session_id;
-        let project_id = project_id;
-        let message_id = message_id;
-        let user_id = user_id;
-        move |conn| {
-            let session_exists: Option<Uuid> = chat_sessions::table
-                .inner_join(projects::table.on(chat_sessions::project_id.eq(projects::id)))
-                .filter(projects::owner_user_id.eq(user_id))
-                .filter(chat_sessions::id.eq(session_id))
-                .filter(chat_sessions::project_id.eq(project_id))
-                .select(chat_sessions::id)
-                .first(conn)
-                .optional()?;
-            if session_exists.is_none() {
-                return Ok(RetryPlannerOutcome::SessionNotFound);
-            }
-            let generating_count: i64 = chat_messages::table
-                .filter(chat_messages::chat_session_id.eq(session_id))
-                .filter(chat_messages::role.eq(ChatSessionRoleType::Ai))
-                .filter(chat_messages::status.eq(ChatMessageStatus::Generating))
-                .count()
-                .get_result(conn)?;
-            if generating_count > 0 {
-                return Ok(RetryPlannerOutcome::AlreadyGenerating);
-            }
-            let row: Option<ChatMessageRow> = chat_messages::table
-                .filter(chat_messages::id.eq(message_id))
-                .filter(chat_messages::chat_session_id.eq(session_id))
-                .select(ChatMessageRow::as_select())
-                .first(conn)
-                .optional()?;
-            let Some(row) = row else {
-                return Ok(RetryPlannerOutcome::MessageNotFound);
-            };
-            if row.role != ChatSessionRoleType::Ai {
-                return Ok(RetryPlannerOutcome::NotEligible {
-                    reason: "message is not an assistant row",
-                });
-            }
-            if row.type_ != ChatMessageType::Text {
-                return Ok(RetryPlannerOutcome::NotEligible {
-                    reason: "message is not a text assistant message",
-                });
-            }
-            if row.status != ChatMessageStatus::Failed {
-                return Ok(RetryPlannerOutcome::NotEligible {
-                    reason: "message status is not failed",
-                });
-            }
-            if row.agent != Some(ChatAgentType::Planner) {
-                return Ok(RetryPlannerOutcome::NotEligible {
-                    reason: "message is not a planner assistant message",
-                });
-            }
-            if row.invoking_message_id.is_some() {
-                return Ok(RetryPlannerOutcome::NotEligible {
-                    reason: "only main-thread planner messages can be retried via this endpoint",
-                });
-            }
-            diesel::update(
-                chat_messages::table
-                    .filter(chat_messages::id.eq(message_id))
-                    .filter(chat_messages::chat_session_id.eq(session_id)),
-            )
-            .set((
-                chat_messages::status.eq(ChatMessageStatus::Generating),
-                chat_messages::payload.eq(None::<serde_json::Value>),
-            ))
-            .execute(conn)?;
-            Ok(RetryPlannerOutcome::Ok)
-        }
-    })
+    let outcome = match transaction_retry_failed_planner_truncate_and_reset_with_nats(
+        &context.pool,
+        nats_ctx,
+        user_id,
+        project_id,
+        session_id,
+        message_id,
+    )
     .await
     {
         Ok(o) => o,
@@ -862,23 +797,29 @@ pub async fn handle_retry_failed_planner_message(
     };
 
     match outcome {
-        RetryPlannerOutcome::SessionNotFound => {
+        RetryFailedPlannerTruncateOutcome::SessionNotFound => {
             HttpResponse::NotFound().json(api_error("Chat session not found", json!({})))
         }
-        RetryPlannerOutcome::AlreadyGenerating => HttpResponse::Conflict().json(api_error(
+        RetryFailedPlannerTruncateOutcome::AlreadyGenerating => HttpResponse::Conflict().json(api_error(
             "A message is already being generated in this chat. Please wait for it to finish.",
             json!({}),
         )),
-        RetryPlannerOutcome::MessageNotFound => {
+        RetryFailedPlannerTruncateOutcome::MessageNotFound => {
             HttpResponse::NotFound().json(api_error("Chat message not found in this session", json!({})))
         }
-        RetryPlannerOutcome::NotEligible { reason } => HttpResponse::UnprocessableEntity().json(
+        RetryFailedPlannerTruncateOutcome::NotEligible { reason } => HttpResponse::UnprocessableEntity().json(
             api_error(
                 "This message cannot be retried as a failed planner turn",
                 json!({ "reason": reason }),
             ),
         ),
-        RetryPlannerOutcome::Ok => {
+        RetryFailedPlannerTruncateOutcome::HasLiveProductionReleaseAfterMessage => {
+            HttpResponse::BadRequest().json(api_error(
+                "Cannot retry: a live production release exists on a release controller after this message",
+                json!({}),
+            ))
+        }
+        RetryFailedPlannerTruncateOutcome::Ok => {
             let continuation_payload = match serde_json::to_value(ChatMessagePayload::Text(
                 TextPayload {
                     text: String::new(),
@@ -2676,9 +2617,20 @@ pub async fn handle_truncate_chat_session_from_user_message(
     let user_id = access_payload.user_id;
     let (project_id, session_id, user_message_id) = path.into_inner();
 
-    let outcome = match database::block_on_db(&context.pool, move |conn| {
-        truncate_session_from_user_message(conn, user_id, project_id, session_id, user_message_id)
-    })
+    let nats_ctx = TruncateNatsContext {
+        publisher: context.runtime_nats_publisher.as_deref(),
+        subject: context.settings.runtime_nats_subject_release.as_str(),
+        project_id,
+    };
+
+    let outcome = match truncate_session_from_user_message_with_nats(
+        &context.pool,
+        nats_ctx,
+        user_id,
+        project_id,
+        session_id,
+        user_message_id,
+    )
     .await
     {
         Ok(o) => o,
@@ -2695,34 +2647,11 @@ pub async fn handle_truncate_chat_session_from_user_message(
     match outcome {
         TruncateSessionFromMessageOutcome::Success {
             removed_message_ids,
-            stage_runtime_nats,
-        } => {
-            if let Some(ref nats) = context.runtime_nats_publisher
-                && !stage_runtime_nats.is_empty() {
-                    let subject = context.settings.runtime_nats_subject_release.as_str();
-                    for (runtime_id, cleared_stage_release_id) in stage_runtime_nats {
-                        if let Err(e) = nats
-                            .publish_stage_release_cleared(
-                                subject,
-                                project_id,
-                                runtime_id,
-                                Some(cleared_stage_release_id),
-                            )
-                            .await
-                        {
-                            tracing::warn!(
-                                "[handle_truncate_chat_session_from_user_message] NATS publish failed: {}",
-                                e
-                            );
-                        }
-                    }
-                }
-
-            HttpResponse::Ok().json(api_success(
-                "Chat truncated",
-                json!({ "removed_message_ids": removed_message_ids }),
-            ))
-        }
+            ..
+        } => HttpResponse::Ok().json(api_success(
+            "Chat truncated",
+            json!({ "removed_message_ids": removed_message_ids }),
+        )),
         TruncateSessionFromMessageOutcome::SessionNotFound => HttpResponse::NotFound()
             .json(api_error("Chat session not found", json!({}))),
         TruncateSessionFromMessageOutcome::AnchorNotFound => {
