@@ -175,6 +175,9 @@ oxc_codegen = { version = "0.123", optional = true }
 oxc_semantic = { version = "0.123", optional = true }
 oxc_syntax = { version = "0.123", optional = true }
 
+[build-dependencies]
+serde_json = "1.0.149"
+
 [features]
 unit_technical_reviewer = [
     "dep:oxc_allocator",
