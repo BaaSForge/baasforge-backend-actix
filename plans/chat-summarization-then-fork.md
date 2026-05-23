@@ -1,0 +1,1 @@
+It helps user if he can fork the chat but start a fresh conversation with all tips and notes and summarization of the current chat, it helps to reduce the context usage, but Im not sure we can implement it in our platform as we might have new units & releases on that chat
