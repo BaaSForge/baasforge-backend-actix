@@ -124,9 +124,10 @@ Any other `node:*` specifier is rejected before reaching tsgo.
 
 ## Supported npm packages
 
-| Package | Import |
-|---|---|
-| `qs@^6.14.0` | `import qs from "qs"` (default) or named imports from `"qs"` |
+| Package |
+|---|
+| `qs@^6.14.0` |
+| `cookie@^1.1.1` |
 
 Any other bare npm specifier is rejected before reaching tsgo.
 

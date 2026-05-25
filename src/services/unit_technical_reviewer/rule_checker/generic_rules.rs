@@ -53,7 +53,7 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
         ),
         (
             "Only supported npm packages",
-            "Only `qs@^6.14.0` is available. \
+            "Only `qs@^6.14.0` and `cookie@^1.1.1` are available. \
              No other npm packages.",
         ),
     ]

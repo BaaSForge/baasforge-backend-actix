@@ -4,7 +4,7 @@
   "compilerOptionsLib": [
     "lib.es2023.d.ts"
   ],
-  "fileCount": 105,
+  "fileCount": 106,
   "packages": {
     "@types/node": {
       "fileCount": 67,
@@ -82,6 +82,12 @@
       "fileCount": 1,
       "files": [
         "node_modules/@types/qs/index.d.ts"
+      ]
+    },
+    "cookie": {
+      "fileCount": 1,
+      "files": [
+        "node_modules/cookie/dist/index.d.ts"
       ]
     },
     "undici-types": {
@@ -196,6 +202,7 @@
     "node_modules/@types/node/worker_threads.d.ts",
     "node_modules/@types/node/zlib.d.ts",
     "node_modules/@types/qs/index.d.ts",
+    "node_modules/cookie/dist/index.d.ts",
     "node_modules/undici-types/agent.d.ts",
     "node_modules/undici-types/api.d.ts",
     "node_modules/undici-types/balanced-pool.d.ts",
