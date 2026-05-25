@@ -240,6 +240,9 @@ pub const ALLOWED_NODE_IMPORTS: &[(&str, &[&str])] = &[
     ("node:timers/promises", &["setTimeout"]),
 ];
 
+/// Bare npm package names allowed in unit imports (no version suffix).
+pub const ALLOWED_NPM_PACKAGES: &[&str] = &["qs"];
+
 pub fn is_allowed_node_import_source(source: &str) -> bool {
     ALLOWED_NODE_IMPORTS
         .iter()
@@ -256,6 +259,50 @@ pub fn allowed_names_for_node_import(source: &str) -> Option<&'static [&'static 
                 None
             }
         })
+}
+
+pub fn is_allowed_npm_package_name(name: &str) -> bool {
+    ALLOWED_NPM_PACKAGES.iter().any(|pkg| *pkg == name)
+}
+
+/// Root package name for a bare npm import (`qs`, `qs/lib`, `@scope/pkg/…`), or `None` for
+/// relative paths, `node:*`, and `@units/…`.
+pub fn npm_package_name_from_import_source(source: &str) -> Option<&str> {
+    if source.is_empty()
+        || source.starts_with('.')
+        || source.starts_with('/')
+        || source.starts_with("node:")
+        || source.starts_with("@units/")
+    {
+        return None;
+    }
+    if let Some(stripped) = source.strip_prefix('@') {
+        let rest = stripped;
+        let scope_end = rest.find('/')?;
+        let after_scope = &rest[scope_end + 1..];
+        let name_end = after_scope.find('/').unwrap_or(after_scope.len());
+        let end = 1 + scope_end + 1 + name_end;
+        return Some(&source[..end]);
+    }
+    let name_end = source.find('/').unwrap_or(source.len());
+    Some(&source[..name_end])
+}
+
+pub fn is_allowed_npm_import_source(source: &str) -> bool {
+    npm_package_name_from_import_source(source)
+        .is_some_and(is_allowed_npm_package_name)
+}
+
+/// Returns all distinct bare npm import source strings in the program, in first-occurrence order.
+pub fn get_npm_package_import_sources<'a>(program: &'a Program<'a>) -> Vec<&'a str> {
+    let mut result: Vec<&str> = Vec::new();
+    for decl in get_import_declarations(program) {
+        let src = decl.source.value.as_str();
+        if npm_package_name_from_import_source(src).is_some() && !result.contains(&src) {
+            result.push(src);
+        }
+    }
+    result
 }
 
 /// `unit_type` segment of `@units/<context>.<module>.<unit_type>.<unit_name>`, if well-formed.
@@ -309,7 +356,8 @@ pub fn units_import_has_runtime_binding(decl: &ImportDeclaration) -> bool {
     false
 }
 
-/// Keep in compiled JS: runtime imports from `@units/…common…` and allowlisted `node:*` modules.
+/// Keep in compiled JS: runtime imports from `@units/…common…`, allowlisted `node:*`, and
+/// allowlisted npm packages.
 pub fn should_preserve_compiled_import(decl: &ImportDeclaration) -> bool {
     if !units_import_has_runtime_binding(decl) {
         return false;
@@ -318,7 +366,7 @@ pub fn should_preserve_compiled_import(decl: &ImportDeclaration) -> bool {
     if source.starts_with("@units/") {
         return is_units_import_from_common(source);
     }
-    is_allowed_node_import_source(source)
+    is_allowed_node_import_source(source) || is_allowed_npm_import_source(source)
 }
 
 /// Returns all `ImportDeclaration` nodes in the program, in source order.

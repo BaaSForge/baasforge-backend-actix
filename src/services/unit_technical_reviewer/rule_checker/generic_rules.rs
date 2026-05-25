@@ -51,6 +51,11 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
              `import { TextEncoder, TextDecoder } from \"node:util\"`, \
              `import { setTimeout as setTimeoutPromise } from \"node:timers/promises\"`.",
         ),
+        (
+            "Only supported npm packages",
+            "Only `qs@^6.14.0` is available. \
+             No other npm packages.",
+        ),
     ]
 }
 
@@ -70,6 +75,7 @@ pub(super) fn rules() -> Vec<Rule> {
         no_process,
         only_allowed_cross_unit_imports,
         only_allowed_node_imports,
+        only_allowed_npm_packages_imports,
     ]
 }
 
@@ -208,6 +214,34 @@ fn only_allowed_node_imports(input: &RuleInput) -> Vec<String> {
                     allowed_names.join(", ")
                 ));
             }
+        }
+    }
+
+    errors
+}
+
+#[cfg(feature = "unit_technical_reviewer")]
+fn only_allowed_npm_packages_imports(input: &RuleInput) -> Vec<String> {
+    let Some(program) = input.program else {
+        return vec![];
+    };
+
+    let allowed_list = ast_utils::ALLOWED_NPM_PACKAGES.join(", ");
+    let mut errors: Vec<String> = Vec::new();
+    let mut reported: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    for source in ast_utils::get_npm_package_import_sources(program) {
+        let Some(pkg) = ast_utils::npm_package_name_from_import_source(source) else {
+            continue;
+        };
+        if ast_utils::is_allowed_npm_package_name(pkg) {
+            continue;
+        }
+        if reported.insert(pkg) {
+            errors.push(format!(
+                "Import from `{source}` is not supported in units; \
+                 only npm packages {allowed_list} are allowed"
+            ));
         }
     }
 

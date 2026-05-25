@@ -32,7 +32,7 @@ pub const ARG_EXPLANATION_DESCRIPTION: &str =
     "English explanation of what this unit does (purpose, boundaries, how others use it).";
 /// Description for the `code` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_CODE_DESCRIPTION: &str =
-    "Implementation for this unit in TypeScript (Node.js environment).";
+    "Implementation for this unit in TypeScript (Node.js-like environment).";
 pub const ARG_CONTEXT_SLUG_DESCRIPTION: &str = "Bounded context slug: ONLY English lowercase letters [a-z] and hyphen (-). NO digits or numbers. e.g. inventory, order-management. WRONG: e2e, v2-api.";
 pub const ARG_MODULE_SLUG_DESCRIPTION: &str = "Module slug within the context: ONLY English lowercase letters [a-z] and hyphen (-). NO digits or numbers. e.g. stock-levels, user-profile. WRONG: stock-v2, module-1.";
 pub const ARG_UNIT_NAME_SLUG_DESCRIPTION: &str = "Unit name slug describing what this unit does: ONLY English lowercase letters [a-z] and hyphen (-). NO digits or numbers ever. e.g. adjust-levels, get-user. WRONG: e2e-test, run-v2, step-1.";

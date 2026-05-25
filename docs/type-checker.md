@@ -122,6 +122,14 @@ The feature enables four optional Cargo dependencies:
 
 Any other `node:*` specifier is rejected before reaching tsgo.
 
+## Supported npm packages
+
+| Package | Import |
+|---|---|
+| `qs@^6.14.0` | `import qs from "qs"` (default) or named imports from `"qs"` |
+
+Any other bare npm specifier is rejected before reaching tsgo.
+
 ## @types/node embedding
 
 The `src/tsgo/node_modules` directory is collected

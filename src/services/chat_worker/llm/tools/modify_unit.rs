@@ -33,7 +33,7 @@ pub const ARG_EXPLANATION_DESCRIPTION: &str =
     "English explanation of what this unit does (purpose, boundaries, how others use it).";
 /// Description for the `code` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_CODE_DESCRIPTION: &str =
-    "Implementation for this unit in TypeScript (Node.js environment).";
+    "Implementation for this unit in TypeScript (Node.js-like environment).";
 
 /// LLM JSON shape for `modify_unit`. Unit kind and slugs are taken from the parent row in the database.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
