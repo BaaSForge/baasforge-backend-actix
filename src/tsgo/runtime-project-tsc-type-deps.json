@@ -1,13 +1,13 @@
 {
   "generatedNotice": "AUTO-GENERATED — do not edit manually. Regenerate by running: ./units/runtime-check/test.sh Used by src/tsgo on the backend project to type-check LLM-generated code.",
-  "method": "Recorded from the TypeScript compiler host while type-checking (readFile, getSourceFile) — only files the checker actually loaded. Excludes the typescript built-in lib and .json files (e.g. package.json). Packages in node_modules that are never imported (and not in tsconfig types) do not appear.",
+  "method": "Recorded from the TypeScript compiler host while type-checking (readFile, getSourceFile) — only .d.ts files the checker actually loaded, plus each involved npm package's package.json (needed when types resolve via package.json \"types\" / \"exports\"). Excludes the typescript built-in lib. Packages in node_modules that are never imported (and not in tsconfig types) do not appear.",
   "compilerOptionsLib": [
     "lib.es2023.d.ts"
   ],
-  "fileCount": 106,
+  "fileCount": 110,
   "packages": {
     "@types/node": {
-      "fileCount": 67,
+      "fileCount": 68,
       "files": [
         "node_modules/@types/node/assert.d.ts",
         "node_modules/@types/node/assert/strict.d.ts",
@@ -42,6 +42,7 @@
         "node_modules/@types/node/module.d.ts",
         "node_modules/@types/node/net.d.ts",
         "node_modules/@types/node/os.d.ts",
+        "node_modules/@types/node/package.json",
         "node_modules/@types/node/path.d.ts",
         "node_modules/@types/node/perf_hooks.d.ts",
         "node_modules/@types/node/process.d.ts",
@@ -79,19 +80,21 @@
       ]
     },
     "@types/qs": {
-      "fileCount": 1,
+      "fileCount": 2,
       "files": [
-        "node_modules/@types/qs/index.d.ts"
+        "node_modules/@types/qs/index.d.ts",
+        "node_modules/@types/qs/package.json"
       ]
     },
     "cookie": {
-      "fileCount": 1,
+      "fileCount": 2,
       "files": [
-        "node_modules/cookie/dist/index.d.ts"
+        "node_modules/cookie/dist/index.d.ts",
+        "node_modules/cookie/package.json"
       ]
     },
     "undici-types": {
-      "fileCount": 37,
+      "fileCount": 38,
       "files": [
         "node_modules/undici-types/agent.d.ts",
         "node_modules/undici-types/api.d.ts",
@@ -121,6 +124,7 @@
         "node_modules/undici-types/mock-errors.d.ts",
         "node_modules/undici-types/mock-interceptor.d.ts",
         "node_modules/undici-types/mock-pool.d.ts",
+        "node_modules/undici-types/package.json",
         "node_modules/undici-types/patch.d.ts",
         "node_modules/undici-types/pool-stats.d.ts",
         "node_modules/undici-types/pool.d.ts",
@@ -167,6 +171,7 @@
     "node_modules/@types/node/module.d.ts",
     "node_modules/@types/node/net.d.ts",
     "node_modules/@types/node/os.d.ts",
+    "node_modules/@types/node/package.json",
     "node_modules/@types/node/path.d.ts",
     "node_modules/@types/node/perf_hooks.d.ts",
     "node_modules/@types/node/process.d.ts",
@@ -202,7 +207,9 @@
     "node_modules/@types/node/worker_threads.d.ts",
     "node_modules/@types/node/zlib.d.ts",
     "node_modules/@types/qs/index.d.ts",
+    "node_modules/@types/qs/package.json",
     "node_modules/cookie/dist/index.d.ts",
+    "node_modules/cookie/package.json",
     "node_modules/undici-types/agent.d.ts",
     "node_modules/undici-types/api.d.ts",
     "node_modules/undici-types/balanced-pool.d.ts",
@@ -231,6 +238,7 @@
     "node_modules/undici-types/mock-errors.d.ts",
     "node_modules/undici-types/mock-interceptor.d.ts",
     "node_modules/undici-types/mock-pool.d.ts",
+    "node_modules/undici-types/package.json",
     "node_modules/undici-types/patch.d.ts",
     "node_modules/undici-types/pool-stats.d.ts",
     "node_modules/undici-types/pool.d.ts",
