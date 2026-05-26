@@ -128,6 +128,7 @@ Any other `node:*` specifier is rejected before reaching tsgo.
 |---|
 | `qs@^6.14.0` |
 | `cookie@^1.1.1` |
+| `statuses@^2.0.2` |
 
 Any other bare npm specifier is rejected before reaching tsgo.
 

@@ -4,7 +4,7 @@
   "compilerOptionsLib": [
     "lib.es2023.d.ts"
   ],
-  "fileCount": 110,
+  "fileCount": 112,
   "packages": {
     "@types/node": {
       "fileCount": 68,
@@ -84,6 +84,13 @@
       "files": [
         "node_modules/@types/qs/index.d.ts",
         "node_modules/@types/qs/package.json"
+      ]
+    },
+    "@types/statuses": {
+      "fileCount": 2,
+      "files": [
+        "node_modules/@types/statuses/index.d.ts",
+        "node_modules/@types/statuses/package.json"
       ]
     },
     "cookie": {
@@ -208,6 +215,8 @@
     "node_modules/@types/node/zlib.d.ts",
     "node_modules/@types/qs/index.d.ts",
     "node_modules/@types/qs/package.json",
+    "node_modules/@types/statuses/index.d.ts",
+    "node_modules/@types/statuses/package.json",
     "node_modules/cookie/dist/index.d.ts",
     "node_modules/cookie/package.json",
     "node_modules/undici-types/agent.d.ts",

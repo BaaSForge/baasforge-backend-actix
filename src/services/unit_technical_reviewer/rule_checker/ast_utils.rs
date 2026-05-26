@@ -241,7 +241,7 @@ pub const ALLOWED_NODE_IMPORTS: &[(&str, &[&str])] = &[
 ];
 
 /// Bare npm package names allowed in unit imports (no version suffix).
-pub const ALLOWED_NPM_PACKAGES: &[&str] = &["qs", "cookie"];
+pub const ALLOWED_NPM_PACKAGES: &[&str] = &["qs", "cookie", "statuses"];
 
 pub fn is_allowed_node_import_source(source: &str) -> bool {
     ALLOWED_NODE_IMPORTS
