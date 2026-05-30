@@ -111,6 +111,9 @@ pub struct ToolCreateUnitPayload {
     /// Internal sub-task status for client UI. Never sent to the LLM in history.
     pub compiler_check_sub_task: UnitSubTaskStatus,
     /// Internal sub-task status for client UI. Never sent to the LLM in history.
+    #[serde(default)]
+    pub lint_check_sub_task: UnitSubTaskStatus,
+    /// Internal sub-task status for client UI. Never sent to the LLM in history.
     pub rule_check_sub_task: UnitSubTaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -161,6 +164,7 @@ pub fn payload_from_args(
         created_unit: None,
         pre_check_sub_task: UnitSubTaskStatus::Waiting,
         compiler_check_sub_task: UnitSubTaskStatus::Waiting,
+        lint_check_sub_task: UnitSubTaskStatus::Waiting,
         rule_check_sub_task: UnitSubTaskStatus::Waiting,
         error: None,
         tool_call_id,
@@ -363,6 +367,7 @@ pub async fn handler(
             created_unit: None,
             pre_check_sub_task,
             compiler_check_sub_task: UnitSubTaskStatus::Waiting,
+            lint_check_sub_task: UnitSubTaskStatus::Waiting,
             rule_check_sub_task: UnitSubTaskStatus::Waiting,
             error: pre_check_error,
             tool_call_id,
@@ -426,6 +431,7 @@ pub async fn handler(
         created_unit: None,
         pre_check_sub_task: UnitSubTaskStatus::Succeeded,
         compiler_check_sub_task: UnitSubTaskStatus::Waiting,
+        lint_check_sub_task: UnitSubTaskStatus::Waiting,
         rule_check_sub_task: UnitSubTaskStatus::Waiting,
         error: None,
         tool_call_id,

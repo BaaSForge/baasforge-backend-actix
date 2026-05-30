@@ -180,10 +180,14 @@ pub async fn fail_tool_message_and_continue(
     // LLM sees an accurate picture of how far the checks got before the reviewer crashed.
     let updated_row = match message.message_type {
         UnitReviewerMessageType::CreateUnitCompilerCheck
+        | UnitReviewerMessageType::CreateUnitLintCheck
         | UnitReviewerMessageType::CreateUnitRuleCheck => match extract_create_unit_payload(&row) {
             Ok(mut payload) => {
                 if payload.compiler_check_sub_task == UnitSubTaskStatus::Waiting {
                     payload.compiler_check_sub_task = UnitSubTaskStatus::Failed;
+                }
+                if payload.lint_check_sub_task == UnitSubTaskStatus::Waiting {
+                    payload.lint_check_sub_task = UnitSubTaskStatus::Failed;
                 }
                 if payload.rule_check_sub_task == UnitSubTaskStatus::Waiting {
                     payload.rule_check_sub_task = UnitSubTaskStatus::Failed;
@@ -200,10 +204,14 @@ pub async fn fail_tool_message_and_continue(
             Err(e) => Err(e),
         },
         UnitReviewerMessageType::ModifyUnitCompilerCheck
+        | UnitReviewerMessageType::ModifyUnitLintCheck
         | UnitReviewerMessageType::ModifyUnitRuleCheck => match extract_modify_unit_payload(&row) {
             Ok(mut payload) => {
                 if payload.compiler_check_sub_task == UnitSubTaskStatus::Waiting {
                     payload.compiler_check_sub_task = UnitSubTaskStatus::Failed;
+                }
+                if payload.lint_check_sub_task == UnitSubTaskStatus::Waiting {
+                    payload.lint_check_sub_task = UnitSubTaskStatus::Failed;
                 }
                 if payload.rule_check_sub_task == UnitSubTaskStatus::Waiting {
                     payload.rule_check_sub_task = UnitSubTaskStatus::Failed;

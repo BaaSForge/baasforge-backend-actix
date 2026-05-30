@@ -4,8 +4,8 @@ use crate::services::message_queue::{
     SharedRabbitPublisher, create_shared_publisher, publish_to_dead_letter, publish_to_retry_delay,
 };
 use crate::services::unit_technical_reviewer::handlers::{
-    process_create_unit_compiler_check, process_create_unit_rule_check,
-    process_modify_unit_compiler_check, process_modify_unit_rule_check,
+    process_create_unit_compiler_check, process_create_unit_lint_check, process_create_unit_rule_check,
+    process_modify_unit_compiler_check, process_modify_unit_lint_check, process_modify_unit_rule_check,
     process_remove_unit_rule_check,
 };
 use crate::services::unit_technical_reviewer::helpers::{
@@ -237,11 +237,17 @@ async fn process_message(
         UnitReviewerMessageType::CreateUnitCompilerCheck => {
             process_create_unit_compiler_check(pool, redis_conn, publisher, message).await
         }
+        UnitReviewerMessageType::CreateUnitLintCheck => {
+            process_create_unit_lint_check(pool, redis_conn, publisher, message).await
+        }
         UnitReviewerMessageType::CreateUnitRuleCheck => {
             process_create_unit_rule_check(pool, redis_conn, publisher, message).await
         }
         UnitReviewerMessageType::ModifyUnitCompilerCheck => {
             process_modify_unit_compiler_check(pool, redis_conn, publisher, message).await
+        }
+        UnitReviewerMessageType::ModifyUnitLintCheck => {
+            process_modify_unit_lint_check(pool, redis_conn, publisher, message).await
         }
         UnitReviewerMessageType::ModifyUnitRuleCheck => {
             process_modify_unit_rule_check(pool, redis_conn, publisher, message).await

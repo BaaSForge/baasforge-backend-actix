@@ -3,4 +3,7 @@ pub mod helpers;
 pub mod queue;
 pub mod rule_checker;
 pub mod runner;
+pub mod lint_checker;
 pub mod type_checker;
+pub mod type_lints;
+pub mod unit_vfs;

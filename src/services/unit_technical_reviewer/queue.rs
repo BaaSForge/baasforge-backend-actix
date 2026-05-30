@@ -42,8 +42,10 @@ pub fn reviewer_dead_letter_spec() -> DeadLetterSpec {
 #[serde(rename_all = "snake_case")]
 pub enum UnitReviewerMessageType {
     CreateUnitCompilerCheck,
+    CreateUnitLintCheck,
     CreateUnitRuleCheck,
     ModifyUnitCompilerCheck,
+    ModifyUnitLintCheck,
     ModifyUnitRuleCheck,
     RemoveUnitRuleCheck,
 }

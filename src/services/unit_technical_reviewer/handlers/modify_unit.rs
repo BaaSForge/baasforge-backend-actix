@@ -18,6 +18,7 @@ use crate::services::unit_technical_reviewer::helpers::{
 use crate::services::unit_technical_reviewer::queue::{
     UnitReviewerMessageType, UnitReviewerQueueMessage, publish_reviewer_message,
 };
+use crate::services::unit_technical_reviewer::lint_checker::run_type_lint_check;
 use crate::services::unit_technical_reviewer::type_checker::run_typescript_check;
 use crate::services::units::{UnitMetadataBuildInput, build_unit_metadata};
 use diesel::prelude::*;
@@ -90,7 +91,7 @@ pub async fn process_modify_unit_compiler_check(
             )
             .await;
             let next = UnitReviewerQueueMessage {
-                message_type: UnitReviewerMessageType::ModifyUnitRuleCheck,
+                message_type: UnitReviewerMessageType::ModifyUnitLintCheck,
                 ..message
             };
             publish_reviewer_message(publisher, &next)
@@ -99,6 +100,77 @@ pub async fn process_modify_unit_compiler_check(
         }
         Err(error_msg) => {
             payload.compiler_check_sub_task = UnitSubTaskStatus::Failed;
+            payload.error = Some(error_msg);
+            let updated_row = update_tool_message_payload(
+                pool,
+                tool_message_id,
+                &payload,
+                ChatMessageStatus::Completed,
+            )
+            .await?;
+            broadcast_message_updated(
+                redis_conn,
+                message.user_id,
+                message.project_id,
+                message.session_id,
+                updated_row,
+            )
+            .await;
+            trigger_llm_continuation(
+                pool,
+                redis_conn,
+                publisher,
+                invoking_message_id,
+                message.user_id,
+                message.project_id,
+                message.session_id,
+            )
+            .await;
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn process_modify_unit_lint_check(
+    pool: &DbPool,
+    redis_conn: &RedisConn,
+    publisher: &Arc<SharedRabbitPublisher>,
+    message: UnitReviewerQueueMessage,
+) -> Result<(), BoxError> {
+    let tool_message_id = message.tool_message_id;
+    let row = load_tool_message_row(pool, tool_message_id).await?;
+    let invoking_message_id = row.invoking_message_id;
+    let mut payload = extract_modify_unit_payload(&row)?;
+
+    match run_type_lint_check(pool, message.project_id, message.session_id, &message.code).await {
+        Ok(()) => {
+            payload.lint_check_sub_task = UnitSubTaskStatus::Succeeded;
+            let updated_row = update_tool_message_payload(
+                pool,
+                tool_message_id,
+                &payload,
+                ChatMessageStatus::Generating,
+            )
+            .await?;
+            broadcast_message_updated(
+                redis_conn,
+                message.user_id,
+                message.project_id,
+                message.session_id,
+                updated_row,
+            )
+            .await;
+            let next = UnitReviewerQueueMessage {
+                message_type: UnitReviewerMessageType::ModifyUnitRuleCheck,
+                ..message
+            };
+            publish_reviewer_message(publisher, &next)
+                .await
+                .map_err(|e| -> BoxError { e.to_string().into() })?;
+        }
+        Err(error_msg) => {
+            payload.lint_check_sub_task = UnitSubTaskStatus::Failed;
             payload.error = Some(error_msg);
             let updated_row = update_tool_message_payload(
                 pool,

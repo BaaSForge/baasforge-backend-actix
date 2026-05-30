@@ -6,12 +6,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWrit
 use crate::database::{DbPool, block_on_db_tokio};
 use crate::models::projects::ProjectUnitResponse;
 use crate::services::chat_worker::db::load_effective_units_for_chat_session;
-use crate::tsgo::node_modules_files;
+use crate::services::unit_technical_reviewer::unit_vfs::{VIRTUAL_ROOT, build_vfs, find_tsgo_bin};
 use uuid::Uuid;
-
-const VIRTUAL_ROOT: &str = "/unit";
-const VIRTUAL_NODE_MODULES: &str = "/unit/node_modules";
-const VIRTUAL_UNITS_MODULES: &str = "/unit/node_modules/@units";
 
 pub async fn run_typescript_check(
     pool: &DbPool,
@@ -91,100 +87,6 @@ pub async fn run_typescript_check(
     }
 }
 
-// --- VFS Logic ---
-
-fn build_vfs(code: &str, units: &[ProjectUnitResponse]) -> HashMap<String, String> {
-    let mut vfs = HashMap::new();
-
-    let tsconfig = json!({
-        "compilerOptions": {
-            "target": "ES2023",
-            "module": "ES2022",
-            "moduleResolution": "node",
-            "lib": ["ES2023"],
-
-            "types": ["node"],
-            "declaration": false,
-            "sourceMap": true,
-            "skipLibCheck": true,
-
-            "strict": true,
-            "noEmit": true,
-            "noImplicitAny": true,
-            "noImplicitOverride": true,
-            "strictNullChecks": true,
-            "strictFunctionTypes": true,
-            "strictBindCallApply": true,
-            "strictPropertyInitialization": true,
-            "noImplicitThis": true,
-            "alwaysStrict": true,
-            "useUnknownInCatchVariables": true,
-            "noUncheckedIndexedAccess": true,
-            "exactOptionalPropertyTypes": true,
-
-            "verbatimModuleSyntax": true,
-            "noUncheckedSideEffectImports": true,
-            "erasableSyntaxOnly": true,
-
-            "noUnusedLocals": true,
-            "noUnusedParameters": true,
-            "noImplicitReturns": true,
-            "noFallthroughCasesInSwitch": true,
-            "noPropertyAccessFromIndexSignature": true,
-
-            // Required for @units/* path aliases to resolve.
-            "baseUrl": ".",
-            "paths": {
-                "@units/*": ["./node_modules/@units/*"]
-            }
-        },
-        "files": ["main.ts"]
-    });
-    vfs.insert(
-        format!("{}/tsconfig.json", VIRTUAL_ROOT),
-        tsconfig.to_string(),
-    );
-    vfs.insert(format!("{}/main.ts", VIRTUAL_ROOT), code.to_string());
-    vfs.insert(
-        format!("{}/package.json", VIRTUAL_ROOT),
-        json!({
-            "name": "virtual-project",
-            "type": "module"
-        })
-        .to_string(),
-    );
-
-    // Populate @units/* virtual files so TypeScript can resolve cross-unit type imports.
-    // Each non-deleted unit with code becomes a `.ts` file at:
-    //   /unit/node_modules/@units/<context>.<module>.<unit_type>.<unit_name>.ts
-    // Units are imported as: `import type { Foo } from '@units/context.module.unit-type.unit-name'`
-    // Runtime value imports (kept in compiled code) only from `…common…` paths.
-    for unit in units {
-        if unit.is_deleted {
-            continue;
-        }
-        if let Some(ref unit_code) = unit.code {
-            let unit_file = format!(
-                "{}/{}.{}.{}.{}.ts",
-                VIRTUAL_UNITS_MODULES,
-                unit.context_slug,
-                unit.module_slug,
-                unit.unit_type.as_slug(),
-                unit.unit_name_slug,
-            );
-            vfs.insert(unit_file, unit_code.clone());
-        }
-    }
-
-    // Populate node_modules from the statically included file
-    for (rel_path, content) in node_modules_files::NODE_MODULES_FILE_DATA {
-        let full_path = format!("{}/{}", VIRTUAL_NODE_MODULES, rel_path);
-        vfs.insert(full_path, content.to_string());
-    }
-
-    vfs
-}
-
 // --- IPC Client with Callback Support ---
 struct TsgoIpcClient {
     #[allow(dead_code)]
@@ -199,7 +101,7 @@ struct TsgoIpcClient {
 impl TsgoIpcClient {
     async fn spawn(vfs: HashMap<String, String>) -> Result<Self, String> {
         let tsgo_bin = find_tsgo_bin()?;
-        let mut child = tokio::process::Command::new(tsgo_bin)
+        let mut child = tokio::process::Command::new(&tsgo_bin)
             .args([
                 "--api",
                 "--async",
@@ -368,36 +270,3 @@ impl TsgoIpcClient {
     }
 }
 
-/// Simplified binary locator.
-fn find_tsgo_bin() -> Result<String, String> {
-    let rel = tsgo_bin_rel_path()?;
-
-    let p = PathBuf::from(&rel);
-    if p.exists() {
-        return Ok(p.to_string_lossy().into_owned());
-    }
-
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(root) = exe.parent() {
-            let p = root.join(&rel);
-            if p.exists() {
-                return Ok(p.to_string_lossy().into_owned());
-            }
-        }
-
-    Err(format!(
-        "tsgo binary not found at {rel}. Run `cd tsgo && npm install`"
-    ))
-}
-
-/// Platform-specific binary path.
-fn tsgo_bin_rel_path() -> Result<String, String> {
-    let pkg = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => "@typescript/native-preview-darwin-arm64",
-        ("macos", "x86_64") => "@typescript/native-preview-darwin-x64",
-        ("linux", "x86_64") => "@typescript/native-preview-linux-x64",
-        ("linux", "aarch64") => "@typescript/native-preview-linux-arm64",
-        (os, arch) => return Err(format!("Unsupported: {os}-{arch}")),
-    };
-    Ok(format!("src/tsgo/node_modules/{pkg}/lib/tsgo"))
-}

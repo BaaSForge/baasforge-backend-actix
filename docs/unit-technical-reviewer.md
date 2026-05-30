@@ -29,10 +29,12 @@ The queue carries `UnitReviewerQueueMessage` (defined in `src/services/unit_tech
 
 | Message type | Triggered by | Description |
 |---|---|---|
-| `create_unit_compiler_check` | `create_unit` handler after pre_check success | Syntax/compiler check on the unit's NodeJS code |
-| `create_unit_rule_check` | Reviewer after compiler_check succeeds | Naming-convention and project-level rules check; **inserts the `project_units` row on success** |
-| `modify_unit_compiler_check` | `modify_unit` handler after pre_check success | Compiler check for the revised unit code |
-| `modify_unit_rule_check` | Reviewer after compiler_check succeeds | Rule check; **inserts the new revision row on success** |
+| `create_unit_compiler_check` | `create_unit` handler after pre_check success | TypeScript type-check (tsgo) |
+| `create_unit_lint_check` | Reviewer after compiler_check succeeds | `no-explicit-any` + type-aware `no-unsafe-type-assertion` (tsgolint) |
+| `create_unit_rule_check` | Reviewer after lint_check succeeds | Naming-convention and project-level rules; **inserts the `project_units` row on success** |
+| `modify_unit_compiler_check` | `modify_unit` handler after pre_check success | Type-check for revised code |
+| `modify_unit_lint_check` | Reviewer after compiler_check succeeds | Type-aware lint |
+| `modify_unit_rule_check` | Reviewer after lint_check succeeds | Rule check; **inserts the new revision row on success** |
 | `remove_unit_rule_check` | `remove_unit` handler after pre_check success | Rule check (no compiler check for removals); **inserts the deletion marker row on success** |
 
 Each message carries the minimum context for the check:
@@ -90,7 +92,12 @@ unit_technical_reviewer: receives create_unit_compiler_check
   └─ check succeeds
         updates row: compiler_check_sub_task=Succeeded, status=Generating
         broadcasts ChatSessionMessageUpdated via WS
-        publishes create_unit_rule_check → unit_reviewer_work_queue
+        publishes create_unit_lint_check → unit_reviewer_work_queue
+        │
+        ▼
+unit_technical_reviewer: receives create_unit_lint_check
+  ├─ check fails → lint_check_sub_task=Failed, status=Completed, LLM continues
+  └─ check succeeds → lint_check_sub_task=Succeeded, publishes create_unit_rule_check
         │
         ▼
 unit_technical_reviewer: receives create_unit_rule_check
@@ -108,7 +115,7 @@ unit_technical_reviewer: receives create_unit_rule_check
         calls maybe_complete_invoking_message → LLM continues
 ```
 
-The flows for `modify_unit` (compiler_check → rule_check → insert new revision) and `remove_unit` (rule_check only → insert deletion marker) follow the same pattern.
+The flows for `modify_unit` (compiler_check → lint_check → rule_check → insert new revision) and `remove_unit` (rule_check only → insert deletion marker) follow the same pattern.
 
 ## LLM continuation: who calls `maybe_complete_invoking_message`
 
@@ -127,8 +134,9 @@ The flows for `modify_unit` (compiler_check → rule_check → insert new revisi
 The client receives incremental updates as each sub-task completes:
 
 1. `ChatSessionMessageUpdated` — broadcast by the handler after pre_check, showing `pre_check_sub_task=Succeeded` and checks `Waiting`.
-2. `ChatSessionMessageUpdated` — broadcast by the reviewer after compiler_check, showing `compiler_check_sub_task=Succeeded/Failed`.
-3. `ChatSessionMessageUpdated` — broadcast by the reviewer after rule_check, showing `rule_check_sub_task=Succeeded/Failed`, `status=Completed`, and (on success) the populated `created_unit` / `revised_unit` / `removed_unit`.
+2. `ChatSessionMessageUpdated` — after compiler_check (`compiler_check_sub_task`).
+3. `ChatSessionMessageUpdated` — after lint_check (`lint_check_sub_task`).
+4. `ChatSessionMessageUpdated` — after rule_check (`rule_check_sub_task`, `status=Completed`, unit fields on success).
 4. `ProjectUnitCreated` / `ProjectUnitModified` / `ProjectUnitDeleted` — broadcast by the reviewer **only** on rule_check success, after the row is actually in the database. Never sent on failure.
 
 ## Compiler check: real TypeScript type checking

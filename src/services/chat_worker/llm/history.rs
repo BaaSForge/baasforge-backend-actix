@@ -133,6 +133,7 @@ fn strip_unit_subtask_fields(mut v: Value) -> String {
     if let Some(obj) = v.as_object_mut() {
         obj.remove("pre_check_sub_task");
         obj.remove("compiler_check_sub_task");
+        obj.remove("lint_check_sub_task");
         obj.remove("rule_check_sub_task");
     }
     v.to_string()

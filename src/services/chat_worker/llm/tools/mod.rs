@@ -65,10 +65,11 @@ pub use remove_unit::ToolRemoveUnitPayload;
 /// Status of an internal sub-task check attached to unit tool messages.
 /// Stored in DB payload for client UI; **never sent to the LLM** in history.
 /// Checks run serially, so earlier checks may still be `Waiting` when a later one starts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnitSubTaskStatus {
     /// Check has not started yet (default initial state before serial execution reaches it).
+    #[default]
     Waiting,
     Succeeded,
     Failed,
