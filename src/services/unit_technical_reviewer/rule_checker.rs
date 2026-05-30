@@ -216,6 +216,9 @@ pub(crate) type Rule = for<'a> fn(&RuleInput<'a>) -> Vec<String>;
 pub fn rules_prompt() -> String {
     let mut out = String::new();
 
+    out.push_str("## Lint check rules\n\n");
+    append_hints(&mut out, crate::services::unit_technical_reviewer::type_lints::hint_entries());
+
     // 1. Generic rules
     out.push_str("## 1. Generic Rules\n\n");
     append_hints(&mut out, generic_rules::hint_entries());

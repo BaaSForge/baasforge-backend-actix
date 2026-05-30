@@ -13,7 +13,7 @@ pre_check → compiler_check → lint_check → rule_check → DB insert
 | Step | Tool | Notes |
 |------|------|--------|
 | Compiler check | tsgo IPC (in-memory VFS) | Full strict type-check |
-| Lint check | OXC + tsgolint headless | `no-explicit-any` (syntax) + `no-unsafe-type-assertion` (type-aware) |
+| Lint check | OXC + tsgolint headless | `no-explicit-any`, no `import * as …` (syntax) + `no-unsafe-type-assertion` (type-aware) |
 | Rule check | OXC AST rules | Project conventions |
 
 ## Architecture
@@ -23,7 +23,7 @@ run_typescript_check(code)
   └─ tsgo IPC (virtual filesystem, no disk writes)
 
 run_type_lint_check(code)
-  ├─ OXC: no-explicit-any
+  ├─ OXC: no-explicit-any, no namespace imports (`import * as …`)
   └─ tsgolint headless: no-unsafe-type-assertion
        (temp dir: main.ts + @units + symlink to src/tsgo/node_modules)
 ```

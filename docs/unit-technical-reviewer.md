@@ -30,10 +30,10 @@ The queue carries `UnitReviewerQueueMessage` (defined in `src/services/unit_tech
 | Message type | Triggered by | Description |
 |---|---|---|
 | `create_unit_compiler_check` | `create_unit` handler after pre_check success | TypeScript type-check (tsgo) |
-| `create_unit_lint_check` | Reviewer after compiler_check succeeds | `no-explicit-any` + type-aware `no-unsafe-type-assertion` (tsgolint) |
+| `create_unit_lint_check` | Reviewer after compiler_check succeeds | `no-explicit-any`, no `import * as …`, + type-aware `no-unsafe-type-assertion` (tsgolint) |
 | `create_unit_rule_check` | Reviewer after lint_check succeeds | Naming-convention and project-level rules; **inserts the `project_units` row on success** |
 | `modify_unit_compiler_check` | `modify_unit` handler after pre_check success | Type-check for revised code |
-| `modify_unit_lint_check` | Reviewer after compiler_check succeeds | Type-aware lint |
+| `modify_unit_lint_check` | Reviewer after compiler_check succeeds | Same as create lint check |
 | `modify_unit_rule_check` | Reviewer after lint_check succeeds | Rule check; **inserts the new revision row on success** |
 | `remove_unit_rule_check` | `remove_unit` handler after pre_check success | Rule check (no compiler check for removals); **inserts the deletion marker row on success** |
 

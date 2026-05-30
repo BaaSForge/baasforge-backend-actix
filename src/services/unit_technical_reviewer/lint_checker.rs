@@ -32,7 +32,7 @@ mod imp {
         session_id: Uuid,
         code: &str,
     ) -> Result<(), String> {
-        type_lints::run_no_explicit_any(code)?;
+        type_lints::run_syntax_lint_checks(code)?;
 
         let units = block_on_db_tokio(pool, move |conn| {
             load_effective_units_for_chat_session(conn, project_id, session_id)
