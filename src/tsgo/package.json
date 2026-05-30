@@ -1,6 +1,7 @@
 {
   "description": "The packages installed in the `package.json` here needs to be synced with `units/runtime-check/package.json` on the runtime project to make sure typescript is doing the same when LLM writes code here and when the types are checked in tests in runtime tests.",
   "dependencies": {
+    "@mjackson/multipart-parser": "^0.10.1",
     "@types/node": "^22.0.0",
     "@types/qs": "^6.15.1",
     "@types/statuses": "^2.0.6",

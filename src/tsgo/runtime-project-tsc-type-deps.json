@@ -4,8 +4,35 @@
   "compilerOptionsLib": [
     "lib.es2023.d.ts"
   ],
-  "fileCount": 112,
+  "fileCount": 129,
   "packages": {
+    "@mjackson/headers": {
+      "fileCount": 13,
+      "files": [
+        "node_modules/@mjackson/headers/dist/headers.d.ts",
+        "node_modules/@mjackson/headers/dist/lib/accept-encoding.d.ts",
+        "node_modules/@mjackson/headers/dist/lib/accept-language.d.ts",
+        "node_modules/@mjackson/headers/dist/lib/accept.d.ts",
+        "node_modules/@mjackson/headers/dist/lib/cache-control.d.ts",
+        "node_modules/@mjackson/headers/dist/lib/content-disposition.d.ts",
+        "node_modules/@mjackson/headers/dist/lib/content-type.d.ts",
+        "node_modules/@mjackson/headers/dist/lib/cookie.d.ts",
+        "node_modules/@mjackson/headers/dist/lib/header-value.d.ts",
+        "node_modules/@mjackson/headers/dist/lib/if-none-match.d.ts",
+        "node_modules/@mjackson/headers/dist/lib/set-cookie.d.ts",
+        "node_modules/@mjackson/headers/dist/lib/super-headers.d.ts",
+        "node_modules/@mjackson/headers/package.json"
+      ]
+    },
+    "@mjackson/multipart-parser": {
+      "fileCount": 4,
+      "files": [
+        "node_modules/@mjackson/multipart-parser/dist/lib/multipart-request.d.ts",
+        "node_modules/@mjackson/multipart-parser/dist/lib/multipart.d.ts",
+        "node_modules/@mjackson/multipart-parser/dist/multipart-parser.d.ts",
+        "node_modules/@mjackson/multipart-parser/package.json"
+      ]
+    },
     "@types/node": {
       "fileCount": 68,
       "files": [
@@ -145,6 +172,23 @@
     }
   },
   "files": [
+    "node_modules/@mjackson/headers/dist/headers.d.ts",
+    "node_modules/@mjackson/headers/dist/lib/accept-encoding.d.ts",
+    "node_modules/@mjackson/headers/dist/lib/accept-language.d.ts",
+    "node_modules/@mjackson/headers/dist/lib/accept.d.ts",
+    "node_modules/@mjackson/headers/dist/lib/cache-control.d.ts",
+    "node_modules/@mjackson/headers/dist/lib/content-disposition.d.ts",
+    "node_modules/@mjackson/headers/dist/lib/content-type.d.ts",
+    "node_modules/@mjackson/headers/dist/lib/cookie.d.ts",
+    "node_modules/@mjackson/headers/dist/lib/header-value.d.ts",
+    "node_modules/@mjackson/headers/dist/lib/if-none-match.d.ts",
+    "node_modules/@mjackson/headers/dist/lib/set-cookie.d.ts",
+    "node_modules/@mjackson/headers/dist/lib/super-headers.d.ts",
+    "node_modules/@mjackson/headers/package.json",
+    "node_modules/@mjackson/multipart-parser/dist/lib/multipart-request.d.ts",
+    "node_modules/@mjackson/multipart-parser/dist/lib/multipart.d.ts",
+    "node_modules/@mjackson/multipart-parser/dist/multipart-parser.d.ts",
+    "node_modules/@mjackson/multipart-parser/package.json",
     "node_modules/@types/node/assert.d.ts",
     "node_modules/@types/node/assert/strict.d.ts",
     "node_modules/@types/node/async_hooks.d.ts",
