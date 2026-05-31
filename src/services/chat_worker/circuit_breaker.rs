@@ -321,8 +321,9 @@ mod tests {
     }
 
     #[test]
-    fn four_failures_does_not_trip() {
-        let rows: Vec<_> = (0..4)
+    fn under_streak_len_failures_does_not_trip() {
+        let n = SAME_TOOL_FAILURE_STREAK_LEN - 1;
+        let rows: Vec<_> = (0..n)
             .map(|_| ai_tool_failed(ChatMessageType::ToolListUnitContexts, "e"))
             .collect();
         assert!(same_tool_failure_streak_tripped(&rows, CircuitBreakerScope::NestedSubagentBranch).is_none());
@@ -398,7 +399,7 @@ mod tests {
     #[test]
     fn planner_turn_over_max_db_messages_trips() {
         let mut db = vec![user_text()];
-        db.extend((0..101).map(|_| assistant_text_ok()));
+        db.extend((0..MAX_PLANNER_TURN_MESSAGES + 1).map(|_| assistant_text_ok()));
         let load = SessionHistoryLoad {
             session_messages: vec![],
             db_rows_chronological: db,
@@ -411,7 +412,7 @@ mod tests {
 
     #[test]
     fn nested_thread_over_max_session_messages_trips() {
-        let session_messages: Vec<_> = (0..101)
+        let session_messages: Vec<_> = (0..MAX_SUBAGENT_THREAD_MESSAGES + 1)
             .map(|_| {
                 (
                     ChatSessionRoleType::Ai,
@@ -480,7 +481,7 @@ mod tests {
     #[test]
     fn max_messages_checked_before_failed_tool_count() {
         let mut db = vec![user_text()];
-        db.extend((0..101).map(|_| assistant_text_ok()));
+        db.extend((0..MAX_PLANNER_TURN_MESSAGES + 1).map(|_| assistant_text_ok()));
         db.extend((0..MAX_FAILED_TOOL_INVOCATIONS_PER_TURN + 1).map(|i| {
             let type_ = if i % 2 == 0 {
                 ChatMessageType::ToolListUnitContexts

@@ -80,7 +80,7 @@ pub fn tool_message_types() -> &'static [ChatMessageType] {
 
 /// Loads history **only** under the nested branch rooted at the `ToolImplementSolution` DB row.
 ///
-/// Prepends a synthetic user message: tool `directive` from the implement row (solution context is in planner history).
+/// Prepends a synthetic user message: tool `directive` from the implement row.
 pub fn load_history(
     conn: &mut PooledConn,
     session_id: Uuid,

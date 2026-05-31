@@ -2,8 +2,8 @@
 //! (e.g. `ToolAnalyzeArchitecture`, `ToolAnalyzeSolution`, `ToolAnalyzeObservability`, `ToolImplementSolution`).
 //!
 //! These subtrees are **not** visible to the Planner’s other messages or to other agents’ subtrees;
-//! each invocation is a separate branch. The Planner must put carry-over context in **intent** /
-//! **directive** (see planner system prompt §2.1 and [`crate::services::chat_worker::agent::load_history_for_agent`]).
+//! each invocation is a separate branch. The Planner must **refine** prior `detailed_report` text
+//! into **intent** / **directive** (planner §2.1.1; [`crate::services::chat_worker::agent::load_history_for_agent`]).
 //!
 //! History is scoped by the **subtree** rooted at the anchor tool row (`invoking_message_id`
 //! edges). The **anchor row itself is not replayed**: it is the planner-side tool invocation; the

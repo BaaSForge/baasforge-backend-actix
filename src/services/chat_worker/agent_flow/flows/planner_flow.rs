@@ -64,7 +64,9 @@ fn prompt_plan_solution(_ctx: &SessionFlowContext) -> Option<String> {
         Architecture analysis has been run in this session. You may now use **analyze solution** \
         (or architecture analysis, observability, and load latest releases). **Implement solution** is \
         still locked until a solution analysis has completed.\n\
-        - Do not skip solution analysis before implementation.\n"
+        - Do not skip solution analysis before implementation.\n\
+        - **analyze solution** `intent` must include **user intent** plus **refined** architecture \
+        `detailed_report` facts—not a one-line summary (see planner §2.1.1).\n"
             .to_string(),
     )
 }
@@ -74,7 +76,9 @@ fn prompt_implement(ctx: &SessionFlowContext) -> Option<String> {
     Some(format!(
         "## Workflow step: Implement (system)\n\
         Solution analysis has been run; **implement solution** is now available.\n\
-        - Solution analysis without a following implement call: **{pending_impl}**."
+        - Solution analysis without a following implement call: **{pending_impl}**.\n\
+        - Each **directive** is one implement slice: refined solution §(1)–(4) only—not the full \
+        report, not §(5) Sequencing or §(6) Risks (planner §2.1.1)."
     ))
 }
 

@@ -29,7 +29,7 @@ type RedisConn = Arc<Mutex<redis::aio::MultiplexedConnection>>;
 const SUBTREE_FALLBACK_ROW_CAP: usize = 100;
 
 pub const ARG_DIRECTIVE_DESCRIPTION: &str =
-    "Short orchestration handoff for the programmer: what this run must deliver, scope (units/areas or reference to agreed solution analysis), and non-negotiable constraints (e.g. production-ready, user-required routes/shapes, preserve existing contracts). Plain language only. Do NOT paste code, prescribe handlers/state/build order, or micromanage how to implement—the programmer decides those within their role.";
+    "Refined handoff for this implement run only: outcomes, scope (unit paths and the relevant solution-plan specs—units, per-API, per-actor, runtime libraries), and constraints. Include user intent only where it affects this slice. Do NOT paste the full solution detailed_report, other slices, solution Sequencing (§5), or Risks/trade-offs (§6)—the planner uses those; the programmer does not see them unless you restate actionable specs from §(1)–(4). Plain language; no code.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolImplementSolutionArgs {
@@ -61,7 +61,7 @@ pub const TOOL_NAME: &str = "implement_solution_tool";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Run the programmer agent asynchronously to implement the agreed solution. Pass a short directive: outcomes, scope, and constraints only—the programmer owns implementation details. Never paste code or micromanage design.",
+        description: "Run the programmer for one implementation slice. Pass a refined directive for this run only (see parameter description)—not the full solution analysis report.",
         parameters: params_schema(),
     }
 }

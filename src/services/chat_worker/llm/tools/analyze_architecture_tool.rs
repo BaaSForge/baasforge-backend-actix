@@ -15,7 +15,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// Description for the `intent` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
-pub const ARG_INTENT_DESCRIPTION: &str = "What you intend to analyze: which units or areas to focus on and what scopes of the project matter for this analysis.";
+pub const ARG_INTENT_DESCRIPTION: &str =
+    "Planner handoff: user intent (what they want) plus which units, contexts, or areas to inspect and what to determine (conflicts, reuse, gaps, env keys). Be concrete—the architecture analyzer does not see the main chat.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolAnalyzeArchitectureArgs {

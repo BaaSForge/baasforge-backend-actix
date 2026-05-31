@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 /// Description for the `intent` parameter (Gemini `JsonSchema` + OpenAI/Claude `params_schema`).
 pub const ARG_INTENT_DESCRIPTION: &str =
-    "What you intend to plan: the user’s goals and current architecture analysis.";
+    "Planner handoff for this run: (1) the user’s intent—goals, scope, constraints, success criteria; (2) refined architecture findings from the architecture analyzer (relevant units, connections, gaps, env keys)—not a vague summary. The solution analyzer does not see other threads; both parts are required when architecture analysis ran.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolAnalyzeSolutionArgs {
@@ -43,7 +43,7 @@ pub const TOOL_NAME: &str = "analyze_solution_tool";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Request an asynchronous solution analysis: propose approaches, trade-offs, and how the plan fits the project’s units and architecture. Describe your intent—requirements, constraints, and what success looks like.",
+        description: "Request asynchronous solution analysis. In intent, pass the user’s goals and refined architecture findings (see parameter description)—not only a one-line summary.",
         parameters: params_schema(),
     }
 }

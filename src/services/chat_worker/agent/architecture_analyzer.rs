@@ -107,7 +107,7 @@ Each unit id must match tool/list output: slug segments are **lowercase**; the l
 
 During the loop you may explore, retry tools, and leave short progress notes in assistant text—that is normal. Do not treat those mid-turn messages as your deliverable.
 
-The **`detailed_report`** must be written only after you have finished all investigation (tools, comparisons, checks). It must be informationally complete for the planner and user: relevant units and how they connect, behavior and data flow as it matters to the request, gaps, conflicts, and risks. Prefer the **shortest** clear structure (e.g. tight bullets) that still contains those facts—it must **NOT** be a vague recap that omits what a later agent would need.
+The **`detailed_report`** must be written only after you have finished all investigation (tools, comparisons, checks). It must be informationally complete for the **planner** (who refines it into the solution analyzer’s **intent** and later handoffs): relevant units and how they connect, behavior and data flow as it matters to the request, gaps, conflicts, and risks. Prefer the **shortest** clear structure (e.g. tight bullets) that still contains those facts—it must **NOT** be a vague recap that omits identifiers or conclusions the planner must forward.
 
 In **`detailed_report`**, do not include trial-and-error narratives, dead ends, step-by-step exploration, or intermediate back-and-forth—only consolidated findings and conclusions grounded in what you verified.
 
