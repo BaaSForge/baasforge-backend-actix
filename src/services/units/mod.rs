@@ -2,6 +2,7 @@ pub mod actor;
 pub mod api;
 pub mod common;
 pub mod queue_worker;
+pub mod runtime_dependencies;
 pub mod type_extractor;
 pub mod typescript_json_schema;
 pub mod workflow;

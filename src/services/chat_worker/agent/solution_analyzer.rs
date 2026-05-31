@@ -9,6 +9,7 @@ use crate::services::chat_worker::llm::tools::{
     list_unit_contexts, load_latest_production_release_units,
 };
 use crate::services::units as units_definitions;
+use crate::services::units::runtime_dependencies;
 use diesel::OptionalExtension;
 use diesel::prelude::*;
 use diesel::result::Error;
@@ -120,7 +121,8 @@ After your analysis is complete, do not stop at narrative-only turns: call finis
 
 pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::new(|| {
     let combined = format!(
-        "{SYSTEM_PROMPT_CORE}\n\n## Unit type reference (detailed)\n\nUse the following when shaping solution options and how units should compose or change.\n\n{}\n## Unit communication reference\n\nHow each unit type communicates with the outside world and with other units.\n\n{}\n## Unit metadata reference\n\nPersisted metadata schema and semantics for each unit type.\n\n{}",
+        "{SYSTEM_PROMPT_CORE}\n\n{}\n\n## Unit type reference (detailed)\n\nUse the following when shaping solution options and how units should compose or change.\n\n{}\n## Unit communication reference\n\nHow each unit type communicates with the outside world and with other units.\n\n{}\n## Unit metadata reference\n\nPersisted metadata schema and semantics for each unit type.\n\n{}",
+        runtime_dependencies::allowed_runtime_imports_prompt_section(),
         units_definitions::all_details(),
         units_definitions::all_communications(),
         units_definitions::all_metadata(),

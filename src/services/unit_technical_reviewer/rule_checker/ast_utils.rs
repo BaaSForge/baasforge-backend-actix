@@ -208,63 +208,10 @@ pub fn export_all_source<'a>(e: &'a ExportAllDeclaration<'a>) -> &'a str {
 
 // ── Import utilities ──────────────────────────────────────────────────────────────────────────
 
-/// Supported `node:*` import sources and their permitted named exports (original names, not aliases).
-pub const ALLOWED_NODE_IMPORTS: &[(&str, &[&str])] = &[
-    ("node:http", &["IncomingMessage", "ServerResponse"]),
-    ("node:querystring", &["parse"]),
-    ("node:stream/consumers", &["text"]),
-    ("node:url", &["URL"]),
-    (
-        "node:crypto",
-        &[
-            "randomUUID",
-            "randomBytes",
-            "randomInt",
-            "randomFillSync",
-            "createHash",
-            "createHmac",
-            "getHashes",
-            "getCiphers",
-            "pbkdf2Sync",
-            "scryptSync",
-            "timingSafeEqual",
-            "createCipheriv",
-            "createDecipheriv",
-            "subtle",
-            "getRandomValues",
-            "webcrypto",
-        ],
-    ),
-    ("node:buffer", &["Buffer"]),
-    ("node:util", &["TextEncoder", "TextDecoder"]),
-    ("node:timers/promises", &["setTimeout"]),
-];
-
-/// Bare npm package names allowed in unit imports (no version suffix).
-pub const ALLOWED_NPM_PACKAGES: &[&str] =
-    &["qs", "cookie", "statuses", "mime-types", "@mjackson/multipart-parser"];
-
-pub fn is_allowed_node_import_source(source: &str) -> bool {
-    ALLOWED_NODE_IMPORTS
-        .iter()
-        .any(|(mod_src, _)| *mod_src == source)
-}
-
-pub fn allowed_names_for_node_import(source: &str) -> Option<&'static [&'static str]> {
-    ALLOWED_NODE_IMPORTS
-        .iter()
-        .find_map(|(mod_src, names)| {
-            if *mod_src == source {
-                Some(*names)
-            } else {
-                None
-            }
-        })
-}
-
-pub fn is_allowed_npm_package_name(name: &str) -> bool {
-    ALLOWED_NPM_PACKAGES.iter().any(|pkg| *pkg == name)
-}
+pub use crate::services::units::runtime_dependencies::{
+    ALLOWED_NODE_IMPORTS, ALLOWED_NPM_PACKAGES, allowed_names_for_node_import,
+    is_allowed_node_import_source, is_allowed_npm_package_name,
+};
 
 /// Root package name for a bare npm import (`qs`, `qs/lib`, `@scope/pkg/…`), or `None` for
 /// relative paths, `node:*`, and `@units/…`.

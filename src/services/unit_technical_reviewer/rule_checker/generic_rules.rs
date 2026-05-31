@@ -36,25 +36,11 @@ pub fn hint_entries() -> Vec<(&'static str, &'static str)> {
         ),
         (
             "Only supported `node:*` imports",
-            "Only the following named exports from Node built-in modules are supported — \
-             no other `node:*` modules or names may be imported. \
-             Namespace (`import * as x`) and default imports from `node:*` are forbidden. \
-             Allowed imports: \
-             `import type { IncomingMessage, ServerResponse } from \"node:http\"`, \
-             `import { parse as parseQuerystring } from \"node:querystring\"`, \
-             `import { text } from \"node:stream/consumers\"`, \
-             `import { URL } from \"node:url\"`, \
-             `import { randomUUID, randomBytes, randomInt, randomFillSync, createHash, createHmac, \
-             getHashes, getCiphers, pbkdf2Sync, scryptSync, timingSafeEqual, createCipheriv, \
-             createDecipheriv, subtle, getRandomValues, webcrypto } from \"node:crypto\"`, \
-             `import { Buffer } from \"node:buffer\"`, \
-             `import { TextEncoder, TextDecoder } from \"node:util\"`, \
-             `import { setTimeout as setTimeoutPromise } from \"node:timers/promises\"`.",
+            *crate::services::units::runtime_dependencies::NODE_IMPORTS_LLM_HINT,
         ),
         (
             "Only supported npm packages",
-            "Only `qs@^6.14.0`, `cookie@^1.1.1`, `statuses@^2.0.2`, `mime-types@^3.0.2`, and \
-             `@mjackson/multipart-parser@^0.10.1` are available. No other npm packages.",
+            *crate::services::units::runtime_dependencies::NPM_PACKAGES_LLM_HINT,
         ),
     ]
 }
@@ -183,8 +169,8 @@ fn only_allowed_node_imports(input: &RuleInput) -> Vec<String> {
         let Some(allowed_names) = ast_utils::allowed_names_for_node_import(src) else {
             errors.push(format!(
                 "Import from `{src}` is not supported in units; \
-                 only node:http, node:querystring, node:stream/consumers, node:url, \
-                 node:crypto, node:buffer, node:util, and node:timers/promises are allowed"
+                 only {} are allowed",
+                crate::services::units::runtime_dependencies::allowed_node_module_sources_joined()
             ));
             continue;
         };
