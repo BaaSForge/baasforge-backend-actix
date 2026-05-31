@@ -12,6 +12,7 @@ use crate::services::chat_worker::llm::tools::{
 };
 use crate::services::unit_technical_reviewer::rule_checker;
 use crate::services::units as units_definitions;
+use crate::services::units::runtime_dependencies;
 use diesel::OptionalExtension;
 use diesel::prelude::*;
 use diesel::result::Error;
@@ -137,6 +138,7 @@ Ignoring this rule wastes a whole tool call: the server rejects the arguments, t
 - **New unit naming quality (strict):** When creating units, choose meaningful, specific, and distinct names for `unit_name`, `module_slug`, and `context_slug`. Avoid generic, ambiguous, duplicate, near-duplicate, or reused names that describe different concepts. If an existing context/module already fits, reuse it; if you add a new one, it must represent a clearly different domain or subdomain.
 - **Draft units:** Work-in-progress in this chat; not yet live in production. For **draft** units, you may freely use `modify_unit` whenever the directive calls for it—do not create redundant new units only to avoid editing draft work-in-progress.
 - Prefer new units over edits when both work **for units already live in production (non-draft)** (to reduce risk of breaking stable behavior). For draft units, the rule above does not apply the same way: editing drafts is expected. If you must change a unit that is already live in production, preserve behavior outside the requested delta.
+- **Allowlisted runtime libraries:** Follow **CRITICAL — Use allowlisted runtime libraries** and **Runtime libraries available in unit code** at the end of this prompt. Import the named npm packages and `node:*` modules instead of reimplementing validation, query strings, cookies, HTTP errors, string shaping, multipart, HTML safety, or crypto.
 - **Automated code rules:** Strictly follow every rule listed in **§ Automated Code Rules** at the end of this prompt. These rules are enforced by an automated linter after every `create_unit`, `modify_unit`, or `remove_unit` call; violations come back as tool errors you must fix and re-call the tool before you can treat that work as done.
 - **Tool errors mean the operation did not land:** Any error from `create_unit`, `modify_unit`, or `remove_unit` means the platform rejected or blocked that action—nothing from that call counts as created, modified, or deleted. The matching directive work is **not** done until a **succeeding** call applies it. Do not narrate or summarize a failed call as if it succeeded.
 - **Code language:** All implementation you put in the `code` field of create unit and modify unit must be **TypeScript** (Node.js environment). Do not use plain JavaScript as it throws compiler errors.
@@ -161,8 +163,12 @@ Your final action is always finish implementation with **`mutated_unit_ids`** (a
 In **`detailed_report`**, do not include trial-and-error narratives, dead ends, or step-by-step exploration—only the consolidated outcome and what matters for the project going forward."#;
 
 pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::new(|| {
+    let core = format!(
+        "{SYSTEM_PROMPT_CORE}\n\n{}",
+        runtime_dependencies::RUNTIME_LIBRARIES_IMPLEMENTATION_DIRECTIVE,
+    );
     let combined = format!(
-        "{SYSTEM_PROMPT_CORE}\n\n\
+        "{core}\n\n\
         ## Unit type reference (detailed)\n\n{}\n\
         ## Unit communication reference\n\nHow each unit type communicates with the outside world and with other units.\n\n{}\n\
         ## Unit code examples\n\nFull working examples for each unit type.\n\n{}\n\
@@ -173,6 +179,7 @@ pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::n
         `import {{ sdk }} from '@sdk'` (or any named export below). Do not invent SDK \
         methods not listed here.\n\n\
         ```typescript\n{}\n```\n\n\
+        {}\n\n\
         ## Automated Code Rules\n\n\
          The following rules are enforced by an automated linter after every `create_unit` or \
          `modify_unit` or `remove_unit` call. Follow them precisely when writing unit code.\n\n\
@@ -182,6 +189,7 @@ pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::n
         units_definitions::all_code_examples(),
         units_definitions::all_metadata(),
         include_str!("../../../tsgo/@sdk.d.ts"),
+        runtime_dependencies::allowed_runtime_imports_prompt_section(),
         rule_checker::rules_prompt(),
     );
     Box::leak(combined.into_boxed_str())

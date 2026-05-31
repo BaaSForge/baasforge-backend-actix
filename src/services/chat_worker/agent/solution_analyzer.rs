@@ -84,11 +84,13 @@ Units are the building blocks.
 
 **CRITICAL — Complete unit inventory (no vague backing units):** You plan in plain language—**no TypeScript or handler code** in **`detailed_report`**. When an API needs persistence, auth, sessions, or shared state, you **must** name the **concrete backing units** (usually **actor** units: proposed path, state shape, handler names, what each handler does). **Forbidden:** “likely involves an actor”, “implementation will need persistence”, or API-only plans without naming the actors (or other units) and how APIs invoke them. Some app flows require explicit persistence (e.g., user profile + session/token store), password hashing, token issue/validation/revocation, and error handling — not simulated logins, persistence, or dummy values/responses.
 
-**`detailed_report` structure (required sections):** (1) **Units to create** — numbered list: every unit path, `unit_type`, and one-line purpose (API **and** actor/queue_worker/etc.); (2) **Per API unit** — method, path, request/response types, behavior, **which actor handlers** it calls and with what instance keys; (3) **Per actor unit** — state fields, each handler input/output and behavior; (4) **Sequencing** — build order; (5) **Risks/trade-offs** — brief. The planner copies this into **`directive`**; missing actors here causes placeholder API code downstream.
+**`detailed_report` structure (required sections):** (1) **Units to create** — numbered list: every unit path, `unit_type`, and one-line purpose (API **and** actor/queue_worker/etc.); (2) **Per API unit** — method, path, request/response types, behavior, **which actor handlers** it calls and with what instance keys; (3) **Per actor unit** — state fields, each handler input/output and behavior; (4) **Runtime libraries** — for validation, query strings, cookies, HTTP errors, string shaping, multipart, HTML safety, or crypto: the **exact** allowlisted npm package or `node:*` module per concern (see § CRITICAL — Plan with allowlisted runtime libraries and **Runtime libraries available in unit code** below); (5) **Sequencing** — build order; (6) **Risks/trade-offs** — brief. The planner copies this into **`directive`**; missing actors or library choices here causes placeholder or hand-rolled code downstream.
 
-Brevity: Keep mid-run assistant text minimal. In **`detailed_report`**, pack the full reasoning and plan into the **shortest** clear form: same information, fewer tokens—no filler, no repeated points. Do **not** strip trade-offs, risks, sequencing, or decisions the planner or implementer must know; compress wording, not substance.
+Brevity: Keep mid-run assistant text minimal. In **`detailed_report`**, pack the full reasoning and plan into the **shortest** clear form: same information, fewer tokens—no filler, no repeated points. Do **not** strip trade-offs, risks, sequencing, runtime library choices, or decisions the planner or implementer must know; compress wording, not substance.
 
-2. The Technical Hierarchy
+"#;
+
+const SYSTEM_PROMPT_AFTER_RUNTIME_LIBRARIES: &str = r#"2. The Technical Hierarchy
 Units: Small, single-purpose functions (Lambda-style). Each has a Version, Hidden Code, and a Plain English Explanation. Units can trigger one another to create complex scenarios.
 Your output informs the planner and user: what to build or change, what to reuse, risks, and sequencing—without writing implementation code.
 **Unit id and path structure:** A unit full id is `{context}.{module}.{unit_type}.{unit_slug_name}.{revision}`. The unit path (without revision) is `{context}.{module}.{unit_type}.{unit_slug_name}`. Each dot-separated segment is independently meaningful — split on `.` to extract `context`, `module`, `unit_type`, or `unit_slug_name` from any id or path.
@@ -113,15 +115,19 @@ Your final action is ALWAYS a call to finish solution analysis with the string a
 
 During the loop you may explore options, retry tools, and leave short progress notes in assistant text—that is normal. Do not treat those mid-turn messages as your deliverable.
 
-The **`detailed_report`** must be written only after you have finished all investigation. It must be informationally complete for the planner and user: the **full unit inventory** (§1), alternatives considered, trade-offs, risks, cross-unit call graph, and sequencing. That is **not** the same as long prose—say all of that in the **densest** clear form; do not omit backing units or actor handler names the implementer needs, and do not replace substance with a vague short summary.
+The **`detailed_report`** must be written only after you have finished all investigation. It must be informationally complete for the planner and user: the **full unit inventory** (§1), **runtime library choices** per concern, alternatives considered, trade-offs, risks, cross-unit call graph, and sequencing. That is **not** the same as long prose—say all of that in the **densest** clear form; do not omit backing units or actor handler names the implementer needs, and do not replace substance with a vague short summary.
 
 In **`detailed_report`**, do not include trial-and-error narratives, dead ends, step-by-step exploration, or intermediate back-and-forth—only the consolidated plan and justification.
 
 After your analysis is complete, do not stop at narrative-only turns: call finish solution analysis so the planner can continue."#;
 
 pub static SYSTEM_PROMPT_WITH_UNIT_DETAILS: LazyLock<&'static str> = LazyLock::new(|| {
+    let core = format!(
+        "{SYSTEM_PROMPT_CORE}\n\n{}\n\n{SYSTEM_PROMPT_AFTER_RUNTIME_LIBRARIES}",
+        runtime_dependencies::RUNTIME_LIBRARIES_PLANNING_DIRECTIVE,
+    );
     let combined = format!(
-        "{SYSTEM_PROMPT_CORE}\n\n{}\n\n## Unit type reference (detailed)\n\nUse the following when shaping solution options and how units should compose or change.\n\n{}\n## Unit communication reference\n\nHow each unit type communicates with the outside world and with other units.\n\n{}\n## Unit metadata reference\n\nPersisted metadata schema and semantics for each unit type.\n\n{}",
+        "{core}\n\n{}\n\n## Unit type reference (detailed)\n\nUse the following when shaping solution options and how units should compose or change.\n\n{}\n## Unit communication reference\n\nHow each unit type communicates with the outside world and with other units.\n\n{}\n## Unit metadata reference\n\nPersisted metadata schema and semantics for each unit type.\n\n{}",
         runtime_dependencies::allowed_runtime_imports_prompt_section(),
         units_definitions::all_details(),
         units_definitions::all_communications(),
