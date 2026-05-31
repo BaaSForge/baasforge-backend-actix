@@ -4,7 +4,7 @@
   "compilerOptionsLib": [
     "lib.es2023.d.ts"
   ],
-  "fileCount": 328,
+  "fileCount": 339,
   "packages": {
     "@mjackson/headers": {
       "fileCount": 13,
@@ -31,6 +31,13 @@
         "node_modules/@mjackson/multipart-parser/dist/lib/multipart.d.ts",
         "node_modules/@mjackson/multipart-parser/dist/multipart-parser.d.ts",
         "node_modules/@mjackson/multipart-parser/package.json"
+      ]
+    },
+    "@types/escape-html": {
+      "fileCount": 2,
+      "files": [
+        "node_modules/@types/escape-html/index.d.ts",
+        "node_modules/@types/escape-html/package.json"
       ]
     },
     "@types/http-errors": {
@@ -118,6 +125,13 @@
         "node_modules/@types/node/web-globals/storage.d.ts",
         "node_modules/@types/node/worker_threads.d.ts",
         "node_modules/@types/node/zlib.d.ts"
+      ]
+    },
+    "@types/pluralize": {
+      "fileCount": 2,
+      "files": [
+        "node_modules/@types/pluralize/index.d.ts",
+        "node_modules/@types/pluralize/package.json"
       ]
     },
     "@types/qs": {
@@ -243,11 +257,26 @@
         "node_modules/@types/validator/package.json"
       ]
     },
+    "change-case": {
+      "fileCount": 3,
+      "files": [
+        "node_modules/change-case/dist/index.d.ts",
+        "node_modules/change-case/dist/keys.d.ts",
+        "node_modules/change-case/package.json"
+      ]
+    },
     "cookie": {
       "fileCount": 2,
       "files": [
         "node_modules/cookie/dist/index.d.ts",
         "node_modules/cookie/package.json"
+      ]
+    },
+    "slugify": {
+      "fileCount": 2,
+      "files": [
+        "node_modules/slugify/package.json",
+        "node_modules/slugify/slugify.d.ts"
       ]
     },
     "undici-types": {
@@ -291,6 +320,13 @@
         "node_modules/undici-types/retry-handler.d.ts",
         "node_modules/undici-types/util.d.ts",
         "node_modules/undici-types/websocket.d.ts"
+      ]
+    },
+    "xss": {
+      "fileCount": 2,
+      "files": [
+        "node_modules/xss/package.json",
+        "node_modules/xss/typings/xss.d.ts"
       ]
     },
     "zod": {
@@ -408,6 +444,8 @@
     "node_modules/@mjackson/multipart-parser/dist/lib/multipart.d.ts",
     "node_modules/@mjackson/multipart-parser/dist/multipart-parser.d.ts",
     "node_modules/@mjackson/multipart-parser/package.json",
+    "node_modules/@types/escape-html/index.d.ts",
+    "node_modules/@types/escape-html/package.json",
     "node_modules/@types/http-errors/index.d.ts",
     "node_modules/@types/http-errors/package.json",
     "node_modules/@types/mime-types/index.d.ts",
@@ -480,6 +518,8 @@
     "node_modules/@types/node/web-globals/storage.d.ts",
     "node_modules/@types/node/worker_threads.d.ts",
     "node_modules/@types/node/zlib.d.ts",
+    "node_modules/@types/pluralize/index.d.ts",
+    "node_modules/@types/pluralize/package.json",
     "node_modules/@types/qs/index.d.ts",
     "node_modules/@types/qs/package.json",
     "node_modules/@types/statuses/index.d.ts",
@@ -588,8 +628,13 @@
     "node_modules/@types/validator/lib/unescape.d.ts",
     "node_modules/@types/validator/lib/whitelist.d.ts",
     "node_modules/@types/validator/package.json",
+    "node_modules/change-case/dist/index.d.ts",
+    "node_modules/change-case/dist/keys.d.ts",
+    "node_modules/change-case/package.json",
     "node_modules/cookie/dist/index.d.ts",
     "node_modules/cookie/package.json",
+    "node_modules/slugify/package.json",
+    "node_modules/slugify/slugify.d.ts",
     "node_modules/undici-types/agent.d.ts",
     "node_modules/undici-types/api.d.ts",
     "node_modules/undici-types/balanced-pool.d.ts",
@@ -628,6 +673,8 @@
     "node_modules/undici-types/retry-handler.d.ts",
     "node_modules/undici-types/util.d.ts",
     "node_modules/undici-types/websocket.d.ts",
+    "node_modules/xss/package.json",
+    "node_modules/xss/typings/xss.d.ts",
     "node_modules/zod/index.d.cts",
     "node_modules/zod/mini/index.d.cts",
     "node_modules/zod/package.json",

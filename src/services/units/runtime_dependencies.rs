@@ -45,14 +45,19 @@ macro_rules! allowed_npm_specs {
 }
 
 allowed_npm_specs!(
-    ("qs", "^6.14.0"),
-    ("zod", "^4.4.3"),
-    ("validator", "^13.15.35"),
-    ("cookie", "^1.1.1"),
-    ("http-errors", "^2.0.1"),
-    ("statuses", "^2.0.2"),
-    ("mime-types", "^3.0.2"),
     ("@mjackson/multipart-parser", "^0.10.1"),
+    ("change-case", "^5.4.4"),
+    ("cookie", "^1.1.1"),
+    ("escape-html", "^1.0.3"),
+    ("http-errors", "^2.0.1"),
+    ("mime-types", "^3.0.2"),
+    ("pluralize", "^8.0.0"),
+    ("qs", "^6.14.0"),
+    ("slugify", "^1.6.9"),
+    ("statuses", "^2.0.2"),
+    ("validator", "^13.15.35"),
+    ("xss", "^1.0.15"),
+    ("zod", "^4.4.3"),
 );
 
 pub fn is_allowed_node_import_source(source: &str) -> bool {
@@ -134,7 +139,8 @@ pub fn allowed_runtime_imports_prompt_section() -> String {
          the allowlisted npm packages and `node:*` modules below (enforced by the linter).\n\n\
          When you plan behavior, **prefer** these libraries over describing hand-rolled equivalents—e.g. \
          `qs` for query strings, `cookie` for cookies, `http-errors` for typed HTTP errors, \
-         `statuses` / `mime-types` for HTTP helpers, \
+         `statuses` / `mime-types` for HTTP helpers, `change-case` / `slugify` / `pluralize` for \
+         string shaping, `escape-html` / `xss` for safe HTML output, \
          `@mjackson/multipart-parser` for multipart bodies, `node:crypto` for hashing and tokens, \
          `node:url` for URLs. In **`detailed_report`**, name which library fits each need so the \
          implementer does not reinvent them.\n\n\
