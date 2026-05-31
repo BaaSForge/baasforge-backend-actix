@@ -4,7 +4,7 @@
   "compilerOptionsLib": [
     "lib.es2023.d.ts"
   ],
-  "fileCount": 129,
+  "fileCount": 131,
   "packages": {
     "@mjackson/headers": {
       "fileCount": 13,
@@ -31,6 +31,13 @@
         "node_modules/@mjackson/multipart-parser/dist/lib/multipart.d.ts",
         "node_modules/@mjackson/multipart-parser/dist/multipart-parser.d.ts",
         "node_modules/@mjackson/multipart-parser/package.json"
+      ]
+    },
+    "@types/mime-types": {
+      "fileCount": 2,
+      "files": [
+        "node_modules/@types/mime-types/index.d.ts",
+        "node_modules/@types/mime-types/package.json"
       ]
     },
     "@types/node": {
@@ -189,6 +196,8 @@
     "node_modules/@mjackson/multipart-parser/dist/lib/multipart.d.ts",
     "node_modules/@mjackson/multipart-parser/dist/multipart-parser.d.ts",
     "node_modules/@mjackson/multipart-parser/package.json",
+    "node_modules/@types/mime-types/index.d.ts",
+    "node_modules/@types/mime-types/package.json",
     "node_modules/@types/node/assert.d.ts",
     "node_modules/@types/node/assert/strict.d.ts",
     "node_modules/@types/node/async_hooks.d.ts",
