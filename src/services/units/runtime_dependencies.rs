@@ -46,6 +46,8 @@ macro_rules! allowed_npm_specs {
 
 allowed_npm_specs!(
     ("qs", "^6.14.0"),
+    ("zod", "^4.4.3"),
+    ("validator", "^13.15.35"),
     ("cookie", "^1.1.1"),
     ("http-errors", "^2.0.1"),
     ("statuses", "^2.0.2"),
