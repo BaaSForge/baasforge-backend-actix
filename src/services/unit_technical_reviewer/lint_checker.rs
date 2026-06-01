@@ -28,6 +28,13 @@ mod imp {
 
     const TSGOLINT_RULE_NO_UNSAFE_TYPE_ASSERTION: &str = "no-unsafe-type-assertion";
 
+    /// SDK branded runtime IDs (`@sdk.d.ts`); `as T` from `string` is allowed for these only.
+    const RELAXED_SDK_BRANDED_ID_TYPES: &[&str] = &[
+        "ActorInstanceId",
+        "WorkflowInstanceId",
+        "QueueWorkerRunId",
+    ];
+
     pub async fn run_type_lint_check(
         pool: &DbPool,
         project_id: Uuid,
@@ -337,6 +344,49 @@ mod imp {
         ctx.sources_by_rel.get(display_path).map(String::as_str)
     }
 
+    fn slice_asserts_to_branded_id(slice: &str, type_name: &str) -> bool {
+        let needle = format!("as {type_name}");
+        let Some(idx) = slice.find(&needle) else {
+            return false;
+        };
+        let after = idx + needle.len();
+        match slice.as_bytes().get(after) {
+            None => true,
+            Some(b) => !b.is_ascii_alphanumeric() && *b != b'_',
+        }
+    }
+
+    fn is_relaxed_sdk_branded_id_type_assertion(
+        ctx: &LintFormatContext,
+        d: &TsgolintDiagnosticPayload,
+    ) -> bool {
+        for type_name in RELAXED_SDK_BRANDED_ID_TYPES {
+            if d.message.description.contains(&format!("type '{type_name}'")) {
+                return true;
+            }
+        }
+
+        let display_path = d
+            .file_path
+            .as_deref()
+            .map(|p| display_path(p, ctx))
+            .unwrap_or_else(|| "main.ts".to_string());
+        let Some(source) = source_for_display_path(&display_path, ctx) else {
+            return false;
+        };
+        let Some(range) = d.range.as_ref() else {
+            return false;
+        };
+        let pos = range.pos as usize;
+        let end = range.end as usize;
+        let Some(slice) = source.get(pos..end) else {
+            return false;
+        };
+        RELAXED_SDK_BRANDED_ID_TYPES
+            .iter()
+            .any(|type_name| slice_asserts_to_branded_id(slice, type_name))
+    }
+
     fn excerpt_at_line(
         source: &str,
         line_starts: &[usize],
@@ -431,7 +481,12 @@ mod imp {
                         let is_target_rule = matches!(d.kind, TsgolintDiagnosticKind::Rule)
                             && d.rule.as_deref() == Some(TSGOLINT_RULE_NO_UNSAFE_TYPE_ASSERTION);
                         let is_tsconfig = matches!(d.kind, TsgolintDiagnosticKind::Tsconfig);
-                        if is_target_rule || is_tsconfig {
+                        if is_target_rule {
+                            if is_relaxed_sdk_branded_id_type_assertion(ctx, &d) {
+                                continue;
+                            }
+                            violations.push(format_tsgolint_violation(&d, ctx));
+                        } else if is_tsconfig {
                             violations.push(format_tsgolint_violation(&d, ctx));
                         }
                     }
@@ -590,9 +645,9 @@ mod imp {
             let source = include_str!("lint_signup_api.ts");
             let normalized = normalize_ts_source_for_lint(source);
             let pos = normalized.find("email as ActorInstanceId").unwrap();
-            assert_eq!(pos, 1142);
+            assert_eq!(pos, 1045);
             let (line, col) = line_column_from_starts(&build_line_starts(&normalized), pos);
-            assert_eq!((line, col), (37, 38));
+            assert_eq!((line, col), (36, 21));
         }
 
         #[test]
@@ -695,6 +750,46 @@ mod imp {
             assert_eq!(violations.len(), 1);
             assert!(violations[0].contains("no-unsafe-type-assertion in main.ts"));
             assert!(violations[0].contains("JSON.parse"));
+        }
+
+        #[test]
+        fn parse_tsgolint_stdout_skips_relaxed_sdk_branded_id_assertions() {
+            let source = "const actorId = email as ActorInstanceId;\n";
+            let ctx = ctx_for_source(source);
+            let pos = source.find("email as ActorInstanceId").unwrap() as u32;
+            let end = pos + "email as ActorInstanceId".len() as u32;
+            let diag_json = serde_json::json!({
+                "kind": 0,
+                "rule": TSGOLINT_RULE_NO_UNSAFE_TYPE_ASSERTION,
+                "message": {
+                    "description": "Unsafe type assertion: type 'ActorInstanceId' is more narrow than the original type."
+                },
+                "file_path": "/tmp/lint-project/main.ts",
+                "range": { "pos": pos, "end": end }
+            });
+            let data = encode_tsgolint_frame(1, &diag_json.to_string());
+            let mut violations = Vec::new();
+            parse_tsgolint_stdout(&mut Cursor::new(data), &ctx, &mut violations).unwrap();
+            assert!(violations.is_empty());
+        }
+
+        #[test]
+        fn parse_tsgolint_stdout_still_reports_other_unsafe_assertions() {
+            let source = "const x = (body as RequestBody);\n";
+            let ctx = ctx_for_source(source);
+            let pos = source.find("body as RequestBody").unwrap() as u32;
+            let end = pos + "body as RequestBody".len() as u32;
+            let diag_json = serde_json::json!({
+                "kind": 0,
+                "rule": TSGOLINT_RULE_NO_UNSAFE_TYPE_ASSERTION,
+                "message": { "description": "unsafe assertion" },
+                "file_path": "/tmp/lint-project/main.ts",
+                "range": { "pos": pos, "end": end }
+            });
+            let data = encode_tsgolint_frame(1, &diag_json.to_string());
+            let mut violations = Vec::new();
+            parse_tsgolint_stdout(&mut Cursor::new(data), &ctx, &mut violations).unwrap();
+            assert_eq!(violations.len(), 1);
         }
 
         #[test]

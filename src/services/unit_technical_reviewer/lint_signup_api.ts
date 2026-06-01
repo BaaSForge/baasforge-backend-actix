@@ -33,8 +33,7 @@ export async function handleRequest(req: IncomingMessage, res: ServerResponse): 
   const { email, password } = result.data;
 
   try {
-    // Attempting a safer cast by assigning to a branded type variable directly
-    const actorId: ActorInstanceId = email as ActorInstanceId;
+    const actorId = email as ActorInstanceId;
     sdk.callActorAndWaitForResultSync<{ email: string; password: string }, { success: boolean }>({
       unitPath: "auth.user.actor.account",
       actorId,
