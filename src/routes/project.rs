@@ -1300,6 +1300,9 @@ pub struct ListReleaseUnitsAllBody {
     pub units_paths: Vec<String>,
     #[serde(default)]
     pub units_ids: Vec<String>,
+    /// When true, rows with `is_deleted` are omitted from results and `total`.
+    #[serde(default)]
+    pub exclude_deleted: bool,
 }
 
 /// Filters, sorts, and optionally paginates in-memory.
@@ -1310,6 +1313,7 @@ fn filter_sort_paginate_release_units(
     context_module_pairs: &[ContextModulePair],
     path_filter: Option<&HashSet<String>>,
     id_filter: Option<&HashSet<String>>,
+    exclude_deleted: bool,
     skip_pagination: bool,
     page: u32,
     page_size: u32,
@@ -1352,6 +1356,9 @@ fn filter_sort_paginate_release_units(
     };
 
     units.retain(|u| {
+        if exclude_deleted && u.is_deleted {
+            return false;
+        }
         if let Some(ref ts) = type_set
             && !ts.contains(&u.unit_type)
         {
@@ -1452,6 +1459,7 @@ pub async fn handle_list_project_release_units_all(
     let unit_types = body.unit_types.clone();
     let context_slugs = body.context_slugs.clone();
     let context_module_pairs = body.context_module_pairs.clone();
+    let exclude_deleted = body.exclude_deleted;
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
         let release: Option<ProjectReleaseResponse> = project_releases::table
@@ -1497,6 +1505,7 @@ pub async fn handle_list_project_release_units_all(
             &context_module_pairs,
             path_filter.as_ref(),
             id_filter.as_ref(),
+            exclude_deleted,
             skip_pagination,
             page_req,
             page_size_req,
