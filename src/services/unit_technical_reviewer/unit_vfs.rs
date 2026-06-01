@@ -9,8 +9,30 @@ pub const VIRTUAL_ROOT: &str = "/unit";
 pub const VIRTUAL_NODE_MODULES: &str = "/unit/node_modules";
 pub const VIRTUAL_UNITS_MODULES: &str = "/unit/node_modules/@units";
 
+pub fn build_unit_source_map(code: &str, units: &[ProjectUnitResponse]) -> HashMap<String, String> {
+    let mut sources = HashMap::new();
+    sources.insert(format!("{VIRTUAL_ROOT}/main.ts"), code.to_string());
+    for unit in units {
+        if unit.is_deleted {
+            continue;
+        }
+        if let Some(ref unit_code) = unit.code {
+            let unit_file = format!(
+                "{}/{}.{}.{}.{}.ts",
+                VIRTUAL_UNITS_MODULES,
+                unit.context_slug,
+                unit.module_slug,
+                unit.unit_type.as_slug(),
+                unit.unit_name_slug,
+            );
+            sources.insert(unit_file, unit_code.clone());
+        }
+    }
+    sources
+}
+
 pub fn build_vfs(code: &str, units: &[ProjectUnitResponse]) -> HashMap<String, String> {
-    let mut vfs = HashMap::new();
+    let mut vfs = build_unit_source_map(code, units);
 
     let tsconfig = json!({
         "compilerOptions": {
@@ -58,7 +80,6 @@ pub fn build_vfs(code: &str, units: &[ProjectUnitResponse]) -> HashMap<String, S
         format!("{VIRTUAL_ROOT}/tsconfig.json"),
         tsconfig.to_string(),
     );
-    vfs.insert(format!("{VIRTUAL_ROOT}/main.ts",), code.to_string());
     vfs.insert(
         format!("{VIRTUAL_ROOT}/package.json"),
         json!({
@@ -67,23 +88,6 @@ pub fn build_vfs(code: &str, units: &[ProjectUnitResponse]) -> HashMap<String, S
         })
         .to_string(),
     );
-
-    for unit in units {
-        if unit.is_deleted {
-            continue;
-        }
-        if let Some(ref unit_code) = unit.code {
-            let unit_file = format!(
-                "{}/{}.{}.{}.{}.ts",
-                VIRTUAL_UNITS_MODULES,
-                unit.context_slug,
-                unit.module_slug,
-                unit.unit_type.as_slug(),
-                unit.unit_name_slug,
-            );
-            vfs.insert(unit_file, unit_code.clone());
-        }
-    }
 
     for (rel_path, content) in node_modules_files::NODE_MODULES_FILE_DATA {
         let full_path = format!("{VIRTUAL_NODE_MODULES}/{rel_path}");

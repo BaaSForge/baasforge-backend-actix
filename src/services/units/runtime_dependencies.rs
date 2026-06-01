@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 pub const ALLOWED_NODE_IMPORTS: &[(&str, &[&str])] = &[
     ("node:http", &["IncomingMessage", "ServerResponse"]),
     ("node:querystring", &["parse"]),
-    ("node:stream/consumers", &["text"]),
+    ("node:stream/consumers", &["text", "buffer"]),
     ("node:url", &["URL"]),
     (
         "node:crypto",
@@ -233,7 +233,7 @@ pub fn allowed_runtime_imports_prompt_section() -> String {
         build_npm_packages_guide(),
         "Prefer `node:crypto` (hashing, HMAC, tokens, `randomUUID`, `timingSafeEqual`), \
          `node:url` (`URL`), `node:buffer` (`Buffer`), `node:util` (`TextEncoder`/`TextDecoder`), \
-         `node:querystring` (`parse`), `node:http` types for handlers, `node:stream/consumers` (`text`) \
+         `node:querystring` (`parse`), `node:http` types for handlers, `node:stream/consumers` (`text`, `buffer`) \
          for bodies, `node:timers/promises` (`setTimeout`)—not custom crypto, URL, or buffer code.",
         *NODE_IMPORTS_LLM_HINT,
         *NPM_PACKAGES_LLM_HINT,
