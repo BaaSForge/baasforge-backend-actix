@@ -651,44 +651,13 @@ pub fn load_chat_session_draft_units_from_kept_tool_messages(
             .load(conn)?
     };
 
-    let mut tips: HashMap<LogicalUnitKey, String> = HashMap::new();
-
-    for (type_, payload) in tool_rows {
-        let Ok(Some(parsed)) = ChatMessagePayload::from_value(&type_, payload) else {
-            continue;
-        };
-        match parsed {
-            ChatMessagePayload::ToolCreateUnit(p) => {
-                if p.error.is_none()
-                    && let Some(u) = p.created_unit
-                {
-                    tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
-                }
-            }
-            ChatMessagePayload::ToolModifyUnit(p) => {
-                if p.error.is_none()
-                    && let Some(u) = p.revised_unit
-                {
-                    tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
-                }
-            }
-            ChatMessagePayload::ToolRemoveUnit(p) => {
-                if p.error.is_none()
-                    && let Some(u) = p.removed_unit
-                {
-                    tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
-                }
-            }
-            _ => {}
-        }
-    }
-
+    let filtered: Vec<(ChatMessageType, Option<Value>)> = tool_rows;
+    let tips = replay_draft_unit_tips_from_tool_rows(&filtered);
     if tips.is_empty() {
         return Ok(vec![]);
     }
 
     let ids: Vec<String> = tips.into_values().collect();
-
     let rows: Vec<ProjectUnitRow> = project_units::table
         .filter(project_units::project_id.eq(project_id))
         .filter(project_units::chat_session_id.eq(session_id))
@@ -724,51 +693,199 @@ pub fn load_chat_session_draft_units_from_tools_before_message(
     )
 }
 
-/// Deletes draft unit rows from the truncated tail (including incomplete implement with no controller).
-/// `kept_tools` must match which messages remain after truncate.
+fn replay_draft_unit_tips_from_tool_rows(
+    tool_rows: &[(ChatMessageType, Option<Value>)],
+) -> HashMap<LogicalUnitKey, String> {
+    let mut tips: HashMap<LogicalUnitKey, String> = HashMap::new();
+    for (type_, payload) in tool_rows {
+        let Ok(Some(parsed)) = ChatMessagePayload::from_value(type_, payload.clone()) else {
+            continue;
+        };
+        match parsed {
+            ChatMessagePayload::ToolCreateUnit(p) => {
+                if p.error.is_none()
+                    && let Some(u) = p.created_unit
+                {
+                    tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
+                }
+            }
+            ChatMessagePayload::ToolModifyUnit(p) => {
+                if p.error.is_none()
+                    && let Some(u) = p.revised_unit
+                {
+                    tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
+                }
+            }
+            ChatMessagePayload::ToolRemoveUnit(p) => {
+                if p.error.is_none()
+                    && let Some(u) = p.removed_unit
+                {
+                    tips.insert(logical_unit_key_from_row(&u.row), u.id.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    tips
+}
+
+/// Replays completed unit-tool messages that are **not** in `excluded_message_ids`, then loads rows.
+pub fn load_chat_session_draft_units_from_surviving_tool_messages(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    excluded_message_ids: &HashSet<Uuid>,
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    let tool_rows: Vec<(Uuid, ChatMessageType, Option<Value>)> = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(
+            chat_messages::type_
+                .eq(ChatMessageType::ToolCreateUnit)
+                .or(chat_messages::type_.eq(ChatMessageType::ToolModifyUnit))
+                .or(chat_messages::type_.eq(ChatMessageType::ToolRemoveUnit)),
+        )
+        .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
+        .order_by((chat_messages::created_at.asc(), chat_messages::id.asc()))
+        .select((
+            chat_messages::id,
+            chat_messages::type_,
+            chat_messages::payload,
+        ))
+        .load(conn)?;
+
+    let filtered: Vec<(ChatMessageType, Option<Value>)> = tool_rows
+        .into_iter()
+        .filter(|(id, _, _)| !excluded_message_ids.contains(id))
+        .map(|(_, type_, payload)| (type_, payload))
+        .collect();
+
+    let tips = replay_draft_unit_tips_from_tool_rows(&filtered);
+    if tips.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let ids: Vec<String> = tips.into_values().collect();
+    let rows: Vec<ProjectUnitRow> = project_units::table
+        .filter(project_units::project_id.eq(project_id))
+        .filter(project_units::chat_session_id.eq(session_id))
+        .filter(project_units::id.eq_any(ids))
+        .select(ProjectUnitRow::as_select())
+        .load(conn)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let rev = row.revision;
+            ProjectUnitResponse::from_row(row, rev)
+        })
+        .collect())
+}
+
+/// Unit-tool rows whose `invoking_message_id` chain hits a truncated message (nested implement work).
+pub fn extend_truncated_ids_with_unit_tools_in_deleted_invoking_chains(
+    conn: &mut PooledConn,
+    session_id: Uuid,
+    truncated_message_ids: &mut HashSet<Uuid>,
+) -> Result<(), diesel::result::Error> {
+    let tool_rows: Vec<(Uuid, Option<Uuid>)> = chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(
+            chat_messages::type_
+                .eq(ChatMessageType::ToolCreateUnit)
+                .or(chat_messages::type_.eq(ChatMessageType::ToolModifyUnit))
+                .or(chat_messages::type_.eq(ChatMessageType::ToolRemoveUnit)),
+        )
+        .select((chat_messages::id, chat_messages::invoking_message_id))
+        .load(conn)?;
+
+    for (tool_id, mut invoker) in tool_rows {
+        if truncated_message_ids.contains(&tool_id) {
+            continue;
+        }
+        let mut seen = HashSet::new();
+        while let Some(parent) = invoker {
+            if !seen.insert(parent) {
+                break;
+            }
+            if truncated_message_ids.contains(&parent) {
+                truncated_message_ids.insert(tool_id);
+                break;
+            }
+            invoker = chat_messages::table
+                .filter(chat_messages::id.eq(parent))
+                .filter(chat_messages::chat_session_id.eq(session_id))
+                .select(chat_messages::invoking_message_id)
+                .first::<Option<Uuid>>(conn)
+                .optional()?
+                .flatten();
+        }
+    }
+    Ok(())
+}
+
+/// Loads every message in `messages` plus all descendants linked via `invoking_message_id`.
+pub fn expand_chat_messages_with_invoking_descendants(
+    conn: &mut PooledConn,
+    session_id: Uuid,
+    messages: &[ChatMessageRow],
+) -> Result<Vec<ChatMessageRow>, diesel::result::Error> {
+    let mut ids: HashSet<Uuid> = messages.iter().map(|r| r.id).collect();
+    let mut frontier: Vec<Uuid> = ids.iter().copied().collect();
+    while !frontier.is_empty() {
+        let children: Vec<Uuid> = chat_messages::table
+            .filter(chat_messages::chat_session_id.eq(session_id))
+            .filter(chat_messages::invoking_message_id.eq_any(&frontier))
+            .select(chat_messages::id)
+            .load(conn)?;
+        frontier.clear();
+        for id in children {
+            if ids.insert(id) {
+                frontier.push(id);
+            }
+        }
+    }
+    chat_messages::table
+        .filter(chat_messages::chat_session_id.eq(session_id))
+        .filter(chat_messages::id.eq_any(ids.into_iter().collect::<Vec<_>>()))
+        .select(ChatMessageRow::as_select())
+        .load(conn)
+}
+
+/// Deletes every `project_units` row for this session except those retained by replaying completed
+/// unit tools whose message ids are **not** in `truncated_message_ids` (nested implement rows must
+/// be included in that set — see [`expand_chat_messages_with_invoking_descendants`]).
 pub fn delete_session_draft_units_removed_by_truncate(
     conn: &mut PooledConn,
     project_id: Uuid,
     session_id: Uuid,
-    kept_tools: TruncateKeptToolMessagesBound,
+    truncated_message_ids: &HashSet<Uuid>,
 ) -> Result<(), diesel::result::Error> {
-    use crate::services::releases::logical_unit_key;
+    let keep_units = load_chat_session_draft_units_from_surviving_tool_messages(
+        conn,
+        project_id,
+        session_id,
+        truncated_message_ids,
+    )?;
+    let keep_ids: HashSet<String> = keep_units.iter().map(|u| u.id.clone()).collect();
 
-    let keep_units =
-        load_chat_session_draft_units_from_kept_tool_messages(conn, project_id, session_id, kept_tools)?;
-    let current_tips = load_chat_session_unit_tips_for_merge(conn, project_id, session_id)?;
+    let session_rows: Vec<ProjectUnitRow> = project_units::table
+        .filter(project_units::project_id.eq(project_id))
+        .filter(project_units::chat_session_id.eq(session_id))
+        .select(ProjectUnitRow::as_select())
+        .load(conn)?;
 
-    let keep_by_key: HashMap<LogicalUnitKey, String> = keep_units
-        .iter()
-        .map(|u| (logical_unit_key(u), u.id.clone()))
-        .collect();
-
-    for tip in &current_tips {
-        let key = logical_unit_key(tip);
-        let wipe = match keep_by_key.get(&key) {
-            None => true,
-            Some(keep_id) if keep_id != &tip.id => true,
-            _ => false,
-        };
-        if !wipe {
+    for row in session_rows {
+        if keep_ids.contains(&row.id) {
             continue;
         }
-
-        let (ctx, mod_slug, ut, name) = &key;
-        let mut delete_q = project_units::table
-            .filter(project_units::project_id.eq(project_id))
-            .filter(project_units::chat_session_id.eq(session_id))
-            .filter(project_units::context_slug.eq(ctx))
-            .filter(project_units::module_slug.eq(mod_slug))
-            .filter(project_units::unit_type.eq(ut))
-            .filter(project_units::unit_name_slug.eq(name))
-            .into_boxed();
-
-        if let Some(keep_id) = keep_by_key.get(&key) {
-            delete_q = delete_q.filter(project_units::id.ne(keep_id));
-        }
-
-        delete_q.execute(conn)?;
+        diesel::delete(
+            project_units::table
+                .filter(project_units::project_id.eq(project_id))
+                .filter(project_units::chat_session_id.eq(session_id))
+                .filter(project_units::id.eq(&row.id))
+                .filter(project_units::revision.eq(row.revision)),
+        )
+        .execute(conn)?;
     }
 
     Ok(())

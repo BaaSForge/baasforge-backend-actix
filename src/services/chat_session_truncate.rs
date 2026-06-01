@@ -8,7 +8,8 @@ use crate::schema::{
     chat_messages, chat_sessions, project_releases, project_runtimes, projects,
 };
 use crate::services::chat_worker::db::{
-    TruncateKeptToolMessagesBound, delete_session_draft_units_removed_by_truncate,
+    delete_session_draft_units_removed_by_truncate, expand_chat_messages_with_invoking_descendants,
+    extend_truncated_ids_with_unit_tools_in_deleted_invoking_chains,
 };
 use crate::services::releases::all_live_production_release_ids;
 use crate::services::runtime_nats::RuntimeNatsPublisher;
@@ -197,6 +198,9 @@ fn truncate_session_from_message_impl(
             .load(conn)?
     };
 
+    let to_delete =
+        expand_chat_messages_with_invoking_descendants(conn, session_id, &to_delete)?;
+
     let mut stage_release_ids: HashSet<Uuid> = HashSet::new();
     let mut prod_release_ids: HashSet<Uuid> = HashSet::new();
 
@@ -219,18 +223,18 @@ fn truncate_session_from_message_impl(
         }
     }
 
-    let kept_tools = if policy.include_anchor {
-        TruncateKeptToolMessagesBound::ToolsBeforeAnchor {
-            anchor_created_at: anchor.created_at,
-            anchor_message_id: anchor.id,
-        }
-    } else {
-        TruncateKeptToolMessagesBound::ToolsThroughAnchor {
-            anchor_created_at: anchor.created_at,
-            anchor_message_id: anchor.id,
-        }
-    };
-    delete_session_draft_units_removed_by_truncate(conn, project_id, session_id, kept_tools)?;
+    let mut truncated_message_ids: HashSet<Uuid> = to_delete.iter().map(|r| r.id).collect();
+    extend_truncated_ids_with_unit_tools_in_deleted_invoking_chains(
+        conn,
+        session_id,
+        &mut truncated_message_ids,
+    )?;
+    delete_session_draft_units_removed_by_truncate(
+        conn,
+        project_id,
+        session_id,
+        &truncated_message_ids,
+    )?;
 
     let mut stage_runtime_nats: Vec<(Uuid, Uuid)> = Vec::new();
 
