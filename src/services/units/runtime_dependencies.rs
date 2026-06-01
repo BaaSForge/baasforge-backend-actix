@@ -9,7 +9,10 @@ use std::sync::LazyLock;
 pub const ALLOWED_NODE_IMPORTS: &[(&str, &[&str])] = &[
     ("node:http", &["IncomingMessage", "ServerResponse"]),
     ("node:querystring", &["parse"]),
-    ("node:stream/consumers", &["text", "buffer"]),
+    (
+        "node:stream/consumers",
+        &["text", "buffer", "json", "arrayBuffer", "blob"],
+    ),
     ("node:url", &["URL"]),
     (
         "node:crypto",
@@ -34,7 +37,7 @@ pub const ALLOWED_NODE_IMPORTS: &[(&str, &[&str])] = &[
     ),
     ("node:buffer", &["Buffer"]),
     ("node:util", &["TextEncoder", "TextDecoder"]),
-    ("node:timers/promises", &["setTimeout"]),
+    ("node:timers/promises", &["setTimeout", "setImmediate"]),
 ];
 
 macro_rules! allowed_npm_specs {
@@ -233,8 +236,8 @@ pub fn allowed_runtime_imports_prompt_section() -> String {
         build_npm_packages_guide(),
         "Prefer `node:crypto` (hashing, HMAC, tokens, `randomUUID`, `timingSafeEqual`), \
          `node:url` (`URL`), `node:buffer` (`Buffer`), `node:util` (`TextEncoder`/`TextDecoder`), \
-         `node:querystring` (`parse`), `node:http` types for handlers, `node:stream/consumers` (`text`, `buffer`) \
-         for bodies, `node:timers/promises` (`setTimeout`)—not custom crypto, URL, or buffer code.",
+         `node:querystring` (`parse`), `node:http` types for handlers, `node:stream/consumers` (`text`, `buffer`, `json`, `arrayBuffer`, `blob`) \
+         for bodies, `node:timers/promises` (`setTimeout`, `setImmediate`)—not custom crypto, URL, or buffer code.",
         *NODE_IMPORTS_LLM_HINT,
         *NPM_PACKAGES_LLM_HINT,
     )
