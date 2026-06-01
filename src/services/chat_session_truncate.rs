@@ -5,7 +5,10 @@ use crate::models::chat_messages::{
 };
 use crate::models::projects::PlatformEnvironmentType;
 use crate::schema::{
-    chat_messages, chat_sessions, project_releases, project_runtimes, project_units, projects,
+    chat_messages, chat_sessions, project_releases, project_runtimes, projects,
+};
+use crate::services::chat_worker::db::{
+    TruncateKeptToolMessagesBound, delete_session_draft_units_removed_by_truncate,
 };
 use crate::services::releases::all_live_production_release_ids;
 use crate::services::runtime_nats::RuntimeNatsPublisher;
@@ -196,7 +199,6 @@ fn truncate_session_from_message_impl(
 
     let mut stage_release_ids: HashSet<Uuid> = HashSet::new();
     let mut prod_release_ids: HashSet<Uuid> = HashSet::new();
-    let mut unit_ids: HashSet<String> = HashSet::new();
 
     for row in &to_delete {
         let Ok(payload_opt) = ChatMessagePayload::from_value(&row.type_, row.payload.clone()) else {
@@ -205,25 +207,30 @@ fn truncate_session_from_message_impl(
         let Some(payload) = payload_opt else {
             continue;
         };
-        match payload {
-            ChatMessagePayload::ReleaseControllerBox(p) => {
-                if let Some(s) = p.stage_release {
-                    stage_release_ids.insert(s.release.id);
-                }
-                if let Some(pr) = p.prod_release
-                    && !live_prod_ids.contains(&pr.release.id)
-                {
-                    prod_release_ids.insert(pr.release.id);
-                }
+        if let ChatMessagePayload::ReleaseControllerBox(p) = payload {
+            if let Some(s) = p.stage_release {
+                stage_release_ids.insert(s.release.id);
             }
-            ChatMessagePayload::RejectControllerBox(p) => {
-                for u in p.unit_changes {
-                    unit_ids.insert(u.id.clone());
-                }
+            if let Some(pr) = p.prod_release
+                && !live_prod_ids.contains(&pr.release.id)
+            {
+                prod_release_ids.insert(pr.release.id);
             }
-            _ => {}
         }
     }
+
+    let kept_tools = if policy.include_anchor {
+        TruncateKeptToolMessagesBound::ToolsBeforeAnchor {
+            anchor_created_at: anchor.created_at,
+            anchor_message_id: anchor.id,
+        }
+    } else {
+        TruncateKeptToolMessagesBound::ToolsThroughAnchor {
+            anchor_created_at: anchor.created_at,
+            anchor_message_id: anchor.id,
+        }
+    };
+    delete_session_draft_units_removed_by_truncate(conn, project_id, session_id, kept_tools)?;
 
     let mut stage_runtime_nats: Vec<(Uuid, Uuid)> = Vec::new();
 
@@ -265,17 +272,6 @@ fn truncate_session_from_message_impl(
                 .filter(project_releases::project_id.eq(project_id))
                 .filter(project_releases::id.eq(pid))
                 .filter(project_releases::is_stage.eq(false)),
-        )
-        .execute(conn)?;
-    }
-
-    if !unit_ids.is_empty() {
-        let ids: Vec<String> = unit_ids.into_iter().collect();
-        diesel::delete(
-            project_units::table
-                .filter(project_units::project_id.eq(project_id))
-                .filter(project_units::chat_session_id.eq(session_id))
-                .filter(project_units::id.eq_any(ids)),
         )
         .execute(conn)?;
     }

@@ -581,38 +581,75 @@ fn logical_unit_key_from_row(row: &ProjectUnitRow) -> LogicalUnitKey {
     )
 }
 
-/// Draft unit tips for `session_id` as they were **before** the given release-controller message:
-/// replays only completed `ToolCreateUnit` / `ToolModifyUnit` / `ToolRemoveUnit` messages ordered
-/// before `(cutoff_created_at, cutoff_message_id)`, keeps the last stored unit id per logical path,
-/// then loads those draft rows. [`ProjectUnitResponse::latest_revision`] is set to the row revision
-/// (the tip at that point in time), matching full-session draft responses where the returned row is
-/// always the current tip.
-pub fn load_chat_session_draft_units_before_message_cutoff(
+/// Which completed unit-tool messages still apply after a truncate (everything later is removed).
+#[derive(Clone, Copy)]
+pub enum TruncateKeptToolMessagesBound {
+    /// Truncate deletes the anchor and all later messages — only tools **before** the anchor count.
+    ToolsBeforeAnchor {
+        anchor_created_at: DateTime<Utc>,
+        anchor_message_id: Uuid,
+    },
+    /// Truncate deletes only messages **after** the anchor — tools through the anchor still count.
+    ToolsThroughAnchor {
+        anchor_created_at: DateTime<Utc>,
+        anchor_message_id: Uuid,
+    },
+}
+
+/// Replays completed unit tools in the kept region, then loads the matching draft rows.
+pub fn load_chat_session_draft_units_from_kept_tool_messages(
     conn: &mut PooledConn,
     project_id: Uuid,
     session_id: Uuid,
-    cutoff_created_at: DateTime<Utc>,
-    cutoff_message_id: Uuid,
+    kept_tools: TruncateKeptToolMessagesBound,
 ) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
-    let tool_rows: Vec<(ChatMessageType, Option<Value>)> = chat_messages::table
-        .filter(chat_messages::chat_session_id.eq(session_id))
-        .filter(
-            chat_messages::type_
-                .eq(ChatMessageType::ToolCreateUnit)
-                .or(chat_messages::type_.eq(ChatMessageType::ToolModifyUnit))
-                .or(chat_messages::type_.eq(ChatMessageType::ToolRemoveUnit)),
-        )
-        .filter(
-            chat_messages::created_at
-                .lt(cutoff_created_at)
-                .or(chat_messages::created_at
-                    .eq(cutoff_created_at)
-                    .and(chat_messages::id.lt(cutoff_message_id))),
-        )
-        .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
-        .order_by((chat_messages::created_at.asc(), chat_messages::id.asc()))
-        .select((chat_messages::type_, chat_messages::payload))
-        .load(conn)?;
+    let (anchor_created_at, anchor_message_id, include_anchor_tools) = match kept_tools {
+        TruncateKeptToolMessagesBound::ToolsBeforeAnchor {
+            anchor_created_at,
+            anchor_message_id,
+        } => (anchor_created_at, anchor_message_id, false),
+        TruncateKeptToolMessagesBound::ToolsThroughAnchor {
+            anchor_created_at,
+            anchor_message_id,
+        } => (anchor_created_at, anchor_message_id, true),
+    };
+
+    let tool_type_filter = chat_messages::type_
+        .eq(ChatMessageType::ToolCreateUnit)
+        .or(chat_messages::type_.eq(ChatMessageType::ToolModifyUnit))
+        .or(chat_messages::type_.eq(ChatMessageType::ToolRemoveUnit));
+
+    let tool_rows: Vec<(ChatMessageType, Option<Value>)> = if include_anchor_tools {
+        chat_messages::table
+            .filter(chat_messages::chat_session_id.eq(session_id))
+            .filter(tool_type_filter)
+            .filter(
+                chat_messages::created_at
+                    .lt(anchor_created_at)
+                    .or(chat_messages::created_at
+                        .eq(anchor_created_at)
+                        .and(chat_messages::id.le(anchor_message_id))),
+            )
+            .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
+            .order_by((chat_messages::created_at.asc(), chat_messages::id.asc()))
+            .select((chat_messages::type_, chat_messages::payload))
+            .load(conn)?
+    } else {
+        chat_messages::table
+            .filter(chat_messages::chat_session_id.eq(session_id))
+            .filter(tool_type_filter)
+            .filter(
+                chat_messages::created_at
+                    .lt(anchor_created_at)
+                    .or(chat_messages::created_at
+                        .eq(anchor_created_at)
+                        .and(chat_messages::id.lt(anchor_message_id))),
+            )
+            .filter(chat_messages::status.eq(ChatMessageStatus::Completed))
+            .order_by((chat_messages::created_at.asc(), chat_messages::id.asc()))
+            .select((chat_messages::type_, chat_messages::payload))
+            .load(conn)?
+    };
 
     let mut tips: HashMap<LogicalUnitKey, String> = HashMap::new();
 
@@ -668,9 +705,78 @@ pub fn load_chat_session_draft_units_before_message_cutoff(
         .collect())
 }
 
+/// Draft units implied by completed unit tools **before** `message` (excludes that message’s tools).
+pub fn load_chat_session_draft_units_from_tools_before_message(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    message_created_at: DateTime<Utc>,
+    message_id: Uuid,
+) -> Result<Vec<ProjectUnitResponse>, diesel::result::Error> {
+    load_chat_session_draft_units_from_kept_tool_messages(
+        conn,
+        project_id,
+        session_id,
+        TruncateKeptToolMessagesBound::ToolsBeforeAnchor {
+            anchor_created_at: message_created_at,
+            anchor_message_id: message_id,
+        },
+    )
+}
+
+/// Deletes draft unit rows from the truncated tail (including incomplete implement with no controller).
+/// `kept_tools` must match which messages remain after truncate.
+pub fn delete_session_draft_units_removed_by_truncate(
+    conn: &mut PooledConn,
+    project_id: Uuid,
+    session_id: Uuid,
+    kept_tools: TruncateKeptToolMessagesBound,
+) -> Result<(), diesel::result::Error> {
+    use crate::services::releases::logical_unit_key;
+
+    let keep_units =
+        load_chat_session_draft_units_from_kept_tool_messages(conn, project_id, session_id, kept_tools)?;
+    let current_tips = load_chat_session_unit_tips_for_merge(conn, project_id, session_id)?;
+
+    let keep_by_key: HashMap<LogicalUnitKey, String> = keep_units
+        .iter()
+        .map(|u| (logical_unit_key(u), u.id.clone()))
+        .collect();
+
+    for tip in &current_tips {
+        let key = logical_unit_key(tip);
+        let wipe = match keep_by_key.get(&key) {
+            None => true,
+            Some(keep_id) if keep_id != &tip.id => true,
+            _ => false,
+        };
+        if !wipe {
+            continue;
+        }
+
+        let (ctx, mod_slug, ut, name) = &key;
+        let mut delete_q = project_units::table
+            .filter(project_units::project_id.eq(project_id))
+            .filter(project_units::chat_session_id.eq(session_id))
+            .filter(project_units::context_slug.eq(ctx))
+            .filter(project_units::module_slug.eq(mod_slug))
+            .filter(project_units::unit_type.eq(ut))
+            .filter(project_units::unit_name_slug.eq(name))
+            .into_boxed();
+
+        if let Some(keep_id) = keep_by_key.get(&key) {
+            delete_q = delete_q.filter(project_units::id.ne(keep_id));
+        }
+
+        delete_q.execute(conn)?;
+    }
+
+    Ok(())
+}
+
 /// Resolves a `release_controller_box` message in `session_id`, then returns draft unit tips for
 /// that session **as of** the point in time immediately before that message (see
-/// [`load_chat_session_draft_units_before_message_cutoff`]).
+/// [`load_chat_session_draft_units_from_tools_before_message`]).
 ///
 /// Outer [`Result::Err`] is a Diesel error. Inner [`Result::Err`] means the message is missing or
 /// not a release-controller row.
@@ -699,7 +805,7 @@ pub fn load_chat_session_draft_units_as_of_release_controller_message(
         ));
     }
 
-    let units = load_chat_session_draft_units_before_message_cutoff(
+    let units = load_chat_session_draft_units_from_tools_before_message(
         conn,
         project_id,
         session_id,

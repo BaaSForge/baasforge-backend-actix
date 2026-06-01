@@ -13,7 +13,7 @@ use crate::schema::chat_sessions;
 use crate::schema::project_releases;
 use crate::schema::project_runtimes;
 use crate::schema::projects;
-use crate::services::chat_worker::db::load_chat_session_draft_units_before_message_cutoff;
+use crate::services::chat_worker::db::load_chat_session_draft_units_from_tools_before_message;
 use crate::services::releases::{
     ReleaseUnitsMetadata, combined_units_from_release_metadata, compute_new_units,
     load_baseline_production_release_for_chat_session, load_latest_production_release_for_project,
@@ -147,7 +147,7 @@ pub fn transaction_create_stage_release_from_controller(
             _ => Vec::new(),
         };
 
-        let session_tips = load_chat_session_draft_units_before_message_cutoff(
+        let session_tips = load_chat_session_draft_units_from_tools_before_message(
             conn,
             project_id,
             session_id,
