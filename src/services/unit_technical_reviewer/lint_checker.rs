@@ -48,16 +48,46 @@ mod imp {
             .map_err(|e| format!("Lint task join error: {e}"))?
     }
 
+    fn vfs_sources_by_rel_path(
+        vfs: &std::collections::HashMap<String, String>,
+    ) -> std::collections::HashMap<String, String> {
+        let mut out = std::collections::HashMap::new();
+        for (vfs_path, content) in vfs {
+            let Some(rel) = vfs_path.strip_prefix("/unit/") else {
+                continue;
+            };
+            if rel == "tsconfig.json" || rel == "package.json" {
+                continue;
+            }
+            if rel == "node_modules" || rel.starts_with("node_modules/") {
+                if !rel.contains("/@units/") && !rel.ends_with("/@units") {
+                    continue;
+                }
+            }
+            out.insert(rel.to_string(), content.clone());
+        }
+        out
+    }
+
     fn run_tsgolint_headless(
         project_root: &Path,
         vfs: std::collections::HashMap<String, String>,
     ) -> Result<(), String> {
+        let sources_by_rel = vfs_sources_by_rel_path(&vfs);
         let materialized = materialize_for_disk_lint(project_root, &vfs)?;
+        let materialized_root = materialized
+            .root
+            .canonicalize()
+            .map_err(|e| e.to_string())?;
         let main_path = materialized
             .main_ts
             .canonicalize()
             .map_err(|e| e.to_string())?;
         let main_path_str = main_path.to_string_lossy().into_owned();
+        let lint_ctx = LintFormatContext {
+            materialized_root,
+            sources_by_rel,
+        };
 
         let payload = TsgolintPayload {
             version: 2,
@@ -95,7 +125,7 @@ mod imp {
         let mut stdout = child.stdout.take().ok_or("tsgolint stdout unavailable")?;
         let mut stderr = child.stderr.take().ok_or("tsgolint stderr unavailable")?;
         let mut messages = Vec::new();
-        parse_tsgolint_stdout(&mut stdout, &mut messages)?;
+        parse_tsgolint_stdout(&mut stdout, &lint_ctx, &mut messages)?;
 
         let mut stderr_buf = String::new();
         let _ = stderr.read_to_string(&mut stderr_buf);
@@ -144,9 +174,22 @@ mod imp {
 
     #[derive(Debug, Deserialize)]
     struct TsgolintRuleMessage {
+        #[serde(default)]
+        id: Option<String>,
         description: String,
         #[serde(default)]
         help: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TsgolintRange {
+        pos: u32,
+        end: u32,
+    }
+
+    struct LintFormatContext {
+        materialized_root: PathBuf,
+        sources_by_rel: std::collections::HashMap<String, String>,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,6 +221,8 @@ mod imp {
         message: TsgolintRuleMessage,
         #[serde(default)]
         file_path: Option<String>,
+        #[serde(default)]
+        range: Option<TsgolintRange>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -190,8 +235,91 @@ mod imp {
         Diagnostic(TsgolintDiagnosticPayload),
     }
 
+    fn byte_offset_to_line_column(source: &str, byte_offset: usize) -> (usize, usize) {
+        let byte_offset = byte_offset.min(source.len());
+        let prefix = &source[..byte_offset];
+        let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
+        let line_start = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let column = byte_offset.saturating_sub(line_start) + 1;
+        (line, column)
+    }
+
+    fn display_path(file_path: &str, ctx: &LintFormatContext) -> String {
+        let path = Path::new(file_path);
+        if let Ok(rel) = path.strip_prefix(&ctx.materialized_root) {
+            return rel.display().to_string();
+        }
+        path.file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "main.ts".to_string())
+    }
+
+    fn source_for_display_path<'a>(
+        display_path: &str,
+        ctx: &'a LintFormatContext,
+    ) -> Option<&'a str> {
+        ctx.sources_by_rel.get(display_path).map(String::as_str)
+    }
+
+    fn excerpt_at_line(source: &str, line: usize) -> Option<String> {
+        let line_text = source.lines().nth(line.saturating_sub(1))?.trim();
+        if line_text.is_empty() {
+            return None;
+        }
+        const MAX: usize = 120;
+        Some(if line_text.len() > MAX {
+            format!("{}…", &line_text[..MAX])
+        } else {
+            line_text.to_string()
+        })
+    }
+
+    fn format_tsgolint_violation(d: &TsgolintDiagnosticPayload, ctx: &LintFormatContext) -> String {
+        let default_path = if matches!(d.kind, TsgolintDiagnosticKind::Tsconfig) {
+            "tsconfig.json"
+        } else {
+            "main.ts"
+        };
+        let display_path = d
+            .file_path
+            .as_deref()
+            .map(|p| display_path(p, ctx))
+            .unwrap_or_else(|| default_path.to_string());
+
+        let source = source_for_display_path(&display_path, ctx);
+        let mut out = String::new();
+        if let Some(rule) = d.rule.as_deref().filter(|r| !r.is_empty()) {
+            out.push_str(rule);
+            out.push_str(" in ");
+        }
+        out.push_str(&display_path);
+
+        if let (Some(source), Some(range)) = (source, d.range.as_ref()) {
+            let (line, col) = byte_offset_to_line_column(source, range.pos as usize);
+            let (end_line, end_col) = byte_offset_to_line_column(source, range.end as usize);
+            if line != end_line {
+                out.push_str(&format!(
+                    " (line {line}, col {col} to line {end_line}, col {end_col})"
+                ));
+            } else {
+                out.push_str(&format!(" (line {line}, col {col})"));
+            }
+            if let Some(excerpt) = excerpt_at_line(source, line) {
+                out.push_str(&format!(" — `{excerpt}`"));
+            }
+        }
+
+        out.push_str(": ");
+        out.push_str(&d.message.description);
+        if let Some(help) = d.message.help.as_deref().filter(|h| !h.is_empty()) {
+            out.push_str(&format!(" ({help})"));
+        }
+        out
+    }
+
     fn parse_tsgolint_stdout(
         stdout: &mut impl Read,
+        ctx: &LintFormatContext,
         violations: &mut Vec<String>,
     ) -> Result<(), String> {
         let mut buffer = Vec::new();
@@ -212,17 +340,7 @@ mod imp {
                             && d.rule.as_deref() == Some(TSGOLINT_RULE_NO_UNSAFE_TYPE_ASSERTION);
                         let is_tsconfig = matches!(d.kind, TsgolintDiagnosticKind::Tsconfig);
                         if is_target_rule || is_tsconfig {
-                            let default_path = if is_tsconfig {
-                                "tsconfig.json"
-                            } else {
-                                "main.ts"
-                            };
-                            let path = d.file_path.unwrap_or_else(|| default_path.to_string());
-                            let mut line = format!("{}: {}", path, d.message.description);
-                            if let Some(help) = d.message.help.filter(|h| !h.is_empty()) {
-                                line.push_str(&format!(" ({help})"));
-                            }
-                            violations.push(line);
+                            violations.push(format_tsgolint_violation(&d, ctx));
                         }
                     }
                 }
@@ -269,6 +387,48 @@ mod imp {
         };
 
         Ok(Some(msg))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+
+        #[test]
+        fn formats_violation_with_relative_path_line_and_excerpt() {
+            let ctx = LintFormatContext {
+                materialized_root: PathBuf::from("/tmp/lint-project"),
+                sources_by_rel: HashMap::from([(
+                    "main.ts".to_string(),
+                    "const x = JSON.parse(\"{}\") as string;\n".to_string(),
+                )]),
+            };
+            let d = TsgolintDiagnosticPayload {
+                kind: TsgolintDiagnosticKind::Rule,
+                rule: Some("no-unsafe-type-assertion".to_string()),
+                message: TsgolintRuleMessage {
+                    id: None,
+                    description:
+                        "Unsafe assertion from `any` detected: consider using type guards."
+                            .to_string(),
+                    help: None,
+                },
+                file_path: Some("/tmp/lint-project/main.ts".to_string()),
+                range: Some(TsgolintRange { pos: 10, end: 36 }),
+            };
+            let formatted = format_tsgolint_violation(&d, &ctx);
+            assert!(
+                formatted.contains("no-unsafe-type-assertion in main.ts"),
+                "got: {formatted}"
+            );
+            assert!(
+                formatted.contains("(line 1, col 11"),
+                "got: {formatted}"
+            );
+            assert!(formatted.contains("JSON.parse"));
+            assert!(!formatted.contains("/tmp/lint-project"));
+        }
     }
 
 }
