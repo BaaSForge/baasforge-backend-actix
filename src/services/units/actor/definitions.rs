@@ -1,10 +1,11 @@
 pub const TITLE: &str = "Actor";
 
 pub const BRIEF: &str = r#"
-An actor is a stateful entity identified by an ID. Each instance holds its own persistent
-state and processes one operation at a time. Use actors to model things in your domain that
-have identity, state that changes over time, and multiple operations — user profiles, shopping
-carts, game sessions, device state, account balances, and anything similar.
+An actor is a stateful entity identified by an ID. Each instance holds persistent state for
+**one** domain entity and processes one operation at a time. Use actors for things with
+identity and evolving state — user profiles, shopping carts, game sessions, devices, account
+balances. If you may store thousands of entities, use a separate actor instance per entity; one instance
+must not hold thousands or millions of records.
 "#;
 
 pub const DETAIL: &str = r#"
@@ -25,11 +26,31 @@ Error handling:
 - Throw `new ctx.TerminalError(msg)` → skips remaining retries, triggers onDeadLetter
 
 Key guarantees:
+- One instance per entity: actors are built to store one domain entity per actorId (one user,
+  one cart, one order, …). Choose a distinct actorId per entity. Never store many entities
+  of the same type in one instance's ctx.state or use one instance as a global table — that
+  breaks isolation and does not scale (see Performance below).
 - State isolation: ctx.state for instance "alice" is completely independent from "bob"
 - Sequential delivery: only one handler runs at a time per instance ID; no interleaving
 - Atomic state: state is only updated if the handler succeeds; retries always see the
   pre-handler state
 - Durable alarms: alarms survive crashes and restarts
+
+Performance — one entity per actor instance:
+Actors are designed to hold one domain entity per actor instance (one actorId → one user,
+one cart, one device, one conversation, …). Think of an actor instance as a row in a SQL
+table: one row holds one record. You could persist an entire table in one row, but that is
+not practical or performant — use many rows (many actor instances), one per entity.
+- Not supported at scale: packing thousands or millions of entities (or rows) into a single
+  actor instance. Large ctx.state is loaded and persisted on every successful handler; one
+  mailbox serializes all work for that id — throughput and latency suffer badly.
+- When cardinality may exceed ~thousands at the same logical level, assign one actorId per
+  entity (e.g. userId, cartId, orderId).
+- Collections in ctx.state mirror SQL row design: if you would use one table row per item,
+  use one actor instance per item; if you would store a collection in one row (e.g. a JSON
+  array column), that collection can live in one actor instance. Cart line items are often
+  one row per cart; chat messages may be one row per message or many messages in one thread
+  row — match how you would model it in SQL, not a fixed rule per data type.
 
 Exports (MANDATORY — used for automatic documentation generation and cross-unit type safety):
 
@@ -86,7 +107,7 @@ export default actor<State>({
   handlers: {
     scheduleAlarm(ctx, { delayMs }: ScheduleAlarmInput) {
       ctx.state.scheduledAt = Date.now();
-      ctx.setAlarm("test", Date.now() + delayMs);
+      ctx.setAlarm("test", { fireAfterMs: delayMs });
     },
   },
   onAlarm(ctx, name) {
@@ -302,6 +323,10 @@ At runtime the actor key is any string the caller chooses; in TypeScript it is t
 `ActorInstanceId` so it is not confused with workflow instance IDs or queue run IDs.
 Use `as ActorInstanceId` when bridging from `string` (HTTP, JSON, env). Same unit path +
 actorId always reaches the same state; different actorIds are fully isolated instances.
+
+Pick actorId from the domain entity (user id, cart id, device id) — one instance per entity.
+Do not use a single shared actorId (e.g. `"default"`, `"global"`, `"all-carts"`) to store many entities
+in one actor.
 
 Outbound (what THIS actor can do) — every sync-wait call blocks the handler until it
 returns; handler execution is sequential per actor instance so long blocking calls
