@@ -38,7 +38,7 @@ pub struct ToolFinishArchitectureAnalysisPayload {
 
 pub const ARG_RELEVANT_UNIT_IDS_DESCRIPTION: &str = LLM_RELEVANT_UNIT_IDS_DESCRIPTION;
 
-pub const ARG_DETAILED_REPORT_DESCRIPTION: &str = "Complete architecture analysis for the planner and user: full explanation of current units, relationships, gaps, and risks—not a short recap. Write this only after all tool-based investigation is finished; omit trial-and-error, exploration steps, and intermediate reasoning.";
+pub const ARG_DETAILED_REPORT_DESCRIPTION: &str = "Current-state detailed architecture for the planner: existing units involved in the goal, how they communicate today, factual gaps/conflicts, and considerations when pursuing the goal—not a solution plan. No units to create/modify, sequencing, implementation steps, or trade-offs between approaches (that is the solution analyzer). Write only after all tool investigation is finished; omit trial-and-error and exploration narrative.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFinishArchitectureAnalysisArgs {
@@ -55,7 +55,7 @@ pub const TOOL_NAME: &str = "finish_architecture_analysis";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Call this when you are done with the architecture analysis. Pass relevant_unit_ids as an array of full dot-separated unit id strings (or [] if none), plus detailed_report: the full analysis (not a brief summary).",
+        description: "Call when current-state architecture analysis is complete. Pass relevant_unit_ids (existing units that matter, or []) and detailed_report: as-is units, relationships, gaps, and considerations—not a solution or implementation plan.",
         parameters: params_schema(),
     }
 }

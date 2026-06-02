@@ -5,7 +5,7 @@ We use several specialized agents in chat, each with a distinct role:
 | Agent | Role |
 | --- | --- |
 | **Planner** | The main coordinator: keeps overall direction and integrates outputs from the other agents. |
-| **Current Architecture Analyzer** | Inspects and explains the existing system (structure, dependencies, behavior). |
+| **Current Architecture Analyzer** | Maps **existing** units involved in the goal, how they communicate today, factual gaps/conflicts, and considerations—not solution or implementation plans (those belong to the Solution Analyzer and Programmer). |
 | **Solution Analyzer** | Evaluates approaches, trade-offs, and fit with constraints before implementation. |
 | **Programmer** | Implements or edits code according to the agreed plan. |
 | **Observability Analyzer** | Reads traces/logs/symptoms, pulls live unit definitions via the unit loader, and returns diagnostics (ranked hypotheses, evidence, next checks). |

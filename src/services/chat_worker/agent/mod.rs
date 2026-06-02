@@ -27,7 +27,7 @@ use uuid::Uuid;
 pub fn agent_prompt_role_name(agent: &ChatAgentType) -> &'static str {
     match agent {
         ChatAgentType::Planner => "Orchestrator",
-        ChatAgentType::ArchitectureAnalyzer => "Architecture Analyzer",
+        ChatAgentType::ArchitectureAnalyzer => "Current Architecture Analyzer",
         ChatAgentType::SolutionAnalyzer => "Solution Analyzer",
         ChatAgentType::Developer => "Programmer",
         ChatAgentType::ObservabilityAnalyzer => "Observability Analyzer",
