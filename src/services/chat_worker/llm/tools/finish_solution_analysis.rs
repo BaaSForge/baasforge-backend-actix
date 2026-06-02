@@ -31,7 +31,7 @@ pub struct ToolFinishSolutionAnalysisPayload {
     pub error: Option<String>,
 }
 
-pub const ARG_DETAILED_REPORT_DESCRIPTION: &str = "Complete solution analysis (plain language, no code): full unit inventory (every API, actor, queue_worker, etc. with paths and purposes), per-unit behavior, actor handlers/state when needed, how APIs call backing units, alternatives, trade-offs, risks, and build order—not a short recap or API-only plan with vague 'likely actor' notes. Production-ready scope only unless the user asked for mocks. Write only after investigation is finished.";
+pub const ARG_DETAILED_REPORT_DESCRIPTION: &str = "Complete solution analysis (plain language, no code): §(1)–(3) unit inventory (units to create, modify, delete—with paths, types, and per-unit specs), §(4) runtime libraries, §(5) sequencing, §(6) risks/trade-offs—not a short recap or vague backing-unit notes. Production-ready scope only unless the user asked for mocks. Write only after investigation is finished.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolFinishSolutionAnalysisArgs {

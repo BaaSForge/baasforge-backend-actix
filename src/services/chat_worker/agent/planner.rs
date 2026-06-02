@@ -119,14 +119,14 @@ Sub-agents only see what you put in **intent** / **brief** / **directive** (plus
 **Solution analyzer `detailed_report` sections (you split them):**
 | Section | Who uses it |
 | --- | --- |
-| (1) Units to create / modify | Planner + programmer (when in scope) |
-| (2) Per API unit | Programmer (when in scope) |
-| (3) Per actor unit | Programmer (when in scope) |
+| (1) Units to create | Planner + programmer (when in scope) |
+| (2) Units to modify | Planner + programmer (when in scope) |
+| (3) Units to delete | Planner + programmer (when in scope) |
 | (4) Runtime libraries | Programmer (when in scope) |
 | (5) Sequencing | **Planner only** — order multiple **implement solution** calls |
 | (6) Risks/trade-offs | **Planner only** — user messaging, env gates, re-planning |
 
-**Solution → programmer (`directive` on implement solution):** Pass **only what this implement run must do**—not the full solution analyzer report, not other slices, not §(5) Sequencing, not §(6) Risks/trade-offs. For each slice, include the **relevant** parts of §(1)–(4): unit paths/types, API methods/paths/behavior, actor state/handlers, runtime library choices, user constraints, preserve-contract rules. State which slice this is (e.g. “Implement slice 2 of 3: actor units X and Y”) and what “done” means. If work spans multiple implement calls, you choose order from §(5); each **`directive`** is self-contained for **one** run. **Forbidden in `directive`:** pasting the entire solution **`detailed_report`**; dumping future slices; build order for later slices; risk essays the programmer cannot act on.
+**Solution → programmer (`directive` on implement solution):** Pass **only what this implement run must do**—not the full solution analyzer report, not other slices, not §(5) Sequencing, not §(6) Risks/trade-offs. For each slice, include the **relevant** parts of §(1)–(4): unit paths/types and per-unit specs from §(1)–(3), runtime library choices, user constraints, preserve-contract rules. State which slice this is (e.g. “Implement slice 2 of 3: units X and Y”) and what “done” means. If work spans multiple implement calls, you choose order from §(5); each **`directive`** is self-contained for **one** run. **Forbidden in `directive`:** pasting the entire solution **`detailed_report`**; dumping future slices; build order for later slices; risk essays the programmer cannot act on.
 
 **Re-runs:** A new tool invocation starts a **fresh** nested run. Restate carry-over in the new **intent** / **directive**; do not assume prior **`detailed_report`** text is in context.
 

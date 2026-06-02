@@ -29,7 +29,7 @@ type RedisConn = Arc<Mutex<redis::aio::MultiplexedConnection>>;
 const SUBTREE_FALLBACK_ROW_CAP: usize = 100;
 
 pub const ARG_DIRECTIVE_DESCRIPTION: &str =
-    "Refined handoff for this implement run only: outcomes, scope (unit paths and the relevant solution-plan specs—units, per-API, per-actor, runtime libraries), and constraints. Include user intent only where it affects this slice. Do NOT paste the full solution detailed_report, other slices, solution Sequencing (§5), or Risks/trade-offs (§6)—the planner uses those; the programmer does not see them unless you restate actionable specs from §(1)–(4). Plain language; no code.";
+    "Refined handoff for this implement run only: outcomes, scope (unit paths and the relevant solution-plan specs from §(1)–(3) and runtime libraries), and constraints. Include user intent only where it affects this slice. Do NOT paste the full solution detailed_report, other slices, solution Sequencing (§5), or Risks/trade-offs (§6)—the planner uses those; the programmer does not see them unless you restate actionable specs from §(1)–(4). Plain language; no code.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 pub struct ToolImplementSolutionArgs {
