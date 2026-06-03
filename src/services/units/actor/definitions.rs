@@ -36,21 +36,22 @@ Key guarantees:
   pre-handler state
 - Durable alarms: alarms survive crashes and restarts
 
-Performance — one entity per actor instance:
-Actors are designed to hold one domain entity per actor instance (one actorId → one user,
-one cart, one device, one conversation, …). Think of an actor instance as a row in a SQL
-table: one row holds one record. You could persist an entire table in one row, but that is
-not practical or performant — use many rows (many actor instances), one per entity.
-- Not supported at scale: packing thousands or millions of entities (or rows) into a single
-  actor instance. Large ctx.state is loaded and persisted on every successful handler; one
-  mailbox serializes all work for that id — throughput and latency suffer badly.
-- When cardinality may exceed ~thousands at the same logical level, assign one actorId per
-  entity (e.g. userId, cartId, orderId).
-- Collections in ctx.state mirror SQL row design: if you would use one table row per item,
-  use one actor instance per item; if you would store a collection in one row (e.g. a JSON
-  array column), that collection can live in one actor instance. Cart line items are often
-  one row per cart; chat messages may be one row per message or many messages in one thread
-  row — match how you would model it in SQL, not a fixed rule per data type.
+Pitfalls:
+- It is not recommended to use an actor to store thousands of entities,
+  even small ids, because it is not performant to keep thousands of ids in a single table row.
+  Instead of saving all entities into a single instance of an actor, distribute them across
+  multiple instances of the actor.
+- Think of an actor unit as a table, and an actor instance as a row — this mental model helps
+  a lot.
+- The actor instance id (`actorId`) can be used as a unique id: it is unique across all actor
+  instances of that single actor unit (IMPORTANT: only unique inside an actor unit, not
+  across different actor units). This can be used to make sure unique entities are persisted
+  and not duplicated — you can use the actor instance id to check whether that entity (with
+  that id) is already persisted in that actor or not.
+- Only use a single (global / default) actor instance for things under 10 or 100 entities,
+  not further. It is not performant to save JSON with more than ~100 items in a single row of
+  a table; the same applies to actors — it is not performant to save more than ~100 items in
+  a single actor instance.
 
 Exports (MANDATORY — used for automatic documentation generation and cross-unit type safety):
 
