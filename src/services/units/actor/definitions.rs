@@ -4,8 +4,8 @@ pub const BRIEF: &str = r#"
 An actor is a stateful entity identified by an ID. Each instance holds persistent state for
 **one** domain entity and processes one operation at a time. Use actors for things with
 identity and evolving state — user profiles, shopping carts, game sessions, devices, account
-balances. If you may store thousands of entities, use a separate actor instance per entity; one instance
-must not hold thousands or millions of records.
+balances. Do not model a growing catalog, registry, or index inside one actor's state (maps/sets
+of ids); assign each domain object its own actorId and keep state scoped to that object only.
 "#;
 
 pub const DETAIL: &str = r#"
@@ -29,7 +29,7 @@ Key guarantees:
 - One instance per entity: actors are built to store one domain entity per actorId (one user,
   one cart, one order, …). Choose a distinct actorId per entity. Never store many entities
   of the same type in one instance's ctx.state or use one instance as a global table — that
-  breaks isolation and does not scale (see Performance below).
+  breaks isolation and does not scale (see Pitfalls below).
 - State isolation: ctx.state for instance "alice" is completely independent from "bob"
 - Sequential delivery: only one handler runs at a time per instance ID; no interleaving
 - Atomic state: state is only updated if the handler succeeds; retries always see the
@@ -37,21 +37,29 @@ Key guarantees:
 - Durable alarms: alarms survive crashes and restarts
 
 Pitfalls:
-- It is not recommended to use an actor to store thousands of entities,
-  even small ids, because it is not performant to keep thousands of ids in a single table row.
-  Instead of saving all entities into a single instance of an actor, distribute them across
-  multiple instances of the actor.
-- Think of an actor unit as a table, and an actor instance as a row — this mental model helps
-  a lot.
-- The actor instance id (`actorId`) can be used as a unique id: it is unique across all actor
-  instances of that single actor unit (IMPORTANT: only unique inside an actor unit, not
-  across different actor units). This can be used to make sure unique entities are persisted
-  and not duplicated — you can use the actor instance id to check whether that entity (with
-  that id) is already persisted in that actor or not.
-- Only use a single (global / default) actor instance for things under 10 or 100 entities,
-  not further. It is not performant to save JSON with more than ~100 items in a single row of
-  a table; the same applies to actors — it is not performant to save more than ~100 items in
-  a single actor instance.
+- Wrong design (do not generate): one actor unit + one shared actorId (e.g. `"registry"`,
+  `"global"`, `"default"`) whose state accumulates every domain object — `Record<string, …>`,
+  `Set`, `Map`, or growing arrays keyed by entity ids, booleans like `{ ids: { [id]: true } }`,
+  or handlers named register/unregister that only add/remove keys. That is a database table
+  stuffed into one row; it will not scale and defeats actors.
+- Right design for uniqueness / "already exists?": the actor unit defines the per-entity
+  schema; each entity id is the `actorId`; creating or messaging that instance is the
+  register; existence is "does this actorId already have state?" (call it or read state for
+  that id), not a central map in one instance.
+- If state would gain a new key or array element every time a new business object appears,
+  stop — split into one actor instance per object (many rows), not one registry instance.
+- It is not recommended to use an actor to store thousands of entities, even small ids,
+  because it is not performant to keep thousands of ids in a single table row. Instead of
+  saving all entities into a single instance of an actor, distribute them across multiple
+  instances of the actor.
+- Think of an actor unit as a table, and an actor instance as a row — state fields describe
+  that row only, not every row in the table.
+- The actor instance id (`actorId`) is the unique id for one entity within that actor unit
+  (IMPORTANT: unique per actor unit, not across different actor units). Use it for dedup and
+  persistence scope — not a map of all ids inside one instance.
+- Only use a single (global / default) actor instance for a fixed small set (under ~10–100
+  total, not growing with traffic). It is not performant to save JSON with more than ~100
+  items in one table row; the same applies to one actor instance.
 
 Exports (MANDATORY — used for automatic documentation generation and cross-unit type safety):
 
@@ -326,8 +334,9 @@ Use `as ActorInstanceId` when bridging from `string` (HTTP, JSON, env). Same uni
 actorId always reaches the same state; different actorIds are fully isolated instances.
 
 Pick actorId from the domain entity (user id, cart id, device id) — one instance per entity.
-Do not use a single shared actorId (e.g. `"default"`, `"global"`, `"all-carts"`) to store many entities
-in one actor.
+Never use one shared actorId as a registry: state must not be a growing map/set/list of
+other entities' ids. Uniqueness and register/unregister flows belong on per-entity actorIds,
+not in one `"global"` instance.
 
 Outbound (what THIS actor can do) — every sync-wait call blocks the handler until it
 returns; handler execution is sequential per actor instance so long blocking calls
