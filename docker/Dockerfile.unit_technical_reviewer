@@ -1,0 +1,55 @@
+# syntax=docker/dockerfile:1
+
+ARG BINARY_NAME=unit_technical_reviewer
+
+FROM rust:1.93-bookworm AS builder
+
+ARG APP_ENV
+ARG BINARY_NAME
+ARG CARGO_FEATURES=unit_technical_reviewer
+
+RUN apt-get update && apt-get install -y \
+    libpq-dev \
+    pkg-config \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY .env.prod .env.stage ./
+
+RUN echo "APP_ENV=$APP_ENV" && \
+    if [ "$APP_ENV" = "PROD" ]; then \
+      cp .env.prod .env; \
+    elif [ "$APP_ENV" = "STAGE" ]; then \
+      cp .env.stage .env; \
+    else \
+      echo "Invalid APP_ENV=$APP_ENV" && exit 1; \
+    fi
+
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY migrations ./migrations
+COPY src ./src
+
+WORKDIR /app/src/tsgo
+RUN npm ci
+WORKDIR /app
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release --bin "${BINARY_NAME}" --features "${CARGO_FEATURES}"
+
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/.env /app/.env
+COPY --from=builder /app/target/release/unit_technical_reviewer /app/unit_technical_reviewer
+
+CMD ["/app/unit_technical_reviewer"]

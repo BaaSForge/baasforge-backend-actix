@@ -1,0 +1,8 @@
+.git/
+.gitignore
+.dockerignore
+target/
+target-local/
+.dev/
+.env.local
+src/tsgo/node_modules/
