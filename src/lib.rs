@@ -6,4 +6,5 @@ pub mod models;
 pub mod routes;
 pub mod schema;
 pub mod services;
+#[cfg(feature = "unit_technical_reviewer")]
 pub mod tsgo;

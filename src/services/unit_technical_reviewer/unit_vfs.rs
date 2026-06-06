@@ -1,4 +1,5 @@
 use crate::models::projects::ProjectUnitResponse;
+#[cfg(feature = "unit_technical_reviewer")]
 use crate::tsgo::node_modules_files;
 use serde_json::json;
 use std::collections::HashMap;
@@ -89,6 +90,7 @@ pub fn build_vfs(code: &str, units: &[ProjectUnitResponse]) -> HashMap<String, S
         .to_string(),
     );
 
+    #[cfg(feature = "unit_technical_reviewer")]
     for (rel_path, content) in node_modules_files::NODE_MODULES_FILE_DATA {
         let full_path = format!("{VIRTUAL_NODE_MODULES}/{rel_path}");
         vfs.insert(full_path, content.to_string());

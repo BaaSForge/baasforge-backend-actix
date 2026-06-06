@@ -9,6 +9,10 @@ const NODE_MODULES_PREFIX: &str = "node_modules/";
 const TYPESCRIPT_NODE_MODULES: &str = "src/tsgo/node_modules/@typescript";
 
 fn main() {
+    if std::env::var("CARGO_FEATURE_UNIT_TECHNICAL_REVIEWER").is_err() {
+        return;
+    }
+
     println!("cargo:rerun-if-changed={TYPE_DEPS_JSON}");
     println!("cargo:rerun-if-changed={SDK_DTS}");
     println!("cargo:rerun-if-changed={TYPESCRIPT_NODE_MODULES}");
