@@ -276,12 +276,7 @@ jobs:
             )
 
             if [ "$EXPOSE_PORTS" = "true" ]; then
-              RUN_ARGS+=(
-                -p 80:80
-                -p 443:443
-                -v /etc/letsencrypt/live/api.baasforge.com:/etc/letsencrypt/live/api.baasforge.com:ro
-                -v /etc/letsencrypt/archive:/etc/letsencrypt/archive:ro
-              )
+              RUN_ARGS+=(-p 1101:1101)
             fi
 
             docker run "${RUN_ARGS[@]}" "$IMAGE"

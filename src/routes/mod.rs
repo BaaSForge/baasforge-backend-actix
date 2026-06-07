@@ -537,7 +537,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                        // ),
             )
     })
-    .bind(("127.0.0.1", port))?
+    .bind((settings.bind_host.as_str(), port))?
     .run()
     .await?;
 

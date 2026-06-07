@@ -59,6 +59,7 @@ impl TryFrom<String> for LlmProvider {
 
 #[derive(Debug, Clone)]
 pub struct Settings {
+    pub bind_host: String,
     pub port: String,
     pub app_environment: AppEnvironment,
     pub pg_database_url: String,
@@ -133,6 +134,7 @@ impl Settings {
         let app_env_str = env::var("APP_ENV").expect("APP_ENV must be set");
         let app_environment = AppEnvironment::try_from(app_env_str)?;
 
+        let bind_host = env::var("BIND_HOST").expect("BIND_HOST must be set");
         let port = env::var("PORT").expect("PORT must be set");
         let pg_database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
         let database_pool_size: u32 = env::var("DATABASE_POOL_SIZE")
@@ -324,6 +326,7 @@ impl Settings {
         }
 
         Ok(Settings {
+            bind_host,
             port,
             app_environment,
             pg_database_url,
