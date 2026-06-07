@@ -105,7 +105,9 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}-${{ needs.resolve-meta.outputs.app_env }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ needs.resolve-meta.outputs.app_env }}
 
+  # TEMP: disabled while debugging deploy — re-enable before real deploys
   migrate:
+    if: false
     needs: [resolve-meta]
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve-meta.outputs.environment }}
@@ -187,7 +189,7 @@ jobs:
             echo "Migrations complete"
 
   deploy:
-    needs: [resolve-meta, build-and-push, migrate]
+    needs: [resolve-meta]
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve-meta.outputs.environment }}
     env:
@@ -221,7 +223,8 @@ jobs:
       - name: Deploy to DigitalOcean
         uses: appleboy/ssh-action@v1.2.2
         env:
-          IMAGE: ${{ needs.resolve-meta.outputs.image_base }}${{ matrix.image_suffix }}:${{ needs.resolve-meta.outputs.tag }}
+          # TEMP: hardcoded while build-and-push is disabled — revert before real deploys
+          IMAGE: ${{ needs.resolve-meta.outputs.image_base }}${{ matrix.image_suffix }}:v0.0.1-prod.4
           CONTAINER_NAME: baal-backend${{ matrix.container_suffix }}-${{ needs.resolve-meta.outputs.deploy_suffix }}
           EXPOSE_PORTS: ${{ matrix.expose_ports }}
           GHCR_USER: ${{ github.actor }}
