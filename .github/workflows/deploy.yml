@@ -198,7 +198,6 @@ jobs:
                 export JAEGER_QUERY_BASE_URL="$SAVED_JAEGER_QUERY_BASE_URL"
                 diesel migration run
               '
-            docker image prune -f
             echo "Migrations complete"
 
   deploy:
@@ -218,6 +217,7 @@ jobs:
       JAEGER_QUERY_BASE_URL: ${{ secrets.JAEGER_QUERY_BASE_URL }}
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include: ${{ fromJSON(needs.resolve-meta.outputs.services) }}
     steps:
@@ -299,5 +299,4 @@ jobs:
               exit 1
             fi
 
-            docker image prune -f
             echo "Running $CONTAINER_NAME with restart policy: $RESTART_POLICY"
