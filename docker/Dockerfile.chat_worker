@@ -28,6 +28,7 @@ RUN echo "APP_ENV=$APP_ENV" && \
 
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY migrations ./migrations
+COPY chat-channel-ws.html ./
 COPY src ./src
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
