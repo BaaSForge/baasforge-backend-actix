@@ -53,7 +53,9 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "image_base=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
+  # TEMP: disabled while debugging migrate — re-enable before real deploys
   build-and-push:
+    if: false
     needs: resolve-meta
     runs-on: ubuntu-latest
     strategy:
@@ -104,7 +106,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ needs.resolve-meta.outputs.app_env }}
 
   migrate:
-    needs: [resolve-meta, build-and-push]
+    needs: [resolve-meta]
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve-meta.outputs.environment }}
     env:
