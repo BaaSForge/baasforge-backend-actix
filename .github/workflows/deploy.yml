@@ -107,6 +107,17 @@ jobs:
     needs: [resolve-meta, build-and-push]
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve-meta.outputs.environment }}
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      AUTH_ACCESS_TOKEN_SECRET: ${{ secrets.AUTH_ACCESS_TOKEN_SECRET }}
+      AUTH_REFRESH_TOKEN_SECRET: ${{ secrets.AUTH_REFRESH_TOKEN_SECRET }}
+      RABBIT_URL: ${{ secrets.RABBIT_URL }}
+      RABBITMQ_MANAGEMENT_URL: ${{ vars.RABBITMQ_MANAGEMENT_URL }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      RUNTIME_NATS_URL: ${{ secrets.RUNTIME_NATS_URL }}
+      BASE_RUNTIME_ENDPOINT: ${{ vars.BASE_RUNTIME_ENDPOINT }}
+      JAEGER_QUERY_BASE_URL: ${{ secrets.JAEGER_QUERY_BASE_URL }}
     steps:
       - name: Run database migrations
         uses: appleboy/ssh-action@v1.2.2
@@ -118,7 +129,11 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: IMAGE,GHCR_USER,GHCR_TOKEN
+          envs: >-
+            IMAGE,GHCR_USER,GHCR_TOKEN,
+            DATABASE_URL,AUTH_ACCESS_TOKEN_SECRET,AUTH_REFRESH_TOKEN_SECRET,
+            RABBIT_URL,RABBITMQ_MANAGEMENT_URL,GEMINI_API_KEY,REDIS_URL,
+            RUNTIME_NATS_URL,BASE_RUNTIME_ENDPOINT,JAEGER_QUERY_BASE_URL
           script: |
             set -euo pipefail
 
@@ -129,8 +144,42 @@ jobs:
 
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             docker pull "$IMAGE"
-            docker run --rm --network host "$IMAGE" \
-              sh -c 'set -a && . ./.env && set +a && diesel migration run'
+            docker run --rm --network host \
+              -e DATABASE_URL \
+              -e AUTH_ACCESS_TOKEN_SECRET \
+              -e AUTH_REFRESH_TOKEN_SECRET \
+              -e RABBIT_URL \
+              -e RABBITMQ_MANAGEMENT_URL \
+              -e GEMINI_API_KEY \
+              -e REDIS_URL \
+              -e RUNTIME_NATS_URL \
+              -e BASE_RUNTIME_ENDPOINT \
+              -e JAEGER_QUERY_BASE_URL \
+              "$IMAGE" \
+              sh -c '
+                SAVED_DATABASE_URL="$DATABASE_URL"
+                SAVED_AUTH_ACCESS_TOKEN_SECRET="$AUTH_ACCESS_TOKEN_SECRET"
+                SAVED_AUTH_REFRESH_TOKEN_SECRET="$AUTH_REFRESH_TOKEN_SECRET"
+                SAVED_RABBIT_URL="$RABBIT_URL"
+                SAVED_RABBITMQ_MANAGEMENT_URL="$RABBITMQ_MANAGEMENT_URL"
+                SAVED_GEMINI_API_KEY="$GEMINI_API_KEY"
+                SAVED_REDIS_URL="$REDIS_URL"
+                SAVED_RUNTIME_NATS_URL="$RUNTIME_NATS_URL"
+                SAVED_BASE_RUNTIME_ENDPOINT="$BASE_RUNTIME_ENDPOINT"
+                SAVED_JAEGER_QUERY_BASE_URL="$JAEGER_QUERY_BASE_URL"
+                set -a && . ./.env && set +a
+                export DATABASE_URL="$SAVED_DATABASE_URL"
+                export AUTH_ACCESS_TOKEN_SECRET="$SAVED_AUTH_ACCESS_TOKEN_SECRET"
+                export AUTH_REFRESH_TOKEN_SECRET="$SAVED_AUTH_REFRESH_TOKEN_SECRET"
+                export RABBIT_URL="$SAVED_RABBIT_URL"
+                export RABBITMQ_MANAGEMENT_URL="$SAVED_RABBITMQ_MANAGEMENT_URL"
+                export GEMINI_API_KEY="$SAVED_GEMINI_API_KEY"
+                export REDIS_URL="$SAVED_REDIS_URL"
+                export RUNTIME_NATS_URL="$SAVED_RUNTIME_NATS_URL"
+                export BASE_RUNTIME_ENDPOINT="$SAVED_BASE_RUNTIME_ENDPOINT"
+                export JAEGER_QUERY_BASE_URL="$SAVED_JAEGER_QUERY_BASE_URL"
+                diesel migration run
+              '
             docker image prune -f
             echo "Migrations complete"
 
@@ -138,6 +187,17 @@ jobs:
     needs: [resolve-meta, build-and-push, migrate]
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve-meta.outputs.environment }}
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      AUTH_ACCESS_TOKEN_SECRET: ${{ secrets.AUTH_ACCESS_TOKEN_SECRET }}
+      AUTH_REFRESH_TOKEN_SECRET: ${{ secrets.AUTH_REFRESH_TOKEN_SECRET }}
+      RABBIT_URL: ${{ secrets.RABBIT_URL }}
+      RABBITMQ_MANAGEMENT_URL: ${{ vars.RABBITMQ_MANAGEMENT_URL }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      RUNTIME_NATS_URL: ${{ secrets.RUNTIME_NATS_URL }}
+      BASE_RUNTIME_ENDPOINT: ${{ vars.BASE_RUNTIME_ENDPOINT }}
+      JAEGER_QUERY_BASE_URL: ${{ secrets.JAEGER_QUERY_BASE_URL }}
     strategy:
       fail-fast: false
       matrix:
@@ -167,7 +227,11 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: IMAGE,CONTAINER_NAME,EXPOSE_PORTS,GHCR_USER,GHCR_TOKEN
+          envs: >-
+            IMAGE,CONTAINER_NAME,EXPOSE_PORTS,GHCR_USER,GHCR_TOKEN,
+            DATABASE_URL,AUTH_ACCESS_TOKEN_SECRET,AUTH_REFRESH_TOKEN_SECRET,
+            RABBIT_URL,RABBITMQ_MANAGEMENT_URL,GEMINI_API_KEY,REDIS_URL,
+            RUNTIME_NATS_URL,BASE_RUNTIME_ENDPOINT,JAEGER_QUERY_BASE_URL
           script: |
             set -euo pipefail
 
@@ -193,6 +257,16 @@ jobs:
               -d
               --name "$CONTAINER_NAME"
               --restart unless-stopped
+              -e "DATABASE_URL=$DATABASE_URL"
+              -e "AUTH_ACCESS_TOKEN_SECRET=$AUTH_ACCESS_TOKEN_SECRET"
+              -e "AUTH_REFRESH_TOKEN_SECRET=$AUTH_REFRESH_TOKEN_SECRET"
+              -e "RABBIT_URL=$RABBIT_URL"
+              -e "RABBITMQ_MANAGEMENT_URL=$RABBITMQ_MANAGEMENT_URL"
+              -e "GEMINI_API_KEY=$GEMINI_API_KEY"
+              -e "REDIS_URL=$REDIS_URL"
+              -e "RUNTIME_NATS_URL=$RUNTIME_NATS_URL"
+              -e "BASE_RUNTIME_ENDPOINT=$BASE_RUNTIME_ENDPOINT"
+              -e "JAEGER_QUERY_BASE_URL=$JAEGER_QUERY_BASE_URL"
             )
 
             if [ "$EXPOSE_PORTS" = "true" ]; then
