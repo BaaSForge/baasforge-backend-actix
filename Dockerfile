@@ -32,21 +32,20 @@ COPY src ./src
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release --bin "${BINARY_NAME}"
-
-FROM rust:1.93-alpine3.21 AS diesel-builder
-
-RUN apk add --no-cache musl-dev openssl-dev libpq-dev
+    cargo install diesel_cli --version 2.3.5 --no-default-features --features postgres
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo install diesel_cli --version 2.3.5 --no-default-features --features postgres
+    cargo build --release --bin "${BINARY_NAME}"
 
-FROM nginx:1.29.1-alpine3.22-slim
+FROM nginx:1.29-bookworm
 
 ARG APP_ENV
 
-RUN apk add --no-cache libpq
+RUN apt-get update && apt-get install -y \
+    libpq5 \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -54,7 +53,7 @@ COPY --from=builder /app/.env /app/.env
 COPY --from=builder /app/target/release/baal-backend-actix /app/baal-backend-actix
 COPY --from=builder /app/migrations /app/migrations
 COPY diesel.toml /app/diesel.toml
-COPY --from=diesel-builder /usr/local/cargo/bin/diesel /usr/local/bin/diesel
+COPY --from=builder /usr/local/cargo/bin/diesel /usr/local/bin/diesel
 
 COPY docker/nginx.prod.conf docker/nginx.stage.conf /tmp/nginx/
 RUN if [ "$APP_ENV" = "PROD" ]; then \
