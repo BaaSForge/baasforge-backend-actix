@@ -52,5 +52,6 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=builder /app/.env /app/.env
 COPY --from=builder /app/target/release/unit_technical_reviewer /app/unit_technical_reviewer
+COPY --from=builder /app/src/tsgo/node_modules /app/src/tsgo/node_modules
 
 CMD ["/app/unit_technical_reviewer"]
