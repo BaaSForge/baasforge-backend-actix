@@ -124,6 +124,8 @@ pub struct Settings {
     /// Jaeger Query base URL, no trailing slash (e.g. `http://localhost:16686`).
     /// Used by the observability proxy endpoint to fetch traces by traceID.
     pub jaeger_query_base_url: String,
+    /// Browser origins allowed for cross-origin API calls (`CORS_ALLOWED_ORIGINS`, comma-separated).
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl Settings {
@@ -325,6 +327,17 @@ impl Settings {
             return Err("JAEGER_QUERY_BASE_URL must not be empty".into());
         }
 
+        let cors_allowed_origins: Vec<String> = env::var("CORS_ALLOWED_ORIGINS")
+            .expect("CORS_ALLOWED_ORIGINS must be set")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        if cors_allowed_origins.is_empty() {
+            return Err("CORS_ALLOWED_ORIGINS must contain at least one origin".into());
+        }
+
         Ok(Settings {
             bind_host,
             port,
@@ -363,6 +376,7 @@ impl Settings {
             unit_reviewer_simulate_failure,
             base_runtime_endpoint,
             jaeger_query_base_url,
+            cors_allowed_origins,
         })
     }
 }

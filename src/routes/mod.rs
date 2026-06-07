@@ -15,6 +15,7 @@ use crate::middlewares::auth::{
     auth_closed_guard_middleware, auth_closed_refresh_token_guard_middleware,
     auth_opened_guard_middleware, auth_refresh_token_maturity_guard_middleware,
 };
+use crate::middlewares::cors::cors_middleware;
 use crate::middlewares::payment::paid_features_guard_middleware_factory;
 use crate::middlewares::project::projects_owner_guard_middleware_factory;
 use crate::middlewares::test::test_closed_stage_guard_middleware;
@@ -147,6 +148,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
 
     HttpServer::new(move || {
         App::new()
+            .wrap(cors_middleware(&app_context.settings))
             .app_data(web::Data::new(app_context.clone()))
             .service(
                 web::scope("/api/v1/test")
