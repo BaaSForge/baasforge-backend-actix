@@ -124,7 +124,8 @@ jobs:
       - name: Run database migrations
         uses: appleboy/ssh-action@v1.2.2
         env:
-          IMAGE: ${{ needs.resolve-meta.outputs.image_base }}:${{ needs.resolve-meta.outputs.tag }}
+          # TEMP: hardcoded while build-and-push is disabled — revert before real deploys
+          IMAGE: ${{ needs.resolve-meta.outputs.image_base }}:v0.0.1-prod.4
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
