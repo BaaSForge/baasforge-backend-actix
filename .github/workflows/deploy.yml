@@ -28,7 +28,8 @@ jobs:
       app_env: ${{ steps.meta.outputs.app_env }}
       environment: ${{ steps.meta.outputs.environment }}
       deploy_suffix: ${{ steps.meta.outputs.deploy_suffix }}
-      image_base: ${{ steps.meta.outputs.image_base }}
+      app_image: ${{ steps.meta.outputs.app_image }}
+      services: ${{ steps.meta.outputs.services }}
     steps:
       - name: Resolve environment
         id: meta
@@ -50,31 +51,47 @@ jobs:
             echo "Tag $TAG does not match a deploy pattern."
             exit 1
           fi
+          IMAGE_BASE="ghcr.io/${GITHUB_REPOSITORY,,}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "image_base=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "app_image=${IMAGE_BASE}:${TAG}" >> "$GITHUB_OUTPUT"
+          SERVICES=$(jq -nc \
+            --arg base "$IMAGE_BASE" \
+            --arg tag "$TAG" \
+            '[
+              {
+                "service": "app",
+                "dockerfile": "Dockerfile",
+                "image": ($base + ":" + $tag),
+                "container_suffix": "",
+                "expose_ports": true,
+                "cargo_features": ""
+              },
+              {
+                "service": "chat-worker",
+                "dockerfile": "docker/Dockerfile.chat_worker",
+                "image": ($base + "-chat-worker:" + $tag),
+                "container_suffix": "-chat-worker",
+                "expose_ports": false,
+                "cargo_features": ""
+              },
+              {
+                "service": "unit-technical-reviewer",
+                "dockerfile": "docker/Dockerfile.unit_technical_reviewer",
+                "image": ($base + "-unit-technical-reviewer:" + $tag),
+                "container_suffix": "-unit-technical-reviewer",
+                "expose_ports": false,
+                "cargo_features": "unit_technical_reviewer"
+              }
+            ]')
+          echo "services=$SERVICES" >> "$GITHUB_OUTPUT"
 
   build-and-push:
     needs: resolve-meta
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
-        include:
-          - service: app
-            dockerfile: Dockerfile
-            image_suffix: ""
-            container_suffix: ""
-            expose_ports: true
-          - service: chat-worker
-            dockerfile: docker/Dockerfile.chat_worker
-            image_suffix: "-chat-worker"
-            container_suffix: "-chat-worker"
-            expose_ports: false
-          - service: unit-technical-reviewer
-            dockerfile: docker/Dockerfile.unit_technical_reviewer
-            image_suffix: "-unit-technical-reviewer"
-            container_suffix: "-unit-technical-reviewer"
-            expose_ports: false
+        include: ${{ fromJSON(needs.resolve-meta.outputs.services) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -97,9 +114,10 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          tags: ${{ needs.resolve-meta.outputs.image_base }}${{ matrix.image_suffix }}:${{ needs.resolve-meta.outputs.tag }}
+          tags: ${{ matrix.image }}
           build-args: |
             APP_ENV=${{ needs.resolve-meta.outputs.app_env }}
+            CARGO_FEATURES=${{ matrix.cargo_features }}
           cache-from: type=gha,scope=${{ matrix.service }}-${{ needs.resolve-meta.outputs.app_env }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ needs.resolve-meta.outputs.app_env }}
 
@@ -122,7 +140,7 @@ jobs:
       - name: Run database migrations
         uses: appleboy/ssh-action@v1.2.2
         env:
-          IMAGE: ${{ needs.resolve-meta.outputs.image_base }}:${{ needs.resolve-meta.outputs.tag }}
+          IMAGE: ${{ needs.resolve-meta.outputs.app_image }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -201,24 +219,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - service: app
-            image_suffix: ""
-            container_suffix: ""
-            expose_ports: true
-          - service: chat-worker
-            image_suffix: "-chat-worker"
-            container_suffix: "-chat-worker"
-            expose_ports: false
-          - service: unit-technical-reviewer
-            image_suffix: "-unit-technical-reviewer"
-            container_suffix: "-unit-technical-reviewer"
-            expose_ports: false
+        include: ${{ fromJSON(needs.resolve-meta.outputs.services) }}
     steps:
       - name: Deploy to DigitalOcean
         uses: appleboy/ssh-action@v1.2.2
         env:
-          IMAGE: ${{ needs.resolve-meta.outputs.image_base }}${{ matrix.image_suffix }}:${{ needs.resolve-meta.outputs.tag }}
+          IMAGE: ${{ matrix.image }}
           CONTAINER_NAME: baal-backend${{ matrix.container_suffix }}-${{ needs.resolve-meta.outputs.deploy_suffix }}
           EXPOSE_PORTS: ${{ matrix.expose_ports }}
           GHCR_USER: ${{ github.actor }}
