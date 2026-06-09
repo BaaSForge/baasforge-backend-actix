@@ -2,6 +2,7 @@ pub mod auth;
 pub mod chat;
 pub mod observability;
 pub mod package;
+pub mod platform;
 pub mod payment;
 pub mod project;
 pub mod runtime_env_vars;
@@ -236,6 +237,12 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
             )
             .service(
                 web::scope("/api/v1/platform")
+                    .route(
+                        "/packages-type-definition-files",
+                        web::post()
+                            .to(platform::handle_packages_type_definition_files)
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
                     .route(
                         "/projects",
                         web::get()

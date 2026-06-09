@@ -194,6 +194,7 @@ fn tool_display_name_for_row(row: &ChatMessageRow) -> String {
             ChatMessagePayload::ToolListUnitContexts(p) => p.tool_name.as_deref(),
             ChatMessagePayload::ToolListModulesForUnitContexts(p) => p.tool_name.as_deref(),
             ChatMessagePayload::ToolListProjectEnvKeys(p) => p.tool_name.as_deref(),
+            ChatMessagePayload::ToolGetPackagesTypeDefinitionFiles(p) => p.tool_name.as_deref(),
             ChatMessagePayload::ToolFinishImplementation(p) => p.tool_name.as_deref(),
             ChatMessagePayload::ToolCreateUnit(p) => p.tool_name.as_deref(),
             ChatMessagePayload::ToolModifyUnit(p) => p.tool_name.as_deref(),

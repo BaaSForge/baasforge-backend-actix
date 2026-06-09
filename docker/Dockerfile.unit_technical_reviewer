@@ -33,6 +33,8 @@ COPY migrations ./migrations
 COPY chat-channel-ws.html ./
 COPY src ./src
 
+# build.rs + node_modules_files.rs embed type defs via include_str! at compile time.
+# .dockerignore excludes src/tsgo/node_modules/, so install deps here (builder only).
 WORKDIR /app/src/tsgo
 RUN npm ci
 WORKDIR /app
@@ -52,6 +54,7 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=builder /app/.env /app/.env
 COPY --from=builder /app/target/release/unit_technical_reviewer /app/unit_technical_reviewer
+# Runtime needs node_modules on disk: tsgo/tsgolint binaries and disk lint symlinks.
 COPY --from=builder /app/src/tsgo/node_modules /app/src/tsgo/node_modules
 
 CMD ["/app/unit_technical_reviewer"]

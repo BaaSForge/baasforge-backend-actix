@@ -17,7 +17,8 @@ use crate::services::chat_worker::llm::tools::{
     ToolFetchRelevantUnitsPayload, ToolFetchSpecificProductionReleaseUnitsPayload,
     ToolFinishArchitectureAnalysisPayload,
     ToolFinishImplementationPayload, ToolFinishObservabilityAnalysisPayload,
-    ToolFinishSolutionAnalysisPayload, ToolImplementSolutionPayload,
+    ToolFinishSolutionAnalysisPayload, ToolGetPackagesTypeDefinitionFilesPayload,
+    ToolImplementSolutionPayload,
     ToolListModulesForUnitContextsPayload, ToolListProjectEnvKeysPayload,
     ToolListUnitContextsPayload, ToolModifyUnitPayload,
     ToolRemoveUnitPayload,
@@ -142,6 +143,7 @@ pub enum ChatMessageType {
     ToolListUnitContexts,
     ToolListModulesForUnitContexts,
     ToolListProjectEnvKeys,
+    ToolGetPackagesTypeDefinitionFiles,
     ToolAnalyzeArchitecture,
     ToolFinishArchitectureAnalysis,
     ToolAnalyzeSolution,
@@ -214,6 +216,7 @@ pub enum ChatMessagePayload {
     ToolListUnitContexts(ToolListUnitContextsPayload),
     ToolListModulesForUnitContexts(ToolListModulesForUnitContextsPayload),
     ToolListProjectEnvKeys(ToolListProjectEnvKeysPayload),
+    ToolGetPackagesTypeDefinitionFiles(ToolGetPackagesTypeDefinitionFilesPayload),
 }
 
 impl ChatMessagePayload {
@@ -250,6 +253,9 @@ impl ChatMessagePayload {
                 "ToolListModulesForUnitContexts"
             }
             ChatMessagePayload::ToolListProjectEnvKeys(_) => "ToolListProjectEnvKeys",
+            ChatMessagePayload::ToolGetPackagesTypeDefinitionFiles(_) => {
+                "ToolGetPackagesTypeDefinitionFiles"
+            }
             ChatMessagePayload::ToolCreateUnit(_) => "ToolCreateUnit",
             ChatMessagePayload::ToolModifyUnit(_) => "ToolModifyUnit",
             ChatMessagePayload::ToolRemoveUnit(_) => "ToolRemoveUnit",
@@ -314,6 +320,10 @@ impl ChatMessagePayload {
             ChatMessageType::ToolListProjectEnvKeys => {
                 let p = serde_json::from_value::<ToolListProjectEnvKeysPayload>(v)?;
                 ChatMessagePayload::ToolListProjectEnvKeys(p)
+            }
+            ChatMessageType::ToolGetPackagesTypeDefinitionFiles => {
+                let p = serde_json::from_value::<ToolGetPackagesTypeDefinitionFilesPayload>(v)?;
+                ChatMessagePayload::ToolGetPackagesTypeDefinitionFiles(p)
             }
             ChatMessageType::ToolAnalyzeArchitecture => {
                 let p = serde_json::from_value::<ToolAnalyzeArchitecturePayload>(v)?;

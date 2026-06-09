@@ -30,6 +30,7 @@ pub mod finish_architecture_analysis;
 pub mod finish_implementation;
 pub mod finish_observability_analysis;
 pub mod finish_solution_analysis;
+pub mod get_packages_type_definition_files;
 pub mod implement_solution_tool;
 pub mod list_modules_for_unit_contexts;
 pub mod list_project_env_keys;
@@ -51,6 +52,7 @@ pub use finish_architecture_analysis::ToolFinishArchitectureAnalysisPayload;
 pub use finish_implementation::ToolFinishImplementationPayload;
 pub use finish_observability_analysis::ToolFinishObservabilityAnalysisPayload;
 pub use finish_solution_analysis::ToolFinishSolutionAnalysisPayload;
+pub use get_packages_type_definition_files::ToolGetPackagesTypeDefinitionFilesPayload;
 pub use implement_solution_tool::ToolImplementSolutionPayload;
 pub use list_modules_for_unit_contexts::ToolListModulesForUnitContextsPayload;
 pub use list_project_env_keys::ToolListProjectEnvKeysPayload;
@@ -186,6 +188,11 @@ fn tool_queue_registry() -> &'static [(&'static str, ChatMessageType, PayloadFro
             list_project_env_keys::TOOL_NAME,
             list_project_env_keys::MESSAGE_TYPE,
             list_project_env_keys::payload_from_args,
+        ),
+        (
+            get_packages_type_definition_files::TOOL_NAME,
+            get_packages_type_definition_files::MESSAGE_TYPE,
+            get_packages_type_definition_files::payload_from_args,
         ),
         (
             analyze_architecture_tool::TOOL_NAME,
@@ -629,6 +636,7 @@ pub fn all_tool_specs() -> Vec<ToolSpec> {
         list_unit_contexts::spec(),
         list_modules_for_unit_contexts::spec(),
         list_project_env_keys::spec(),
+        get_packages_type_definition_files::spec(),
         analyze_architecture_tool::spec(),
         finish_architecture_analysis::spec(),
         analyze_solution_tool::spec(),
@@ -940,6 +948,10 @@ fn tool_message_handlers() -> &'static [(ChatMessageType, ToolMessageHandler)] {
                 (
                     list_project_env_keys::MESSAGE_TYPE,
                     wrap_handler_with_payload(list_project_env_keys::handler),
+                ),
+                (
+                    get_packages_type_definition_files::MESSAGE_TYPE,
+                    wrap_handler_with_payload(get_packages_type_definition_files::handler),
                 ),
                 (
                     analyze_architecture_tool::MESSAGE_TYPE,

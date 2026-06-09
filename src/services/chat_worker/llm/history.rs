@@ -14,6 +14,7 @@ use crate::libs::baal_inline::expand_baal_inlines_for_llm_user_text;
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload, ThinkingBlock,
 };
+use crate::services::chat_worker::llm::tools::get_packages_type_definition_files;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
@@ -83,6 +84,7 @@ fn is_tool_result_type(type_: &ChatMessageType) -> bool {
             | ChatMessageType::ToolListUnitContexts
             | ChatMessageType::ToolListModulesForUnitContexts
             | ChatMessageType::ToolListProjectEnvKeys
+            | ChatMessageType::ToolGetPackagesTypeDefinitionFiles
             | ChatMessageType::ToolAnalyzeArchitecture
             | ChatMessageType::ToolFinishArchitectureAnalysis
             | ChatMessageType::ToolAnalyzeSolution
@@ -140,10 +142,15 @@ fn strip_unit_subtask_fields(mut v: Value) -> String {
 }
 
 /// Extract tool_call_id, tool_name, and result content from a tool-result payload.
+///
+/// `hydrate_static_tool_results`: when false, callers only need ids/names (history cleanup passes).
+/// When true, static manifests are expanded for upstream LLM tool results (e.g.
+/// [`get_packages_type_definition_files`] file paths — same idea as [`strip_unit_subtask_fields`]).
 fn tool_result_from_payload(
     type_: &ChatMessageType,
     payload: &Option<Value>,
     fallback_id: &mut usize,
+    hydrate_static_tool_results: bool,
 ) -> (String, String, String) {
     let typed = ChatMessagePayload::from_value(type_, payload.clone())
         .ok()
@@ -189,6 +196,14 @@ fn tool_result_from_payload(
             p.tool_name.clone(),
             serde_json::to_string(p).unwrap_or_default(),
         ),
+        Some(ChatMessagePayload::ToolGetPackagesTypeDefinitionFiles(p)) => {
+            let content = if hydrate_static_tool_results {
+                get_packages_type_definition_files::upstream_tool_result_content(p)
+            } else {
+                serde_json::to_string(p).unwrap_or_default()
+            };
+            (p.tool_call_id.clone(), p.tool_name.clone(), content)
+        }
         Some(ChatMessagePayload::ToolAnalyzeArchitecture(p)) => (
             p.tool_call_id.clone(),
             p.tool_name.clone(),
@@ -292,7 +307,7 @@ fn prefix_fallback_before_each_message(
         let &(role, type_, ref payload) = &messages[i];
         match (role, type_) {
             (ChatSessionRoleType::Ai, msg_type) if is_tool_result_type(&msg_type) => {
-                let _ = tool_result_from_payload(&msg_type, payload, &mut fallback);
+                let _ = tool_result_from_payload(&msg_type, payload, &mut fallback, false);
             }
             (ChatSessionRoleType::Ai, ChatMessageType::Text) => {
                 if let Some(tp) = parse_text_payload(payload)
@@ -382,7 +397,7 @@ pub fn remove_tool_result_messages_without_matching_assistant_tool_use(
         let prefix = prefix_fallback_before_each_message(messages);
         let mut fb = prefix[i];
         let (tool_id, tool_name, _) =
-            tool_result_from_payload(&messages[i].1, &messages[i].2, &mut fb);
+            tool_result_from_payload(&messages[i].1, &messages[i].2, &mut fb, false);
         if tool_name.is_empty() {
             to_remove.push(i);
             continue;
@@ -474,7 +489,8 @@ pub fn trim_assistant_requested_tool_calls_to_match_following_tool_results(
             if r != ChatSessionRoleType::Ai || !is_tool_result_type(&t) {
                 break;
             }
-            let (tool_use_id, tool_name, _) = tool_result_from_payload(&t, &payload_ref, &mut fb2);
+            let (tool_use_id, tool_name, _) =
+                tool_result_from_payload(&t, &payload_ref, &mut fb2, false);
             if !tool_name.is_empty() {
                 fulfilled.insert(tool_use_id);
             }
@@ -560,7 +576,7 @@ pub fn session_messages_to_upstream_entries(
             }
             (ChatSessionRoleType::Ai, msg_type) if is_tool_result_type(msg_type) => {
                 let (tool_use_id, tool_name, content) =
-                    tool_result_from_payload(msg_type, payload, &mut fallback_tool_id);
+                    tool_result_from_payload(msg_type, payload, &mut fallback_tool_id, true);
                 if tool_name.is_empty() {
                     tracing::debug!("skipping tool result message: empty tool_name in payload");
                 } else {

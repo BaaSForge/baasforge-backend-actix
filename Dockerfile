@@ -11,6 +11,8 @@ ARG CARGO_FEATURES=
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     pkg-config \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -30,6 +32,12 @@ COPY Cargo.toml Cargo.lock build.rs ./
 COPY migrations ./migrations
 COPY chat-channel-ws.html ./
 COPY src ./src
+
+# build.rs + node_modules_files.rs embed type defs via include_str! at compile time.
+# .dockerignore excludes src/tsgo/node_modules/, so install deps here (builder only).
+WORKDIR /app/src/tsgo
+RUN npm ci
+WORKDIR /app
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
@@ -51,6 +59,7 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=builder /app/.env /app/.env
 COPY --from=builder /app/target/release/baal-backend-actix /app/baal-backend-actix
+# Runtime image: type defs are embedded in the binary — no node_modules on disk.
 COPY --from=builder /app/migrations /app/migrations
 COPY diesel.toml /app/diesel.toml
 COPY --from=builder /usr/local/cargo/bin/diesel /usr/local/bin/diesel

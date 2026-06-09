@@ -11,6 +11,8 @@ ARG CARGO_FEATURES=
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     pkg-config \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -31,6 +33,12 @@ COPY migrations ./migrations
 COPY chat-channel-ws.html ./
 COPY src ./src
 
+# build.rs + node_modules_files.rs embed type defs via include_str! at compile time.
+# .dockerignore excludes src/tsgo/node_modules/, so install deps here (builder only).
+WORKDIR /app/src/tsgo
+RUN npm ci
+WORKDIR /app
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     cargo build --release --bin "${BINARY_NAME}"
@@ -45,6 +53,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/.env /app/.env
+# Runtime image: type defs are embedded in the binary — no node_modules on disk.
 COPY --from=builder /app/target/release/chat_worker /app/chat_worker
 
 CMD ["/app/chat_worker"]
