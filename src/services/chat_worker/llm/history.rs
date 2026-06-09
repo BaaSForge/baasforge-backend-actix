@@ -14,6 +14,7 @@ use crate::libs::baal_inline::expand_baal_inlines_for_llm_user_text;
 use crate::models::chat_messages::{
     ChatMessagePayload, ChatMessageType, ChatSessionRoleType, TextPayload, ThinkingBlock,
 };
+use crate::services::chat_worker::llm::tools::get_package_type_definition_file_contents;
 use crate::services::chat_worker::llm::tools::get_packages_type_definition_files;
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -85,6 +86,7 @@ fn is_tool_result_type(type_: &ChatMessageType) -> bool {
             | ChatMessageType::ToolListModulesForUnitContexts
             | ChatMessageType::ToolListProjectEnvKeys
             | ChatMessageType::ToolGetPackagesTypeDefinitionFiles
+            | ChatMessageType::ToolGetPackageTypeDefinitionFileContents
             | ChatMessageType::ToolAnalyzeArchitecture
             | ChatMessageType::ToolFinishArchitectureAnalysis
             | ChatMessageType::ToolAnalyzeSolution
@@ -145,7 +147,8 @@ fn strip_unit_subtask_fields(mut v: Value) -> String {
 ///
 /// `hydrate_static_tool_results`: when false, callers only need ids/names (history cleanup passes).
 /// When true, static manifests are expanded for upstream LLM tool results (e.g.
-/// [`get_packages_type_definition_files`] file paths — same idea as [`strip_unit_subtask_fields`]).
+/// [`get_packages_type_definition_files`] file paths and
+/// [`get_package_type_definition_file_contents`] file contents — same idea as [`strip_unit_subtask_fields`]).
 fn tool_result_from_payload(
     type_: &ChatMessageType,
     payload: &Option<Value>,
@@ -199,6 +202,14 @@ fn tool_result_from_payload(
         Some(ChatMessagePayload::ToolGetPackagesTypeDefinitionFiles(p)) => {
             let content = if hydrate_static_tool_results {
                 get_packages_type_definition_files::upstream_tool_result_content(p)
+            } else {
+                serde_json::to_string(p).unwrap_or_default()
+            };
+            (p.tool_call_id.clone(), p.tool_name.clone(), content)
+        }
+        Some(ChatMessagePayload::ToolGetPackageTypeDefinitionFileContents(p)) => {
+            let content = if hydrate_static_tool_results {
+                get_package_type_definition_file_contents::upstream_tool_result_content(p)
             } else {
                 serde_json::to_string(p).unwrap_or_default()
             };

@@ -17,7 +17,8 @@ use crate::services::chat_worker::llm::tools::{
     ToolFetchRelevantUnitsPayload, ToolFetchSpecificProductionReleaseUnitsPayload,
     ToolFinishArchitectureAnalysisPayload,
     ToolFinishImplementationPayload, ToolFinishObservabilityAnalysisPayload,
-    ToolFinishSolutionAnalysisPayload, ToolGetPackagesTypeDefinitionFilesPayload,
+    ToolFinishSolutionAnalysisPayload, ToolGetPackageTypeDefinitionFileContentsPayload,
+    ToolGetPackagesTypeDefinitionFilesPayload,
     ToolImplementSolutionPayload,
     ToolListModulesForUnitContextsPayload, ToolListProjectEnvKeysPayload,
     ToolListUnitContextsPayload, ToolModifyUnitPayload,
@@ -144,6 +145,7 @@ pub enum ChatMessageType {
     ToolListModulesForUnitContexts,
     ToolListProjectEnvKeys,
     ToolGetPackagesTypeDefinitionFiles,
+    ToolGetPackageTypeDefinitionFileContents,
     ToolAnalyzeArchitecture,
     ToolFinishArchitectureAnalysis,
     ToolAnalyzeSolution,
@@ -217,6 +219,7 @@ pub enum ChatMessagePayload {
     ToolListModulesForUnitContexts(ToolListModulesForUnitContextsPayload),
     ToolListProjectEnvKeys(ToolListProjectEnvKeysPayload),
     ToolGetPackagesTypeDefinitionFiles(ToolGetPackagesTypeDefinitionFilesPayload),
+    ToolGetPackageTypeDefinitionFileContents(ToolGetPackageTypeDefinitionFileContentsPayload),
 }
 
 impl ChatMessagePayload {
@@ -255,6 +258,9 @@ impl ChatMessagePayload {
             ChatMessagePayload::ToolListProjectEnvKeys(_) => "ToolListProjectEnvKeys",
             ChatMessagePayload::ToolGetPackagesTypeDefinitionFiles(_) => {
                 "ToolGetPackagesTypeDefinitionFiles"
+            }
+            ChatMessagePayload::ToolGetPackageTypeDefinitionFileContents(_) => {
+                "ToolGetPackageTypeDefinitionFileContents"
             }
             ChatMessagePayload::ToolCreateUnit(_) => "ToolCreateUnit",
             ChatMessagePayload::ToolModifyUnit(_) => "ToolModifyUnit",
@@ -324,6 +330,11 @@ impl ChatMessagePayload {
             ChatMessageType::ToolGetPackagesTypeDefinitionFiles => {
                 let p = serde_json::from_value::<ToolGetPackagesTypeDefinitionFilesPayload>(v)?;
                 ChatMessagePayload::ToolGetPackagesTypeDefinitionFiles(p)
+            }
+            ChatMessageType::ToolGetPackageTypeDefinitionFileContents => {
+                let p =
+                    serde_json::from_value::<ToolGetPackageTypeDefinitionFileContentsPayload>(v)?;
+                ChatMessagePayload::ToolGetPackageTypeDefinitionFileContents(p)
             }
             ChatMessageType::ToolAnalyzeArchitecture => {
                 let p = serde_json::from_value::<ToolAnalyzeArchitecturePayload>(v)?;

@@ -28,7 +28,8 @@ use uuid::Uuid;
 use super::tools::{
     self, analyze_architecture_tool, analyze_observability_tool, analyze_solution_tool,
     create_unit, fetch_release_traces, finish_architecture_analysis, finish_implementation,
-    finish_observability_analysis, finish_solution_analysis, get_packages_type_definition_files,
+    finish_observability_analysis, finish_solution_analysis, get_package_type_definition_file_contents,
+    get_packages_type_definition_files,
     implement_solution_tool,
     list_modules_for_unit_contexts, list_project_env_keys, list_unit_contexts,
     load_latest_production_release_units,
@@ -78,6 +79,10 @@ fn gemini_declaration_fns_by_name() -> &'static [(
         (
             get_packages_type_definition_files::TOOL_NAME,
             get_packages_type_definition_files::gemini_declaration,
+        ),
+        (
+            get_package_type_definition_file_contents::TOOL_NAME,
+            get_package_type_definition_file_contents::gemini_declaration,
         ),
         (
             analyze_architecture_tool::TOOL_NAME,

@@ -59,7 +59,7 @@ pub const TOOL_NAME: &str = "get_packages_type_definition_files";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "Load TypeScript definition file paths (.d.ts, .d.cts, and package.json) for npm packages. Pass exact package names. Use before importing unfamiliar APIs so you match real exports and types. Returns paths only — call the other tool to load each file's content and inspect the types inside.",
+        description: "Load TypeScript definition file paths (.d.ts, .d.cts, and package.json) for npm packages. Pass exact package names. Use before importing unfamiliar APIs so you match real exports and types. Returns paths only — call `get_package_type_definition_file_contents` to load each file's content and inspect the types inside.",
         parameters: params_schema(),
     }
 }

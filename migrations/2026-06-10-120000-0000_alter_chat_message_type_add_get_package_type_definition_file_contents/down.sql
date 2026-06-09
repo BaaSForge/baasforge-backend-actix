@@ -1,0 +1,1 @@
+ALTER TYPE chat_message_type DROP VALUE 'tool_get_package_type_definition_file_contents';

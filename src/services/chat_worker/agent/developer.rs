@@ -5,7 +5,8 @@ use crate::services::chat_worker::agent::nested_branch_history::{
     load_nested_branch_history, SessionHistoryLoad,
 };
 use crate::services::chat_worker::llm::tools::{
-    create_unit, finish_implementation, get_packages_type_definition_files,
+    create_unit, finish_implementation, get_package_type_definition_file_contents,
+    get_packages_type_definition_files,
     list_modules_for_unit_contexts, list_project_env_keys, list_unit_contexts,
     load_latest_production_release_units, load_latest_specific_production_release_units,
     load_specific_production_release_units, modify_unit, remove_unit,
@@ -57,6 +58,7 @@ pub fn tool_names() -> &'static [&'static str] {
         list_modules_for_unit_contexts::TOOL_NAME,
         list_project_env_keys::TOOL_NAME,
         get_packages_type_definition_files::TOOL_NAME,
+        get_package_type_definition_file_contents::TOOL_NAME,
         create_unit::TOOL_NAME,
         modify_unit::TOOL_NAME,
         remove_unit::TOOL_NAME,
@@ -73,6 +75,7 @@ pub fn tool_message_types() -> &'static [ChatMessageType] {
         list_modules_for_unit_contexts::MESSAGE_TYPE,
         list_project_env_keys::MESSAGE_TYPE,
         get_packages_type_definition_files::MESSAGE_TYPE,
+        get_package_type_definition_file_contents::MESSAGE_TYPE,
         create_unit::MESSAGE_TYPE,
         modify_unit::MESSAGE_TYPE,
         remove_unit::MESSAGE_TYPE,
