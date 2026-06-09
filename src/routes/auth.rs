@@ -1,43 +1,36 @@
 use crate::database;
 use crate::libs::api_response::{api_error, api_success};
 use crate::middlewares::auth::{AccessPayload, RefreshPayload};
-// use actix_web::HttpMessage;
-use crate::models::user_tokens::{UserTokenInternal, UserTokenResponse, UserTokenType};
-use crate::models::users::{PlatformType, User, UserDTO};
+use crate::models::user_tokens::{UserTokenResponse, UserTokenType};
+use crate::models::users::{PlatformType, User};
 use crate::routes::AppContext;
-use crate::schema::users::{email_in_platform, full_name, id_in_platform, platform};
 use crate::schema::{user_tokens, users};
 use crate::services::auth::{
     ACCESS_TOKEN_COOKIE_KEY, ACCESS_TOKEN_EXPIRY_MINUTES, REFRESH_TOKEN_COOKIE_KEY,
-    REFRESH_TOKEN_EXPIRY_MINUTES, create_access_cookie, create_access_token, create_clear_cookie,
-    create_refresh_cookie, create_refresh_token,
+    create_access_cookie, create_access_token, create_clear_cookie,
+};
+use crate::services::oauth::{
+    GoogleOAuth, OAuthProvider, OAuthUserProfile, complete_oauth_login, create_oauth_state,
+    generate_code_verifier, pkce_challenge, verify_oauth_state,
 };
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
-// use actix_web::{HttpRequest};
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
+use reqwest::Url;
 use serde::Deserialize;
 use serde_json::json;
-use uuid::Uuid;
 
-// pub async fn get_user_token(req: HttpRequest) -> Result<HttpResponse, ApiError> {
-//   let user_token = req.cookie("token");
-
-//   match user_token {
-//     Some(cookie) => {
-//       let token = cookie.value().to_string();
-//       let response_success = ApiSuccess::Ok {
-//         message: "".to_string(),
-//         payload: json!({ "token": token }),
-//       };
-
-//       Ok(response_success.into_http_response())
-//     }
-//     None => {
-//       Err(ApiError::NotFound("No user token found".to_string()))
-//     }
-//   }
-// }
+fn oauth_error_redirect(callback_url: &str, message: &str) -> HttpResponse {
+    let location = Url::parse(callback_url)
+        .map(|mut url| {
+            url.query_pairs_mut().append_pair("auth_error", message);
+            url.to_string()
+        })
+        .unwrap_or_else(|_| callback_url.to_string());
+    HttpResponse::Found()
+        .append_header(("Location", location))
+        .finish()
+}
 
 #[derive(Debug, Deserialize)]
 pub struct InitiateGoogleAuthQuery {
@@ -45,15 +38,41 @@ pub struct InitiateGoogleAuthQuery {
     pub callback_url: Option<String>,
 }
 
-// TODO: implement google OAuth here
-pub async fn initiate_google_auth(query: web::Query<InitiateGoogleAuthQuery>) -> HttpResponse {
-    let location = match &query.callback_url {
-        Some(url) => format!(
-            "/api/v1/auth/google/callback?callback-url={}",
-            urlencoding::encode(url)
-        ),
-        None => "/api/v1/auth/google/callback".to_string(),
+pub async fn initiate_google_auth(
+    context: web::Data<AppContext>,
+    query: web::Query<InitiateGoogleAuthQuery>,
+) -> HttpResponse {
+    let Some(callback_url) = query.callback_url.clone() else {
+        return HttpResponse::BadRequest()
+            .json(api_error("callback-url is required", json!({})));
     };
+
+    let google = match GoogleOAuth::from_settings(&context.settings) {
+        Ok(g) => g,
+        Err(_) => {
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "Google login is not configured",
+                json!({}),
+            ));
+        }
+    };
+
+    let code_verifier = generate_code_verifier();
+    let state = match create_oauth_state(
+        &context.settings,
+        OAuthProvider::Google,
+        callback_url,
+        code_verifier.clone(),
+    ) {
+        Ok(s) => s,
+        Err(_) => {
+            return HttpResponse::InternalServerError()
+                .json(api_error("Failed to start Google login", json!({})));
+        }
+    };
+
+    let location = google.authorization_url(&state, &pkce_challenge(&code_verifier));
+
     HttpResponse::SeeOther()
         .append_header(("Location", location))
         .finish()
@@ -61,119 +80,94 @@ pub async fn initiate_google_auth(query: web::Query<InitiateGoogleAuthQuery>) ->
 
 #[derive(Debug, Deserialize)]
 pub struct CallbackGoogleAuthQuery {
-    #[serde(rename = "callback-url")]
-    pub callback_url: String,
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    #[serde(rename = "error_description")]
+    error_description: Option<String>,
 }
 
-// TODO: verify the authenticated user coming from google
 pub async fn handle_google_auth_callback(
     context: web::Data<AppContext>,
     query: web::Query<CallbackGoogleAuthQuery>,
 ) -> HttpResponse {
-    let full_name_dto = "something";
-    let id_in_platform_dto = "2";
-    let email_dto = "user@example.com";
+    if let Some(err) = &query.error {
+        let message = query
+            .error_description
+            .as_deref()
+            .unwrap_or(err.as_str());
+        if let Some(state) = &query.state {
+            if let Ok(oauth_state) =
+                verify_oauth_state(&context.settings, state, OAuthProvider::Google)
+            {
+                return oauth_error_redirect(&oauth_state.callback_url, message);
+            }
+        }
+        return HttpResponse::BadRequest().json(api_error(message, json!({})));
+    }
 
-    let access_token_res = create_access_token(&context.settings);
-    let refresh_token_res = create_refresh_token(&context.settings);
+    let (code, state) = match (&query.code, &query.state) {
+        (Some(code), Some(state)) => (code.as_str(), state.as_str()),
+        _ => {
+            return HttpResponse::BadRequest()
+                .json(api_error("Missing OAuth code or state", json!({})));
+        }
+    };
 
-    let access_token = match access_token_res {
+    let oauth_state = match verify_oauth_state(&context.settings, state, OAuthProvider::Google) {
+        Ok(s) => s,
+        Err(_) => {
+            return HttpResponse::BadRequest()
+                .json(api_error("Invalid or expired OAuth state", json!({})));
+        }
+    };
+
+    let callback_url = oauth_state.callback_url.clone();
+    let code_verifier = oauth_state.code_verifier.clone();
+
+    let google = match GoogleOAuth::from_settings(&context.settings) {
+        Ok(g) => g,
+        Err(_) => {
+            return oauth_error_redirect(&callback_url, "Google login is not configured");
+        }
+    };
+
+    let access_token = match google.exchange_code(code, &code_verifier).await {
         Ok(t) => t,
-        Err(_) => {
-            let api_result = api_error("Failed to create access token", json!({}));
-            return HttpResponse::InternalServerError().json(api_result);
+        Err(e) => {
+            log::error!("[handle_google_auth_callback] token exchange failed: {e}");
+            return oauth_error_redirect(&callback_url, "Google login failed");
         }
     };
 
-    let refresh_token = match refresh_token_res {
-        Ok(t) => t,
-        Err(_) => {
-            let api_result = api_error("Failed to create refresh token", json!({}));
-            return HttpResponse::InternalServerError().json(api_result);
+    let user_info = match google.fetch_user_info(&access_token).await {
+        Ok(u) => u,
+        Err(e) => {
+            log::error!("[handle_google_auth_callback] userinfo failed: {e}");
+            return oauth_error_redirect(&callback_url, "Google login failed");
         }
     };
 
-    let callback_url = query.callback_url.clone();
-    let access_token_for_cookie = access_token.clone();
-    let refresh_token_for_cookie = refresh_token.clone();
-
-    let (_user, _is_just_signed_up) = match database::block_on_db(&context.pool, move |conn| {
-        let existing_user = users::table
-            .filter(platform.eq(PlatformType::Google))
-            .filter(id_in_platform.eq(id_in_platform_dto))
-            .first::<User>(conn)
-            .optional()?;
-
-        let (user, is_just_signed_up) = if let Some(u) = existing_user {
-            let updated = diesel::update(users::table.find(u.id))
-                .set((
-                    full_name.eq(Some(full_name_dto.to_string())),
-                    email_in_platform.eq(Some(email_dto.to_string())),
-                ))
-                .get_result::<User>(conn)?;
-            (updated, false)
-        } else {
-            let new_user = diesel::insert_into(users::table)
-                .values(&UserDTO {
-                    platform: PlatformType::Google,
-                    id_in_platform: id_in_platform_dto.to_string(),
-                    full_name: Some(full_name_dto.to_string()),
-                    email_in_platform: Some(email_dto.to_string()),
-                })
-                .get_result::<User>(conn)?;
-            (new_user, true)
-        };
-
-        let now = Utc::now();
-        let access_exp = now + Duration::minutes(ACCESS_TOKEN_EXPIRY_MINUTES as i64);
-        let refresh_exp = now + Duration::minutes(REFRESH_TOKEN_EXPIRY_MINUTES as i64);
-
-        let refresh_token_row = UserTokenInternal {
-            user_id: user.id,
-            token_type: UserTokenType::Refresh,
-            token: refresh_token,
-            expires_at: refresh_exp,
-            revoked: Some(false),
-            is_signup_token: is_just_signed_up,
-            refresh_token_id: None,
-        };
-        let refresh_token_id: Uuid = diesel::insert_into(user_tokens::table)
-            .values(&refresh_token_row)
-            .returning(user_tokens::id)
-            .get_result::<Uuid>(conn)?;
-
-        let access_token_row = UserTokenInternal {
-            user_id: user.id,
-            token_type: UserTokenType::Access,
-            token: access_token,
-            expires_at: access_exp,
-            revoked: Some(false),
-            is_signup_token: is_just_signed_up,
-            refresh_token_id: Some(refresh_token_id),
-        };
-        diesel::insert_into(user_tokens::table)
-            .values(&access_token_row)
-            .execute(conn)?;
-
-        Ok::<_, diesel::result::Error>((user, is_just_signed_up))
-    })
-    .await
-    {
-        Ok(x) => x,
-        Err(_) => {
-            log::error!("[handle_google_auth_callback] DB/block error");
-            return HttpResponse::ServiceUnavailable()
-                .json(api_error("Database temporarily unavailable", json!({})));
-        }
+    let profile = OAuthUserProfile {
+        platform: PlatformType::Google,
+        id_in_platform: user_info.sub,
+        full_name: user_info.name,
+        email_in_platform: user_info.email,
     };
 
-    let access_token_cookie = create_access_cookie(access_token_for_cookie);
-    let refresh_token_cookie = create_refresh_cookie(refresh_token_for_cookie);
+    let (access_cookie, refresh_cookie) =
+        match complete_oauth_login(&context.pool, &context.settings, profile).await {
+            Ok(cookies) => cookies,
+            Err(_) => {
+                log::error!("[handle_google_auth_callback] DB/block error");
+                return oauth_error_redirect(&callback_url, "Login failed");
+            }
+        };
 
     HttpResponse::Found()
         .append_header(("Location", callback_url))
-        .cookie(access_token_cookie)
-        .cookie(refresh_token_cookie)
+        .cookie(access_cookie)
+        .cookie(refresh_cookie)
         .finish()
 }
 
@@ -223,7 +217,7 @@ pub async fn handle_refresh_token(
 
     match database::block_on_db(&context.pool, move |conn| {
         diesel::insert_into(user_tokens::table)
-            .values(&UserTokenInternal {
+            .values(&crate::models::user_tokens::UserTokenInternal {
                 user_id,
                 token_type: UserTokenType::Access,
                 token: access,
@@ -347,6 +341,7 @@ pub async fn handle_list_tokens(
     let access_payload = extensions
         .get::<AccessPayload>()
         .expect("AccessPayload must exist to list tokens");
+
     let refresh_payload = extensions
         .get::<RefreshPayload>()
         .expect("RefreshPayload must exist to list tokens");

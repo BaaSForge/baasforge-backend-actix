@@ -68,6 +68,12 @@ pub struct Settings {
     pub database_connection_timeout_secs: u64,
     pub auth_access_token_secret: String,
     pub auth_refresh_token_secret: String,
+    /// HMAC secret for signed OAuth state (PKCE + callback URL).
+    pub auth_oauth_state_secret: String,
+    pub google_oauth_client_id: Option<String>,
+    pub google_oauth_client_secret: Option<String>,
+    /// Must match the redirect URI registered in Google Cloud Console exactly.
+    pub google_oauth_redirect_uri: Option<String>,
     pub rabbit_url: String,
     /// Exchange used for retry delay: failed messages are published here, then after TTL are dead-lettered back to the original queue.
     pub retry_delay_exchange: String,
@@ -151,6 +157,20 @@ impl Settings {
             env::var("AUTH_ACCESS_TOKEN_SECRET").expect("AUTH_ACCESS_TOKEN_SECRET must be set");
         let auth_refresh_token_secret =
             env::var("AUTH_REFRESH_TOKEN_SECRET").expect("AUTH_REFRESH_TOKEN_SECRET must be set");
+        let auth_oauth_state_secret =
+            env::var("AUTH_OAUTH_STATE_SECRET").expect("AUTH_OAUTH_STATE_SECRET must be set");
+        let google_oauth_client_id = env::var("GOOGLE_OAUTH_CLIENT_ID")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let google_oauth_client_secret = env::var("GOOGLE_OAUTH_CLIENT_SECRET")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let google_oauth_redirect_uri = env::var("GOOGLE_OAUTH_REDIRECT_URI")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         let rabbit_url = env::var("RABBIT_URL").expect("RABBIT_URL must be set");
         let retry_delay_exchange =
             env::var("RETRY_DELAY_EXCHANGE").expect("RETRY_DELAY_EXCHANGE must be set");
@@ -347,6 +367,10 @@ impl Settings {
             database_connection_timeout_secs,
             auth_access_token_secret,
             auth_refresh_token_secret,
+            auth_oauth_state_secret,
+            google_oauth_client_id,
+            google_oauth_client_secret,
+            google_oauth_redirect_uri,
             rabbit_url,
             retry_delay_exchange,
             retry_delay_ttl_ms,

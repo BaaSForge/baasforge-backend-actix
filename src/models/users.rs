@@ -3,7 +3,7 @@ use diesel::Queryable;
 use serde::Serialize;
 use uuid::Uuid;
 
-#[derive(Debug, diesel_derive_enum::DbEnum, Serialize)]
+#[derive(Debug, Clone, Copy, diesel_derive_enum::DbEnum, Serialize)]
 #[ExistingTypePath = "crate::schema::sql_types::PlatformType"]
 #[DbValueStyle = "snake_case"]
 #[serde(rename_all = "snake_case")]
