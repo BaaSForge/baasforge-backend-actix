@@ -6,8 +6,12 @@
 //! r2d2/Diesel I/O does not block the actix worker thread (which causes 408 timeouts).
 //!
 //! After a long PostgreSQL outage, `test_on_check_out` drops stale connections and r2d2 opens
-//! new ones on the next `pool.get()`. `idle_timeout` evicts idle sockets so the pool does not
-//! keep dead connections around.
+//! new ones on the next `pool.get()`. `idle_timeout` evicts idle sockets; r2d2's default
+//! `max_lifetime` (30 min) rotates connections. `min_idle(0)` avoids proactively opening
+//! `max_size` connections in the background (r2d2's default when `min_idle` is unset).
+//!
+//! Connections are never held across `.await` — only inside `block_on_db` / `block_on_db_tokio`
+//! closures, so they are always returned to the pool when the closure ends (or discarded if broken).
 
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
@@ -92,10 +96,17 @@ pub fn establish_pool(
 ) -> DbPool {
     let manager = ConnectionManager::<PgConnection>::new(&database_url);
 
+    let idle_timeout = if idle_timeout_secs == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(idle_timeout_secs))
+    };
+
     let pool = Pool::builder()
         .max_size(max_size)
+        .min_idle(Some(0))
         .connection_timeout(Duration::from_secs(connection_timeout_secs))
-        .idle_timeout(Some(Duration::from_secs(idle_timeout_secs)))
+        .idle_timeout(idle_timeout)
         .test_on_check_out(true)
         .build(manager)
         .expect("Failed to create database pool");
