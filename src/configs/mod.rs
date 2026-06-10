@@ -66,6 +66,7 @@ pub struct Settings {
     /// Per-process pool size. Total DB connections = (API_replicas + worker_replicas) × this. Keep under PostgreSQL max_connections.
     pub database_pool_size: u32,
     pub database_connection_timeout_secs: u64,
+    pub database_pool_idle_timeout_secs: u64,
     pub auth_access_token_secret: String,
     pub auth_refresh_token_secret: String,
     pub google_oauth_client_id: Option<String>,
@@ -165,6 +166,10 @@ impl Settings {
             .expect("DATABASE_CONNECTION_TIMEOUT_SECS must be set")
             .parse()
             .expect("DATABASE_CONNECTION_TIMEOUT_SECS must be a valid u64");
+        let database_pool_idle_timeout_secs: u64 = env::var("DATABASE_POOL_IDLE_TIMEOUT_SECS")
+            .expect("DATABASE_POOL_IDLE_TIMEOUT_SECS must be set")
+            .parse()
+            .expect("DATABASE_POOL_IDLE_TIMEOUT_SECS must be a valid u64");
         let auth_access_token_secret =
             env::var("AUTH_ACCESS_TOKEN_SECRET").expect("AUTH_ACCESS_TOKEN_SECRET must be set");
         let auth_refresh_token_secret =
@@ -408,6 +413,7 @@ impl Settings {
             pg_database_url,
             database_pool_size,
             database_connection_timeout_secs,
+            database_pool_idle_timeout_secs,
             auth_access_token_secret,
             auth_refresh_token_secret,
             google_oauth_client_id,

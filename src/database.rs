@@ -4,6 +4,10 @@
 //!
 //! All DB access from async handlers/middlewares must go through `block_on_db` so blocking
 //! r2d2/Diesel I/O does not block the actix worker thread (which causes 408 timeouts).
+//!
+//! After a long PostgreSQL outage, `test_on_check_out` drops stale connections and r2d2 opens
+//! new ones on the next `pool.get()`. `idle_timeout` evicts idle sockets so the pool does not
+//! keep dead connections around.
 
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
@@ -44,6 +48,14 @@ impl From<diesel::result::Error> for BlockingDbError {
     }
 }
 
+fn run_on_pool<F, R>(pool: &DbPool, f: F) -> Result<R, BlockingDbError>
+where
+    F: FnOnce(&mut PooledConn) -> Result<R, diesel::result::Error>,
+{
+    let mut conn = pool.get().map_err(BlockingDbError::Pool)?;
+    f(&mut conn).map_err(BlockingDbError::Query)
+}
+
 /// Runs blocking DB work on a dedicated thread so the async worker is not blocked.
 /// Use this for all pool.get() + Diesel work in actix handlers and middlewares to avoid 408 timeouts.
 pub async fn block_on_db<F, R>(pool: &DbPool, f: F) -> Result<R, BlockingDbError>
@@ -52,12 +64,7 @@ where
     R: Send + 'static,
 {
     let pool = pool.clone();
-    match actix_web::web::block(move || {
-        let mut conn = pool.get().map_err(BlockingDbError::Pool)?;
-        f(&mut conn).map_err(BlockingDbError::Query)
-    })
-    .await
-    {
+    match actix_web::web::block(move || run_on_pool(&pool, f)).await {
         Ok(r) => r,
         Err(_) => Err(BlockingDbError::Blocking),
     }
@@ -71,23 +78,24 @@ where
     R: Send + 'static,
 {
     let pool = pool.clone();
-    match tokio::task::spawn_blocking(move || {
-        let mut conn = pool.get().map_err(BlockingDbError::Pool)?;
-        f(&mut conn).map_err(BlockingDbError::Query)
-    })
-    .await
-    {
+    match tokio::task::spawn_blocking(move || run_on_pool(&pool, f)).await {
         Ok(r) => r,
         Err(_) => Err(BlockingDbError::Blocking),
     }
 }
 
-pub fn establish_pool(database_url: String, max_size: u32, connection_timeout_secs: u64) -> DbPool {
+pub fn establish_pool(
+    database_url: String,
+    max_size: u32,
+    connection_timeout_secs: u64,
+    idle_timeout_secs: u64,
+) -> DbPool {
     let manager = ConnectionManager::<PgConnection>::new(&database_url);
 
     let pool = Pool::builder()
         .max_size(max_size)
         .connection_timeout(Duration::from_secs(connection_timeout_secs))
+        .idle_timeout(Some(Duration::from_secs(idle_timeout_secs)))
         .test_on_check_out(true)
         .build(manager)
         .expect("Failed to create database pool");

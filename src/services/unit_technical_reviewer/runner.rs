@@ -38,6 +38,7 @@ pub async fn run() -> Result<(), BoxError> {
         settings.pg_database_url.clone(),
         settings.database_pool_size,
         settings.database_connection_timeout_secs,
+        settings.database_pool_idle_timeout_secs,
     );
 
     let rabbit_url = settings.rabbit_url.clone();

@@ -94,6 +94,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         settings.pg_database_url.clone(),
         settings.database_pool_size,
         settings.database_connection_timeout_secs,
+        settings.database_pool_idle_timeout_secs,
     );
     let rabbit_url = settings.rabbit_url.clone();
     let retry_delay_exchange = settings.retry_delay_exchange.clone();

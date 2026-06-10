@@ -80,6 +80,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
         settings.pg_database_url.clone(),
         settings.database_pool_size,
         settings.database_connection_timeout_secs,
+        settings.database_pool_idle_timeout_secs,
     );
     let ws_broker = Arc::new(ws::WsBroker::new());
     ws::run_redis_subscriber(settings.redis_url.clone(), ws_broker.clone());
