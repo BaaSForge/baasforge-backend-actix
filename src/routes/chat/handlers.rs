@@ -701,12 +701,15 @@ pub async fn handle_create_chat_session_message(
         sub_agent_stuck_continuation_count: 0,
         assistant_turn_id: None,
     };
+    let rabbit_timeout =
+        std::time::Duration::from_secs(context.settings.rabbit_operation_timeout_secs);
     let publish_result = if let Some(ref publisher) = context.rabbit_publisher {
-        chat_message_queue::publish_with_publisher(
+        chat_message_queue::publish_with_publisher_timed(
             publisher,
             project_id,
             session_id,
             &queue_message,
+            rabbit_timeout,
         )
         .await
     } else {
@@ -874,11 +877,15 @@ pub async fn handle_retry_failed_planner_message(
                     json!({}),
                 ));
             };
-            if let Err(e) = chat_message_queue::publish_with_publisher(
+            let rabbit_timeout = std::time::Duration::from_secs(
+                context.settings.rabbit_operation_timeout_secs,
+            );
+            if let Err(e) = chat_message_queue::publish_with_publisher_timed(
                 publisher,
                 project_id,
                 session_id,
                 &queue_message,
+                rabbit_timeout,
             )
             .await
             {

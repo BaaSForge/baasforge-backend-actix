@@ -28,6 +28,7 @@ use actix_web::middleware::from_fn;
 use actix_web::web;
 use std::error::Error;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 pub type SharedRedisConn = Option<Arc<Mutex<redis::aio::MultiplexedConnection>>>;
@@ -82,24 +83,30 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
     );
     let ws_broker = Arc::new(ws::WsBroker::new());
     ws::run_redis_subscriber(settings.redis_url.clone(), ws_broker.clone());
-    let rabbit_publisher = match mq_service::create_shared_publisher(
-        &settings.rabbit_url,
-        message_queue::CHAT_SESSION_EXCHANGE,
-    )
-    .await
-    {
-        Ok(p) => {
-            log::info!("[rabbit] Shared publisher connected");
-            Some(p)
-        }
-        Err(e) => {
-            log::warn!(
-                "[rabbit] Failed to create shared publisher (will open a new connection per publish): {}",
-                e
-            );
-            None
-        }
-    };
+    let rabbit_connect_timeout =
+        Duration::from_secs(settings.rabbit_operation_timeout_secs);
+    let rabbit_publisher =
+        match mq_service::create_shared_publisher_timed(
+            &settings.rabbit_url,
+            message_queue::CHAT_SESSION_EXCHANGE,
+            rabbit_connect_timeout,
+            rabbit_connect_timeout,
+        )
+        .await
+        {
+            Ok(p) => {
+                log::info!("[rabbit] Shared publisher connected");
+                Some(p)
+            }
+            Err(e) => {
+                log::warn!(
+                    "[rabbit] Failed to create shared publisher within {}s: {}",
+                    settings.rabbit_operation_timeout_secs,
+                    e
+                );
+                None
+            }
+        };
     let redis_conn: SharedRedisConn = match redis::Client::open(settings.redis_url.as_str()) {
         Ok(client) => match client.get_multiplexed_async_connection().await {
             Ok(conn) => {

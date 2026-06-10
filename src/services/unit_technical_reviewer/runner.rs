@@ -1,7 +1,8 @@
 use crate::configs::Settings;
 use crate::database::{DbPool, establish_pool};
 use crate::services::message_queue::{
-    SharedRabbitPublisher, create_shared_publisher, publish_to_dead_letter, publish_to_retry_delay,
+    SharedRabbitPublisher, publish_to_dead_letter, publish_to_retry_delay,
+    wait_for_consumer_recovery, wait_for_rabbit_connection, wait_for_shared_publisher,
 };
 use crate::services::unit_technical_reviewer::handlers::{
     process_create_unit_compiler_check, process_create_unit_lint_check, process_create_unit_rule_check,
@@ -16,9 +17,9 @@ use crate::services::unit_technical_reviewer::queue::{
     UnitReviewerQueueMessage, create_reviewer_work_consumer_on_connection,
     reviewer_dead_letter_spec, reviewer_retry_policy,
 };
-use lapin::ConnectionProperties;
 use lapin::options::BasicAckOptions;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tracing::info;
@@ -42,11 +43,14 @@ pub async fn run() -> Result<(), BoxError> {
     let rabbit_url = settings.rabbit_url.clone();
     let retry_delay_exchange = settings.retry_delay_exchange.clone();
     let simulate_failure = settings.unit_reviewer_simulate_failure;
+    let rabbit_recovery_wait =
+        Duration::from_secs(settings.rabbit_worker_recovery_wait_secs);
+    let rabbit_connect_retry =
+        Duration::from_secs(settings.rabbit_connect_retry_interval_secs);
+
     info!("Connecting to RabbitMQ...");
-    let connection = lapin::Connection::connect(&rabbit_url, ConnectionProperties::default())
-        .await
-        .map_err(|e| -> BoxError { e.into() })?;
-    let (_consumer_channel, mut consumer) =
+    let connection = wait_for_rabbit_connection(&rabbit_url, rabbit_connect_retry).await;
+    let (consumer_channel, mut consumer) =
         create_reviewer_work_consumer_on_connection(&connection)
             .await
             .map_err(|e| -> BoxError { e.into() })?;
@@ -60,9 +64,13 @@ pub async fn run() -> Result<(), BoxError> {
     // (via maybe_complete_invoking_message → publish_with_publisher which hardcodes CHAT_SESSION_EXCHANGE)
     // and for dispatching next reviewer checks (to UNIT_REVIEWER_EXCHANGE via publish_reviewer_message).
     // publish_with_channel / publish_with_publisher both accept an exchange name at call time.
-    let publisher = create_shared_publisher(&rabbit_url, UNIT_REVIEWER_EXCHANGE)
-        .await
-        .map_err(|e| -> BoxError { e.into() })?;
+    let publisher = wait_for_shared_publisher(
+        &rabbit_url,
+        UNIT_REVIEWER_EXCHANGE,
+        rabbit_recovery_wait,
+        rabbit_connect_retry,
+    )
+    .await;
 
     info!("Unit technical reviewer started. Consuming from reviewer work queue.");
 
@@ -70,8 +78,15 @@ pub async fn run() -> Result<(), BoxError> {
         let delivery = match delivery_result {
             Ok(d) => d,
             Err(e) => {
-                tracing::error!("Consumer error: {}", e);
-                return Err(std::io::Error::other(format!("consumer error: {e}")).into());
+                tracing::warn!("Consumer error, waiting for RabbitMQ recovery: {}", e);
+                wait_for_consumer_recovery(
+                    &consumer_channel,
+                    e,
+                    rabbit_recovery_wait,
+                    rabbit_connect_retry,
+                )
+                .await;
+                continue;
             }
         };
 
@@ -131,6 +146,7 @@ pub async fn run() -> Result<(), BoxError> {
                     &dead_letter_spec.exchange_name,
                     UNIT_REVIEWER_ROUTING_KEY,
                     &delivery.data,
+                    rabbit_recovery_wait,
                 )
                 .await
                 {
@@ -159,6 +175,7 @@ pub async fn run() -> Result<(), BoxError> {
                             &payload_bytes,
                             retry_num,
                             &retry_policy,
+                            rabbit_recovery_wait,
                         )
                         .await
                         {
@@ -173,6 +190,7 @@ pub async fn run() -> Result<(), BoxError> {
                                 &dead_letter_spec.exchange_name,
                                 UNIT_REVIEWER_ROUTING_KEY,
                                 &delivery.data,
+                                rabbit_recovery_wait,
                             )
                             .await
                             {
@@ -194,6 +212,7 @@ pub async fn run() -> Result<(), BoxError> {
                             &dead_letter_spec.exchange_name,
                             UNIT_REVIEWER_ROUTING_KEY,
                             &delivery.data,
+                            rabbit_recovery_wait,
                         )
                         .await
                         {

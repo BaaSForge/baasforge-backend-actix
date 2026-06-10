@@ -1,15 +1,158 @@
 use lapin::{
-    BasicProperties, Connection, ConnectionProperties, Consumer,
+    BasicProperties, Channel, Connection, ConnectionProperties, Consumer,
     options::*,
     types::{FieldTable, ShortString},
 };
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Lapin auto-recovery: reconnects and replays topology after broker/network failures.
+pub fn rabbit_connection_properties() -> ConnectionProperties {
+    ConnectionProperties::default()
+        .enable_auto_recover()
+        .with_connection_name("baal-backend".into())
+        .configure_backoff(|b| {
+            b.with_min_delay(Duration::from_secs(1))
+                .with_max_delay(Duration::from_secs(30))
+                .with_max_times(usize::MAX)
+        })
+}
+
+pub async fn connect_rabbit(rabbit_url: &str) -> Result<Connection, lapin::Error> {
+    Connection::connect(rabbit_url, rabbit_connection_properties()).await
+}
+
+pub async fn connect_rabbit_timed(
+    rabbit_url: &str,
+    timeout: Duration,
+) -> Result<Connection, lapin::Error> {
+    match tokio::time::timeout(timeout, connect_rabbit(rabbit_url)).await {
+        Ok(result) => result,
+        Err(_) => Err(rabbit_timed_out_lapin_error()),
+    }
+}
+
+fn rabbit_timed_out_lapin_error() -> lapin::Error {
+    std::io::Error::new(std::io::ErrorKind::TimedOut, "rabbit operation timed out").into()
+}
+
+async fn basic_publish_once(
+    channel: &Channel,
+    exchange: &str,
+    routing_key: &str,
+    payload: &[u8],
+    props: BasicProperties,
+) -> Result<(), lapin::Error> {
+    channel
+        .basic_publish(
+            exchange.into(),
+            routing_key.into(),
+            BasicPublishOptions::default(),
+            payload,
+            props,
+        )
+        .await?
+        .await?;
+    Ok(())
+}
+
+async fn wait_for_recovery_timed(
+    channel: &Channel,
+    error: lapin::Error,
+    recovery_wait: Duration,
+) -> Result<(), lapin::Error> {
+    match tokio::time::timeout(recovery_wait, channel.wait_for_recovery(error)).await {
+        Ok(result) => result,
+        Err(_) => Err(rabbit_timed_out_lapin_error()),
+    }
+}
+
+/// One publish attempt; on failure wait (bounded) for lapin recovery, then retry once.
+async fn basic_publish_with_recovery(
+    channel: &Channel,
+    exchange: &str,
+    routing_key: &str,
+    payload: &[u8],
+    props: BasicProperties,
+    recovery_wait: Duration,
+) -> Result<(), lapin::Error> {
+    let err = match basic_publish_once(channel, exchange, routing_key, payload, props.clone()).await
+    {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+    wait_for_recovery_timed(channel, err, recovery_wait).await?;
+    basic_publish_once(channel, exchange, routing_key, payload, props).await
+}
+
+pub async fn wait_for_rabbit_connection(
+    rabbit_url: &str,
+    retry_interval: Duration,
+) -> Connection {
+    loop {
+        match connect_rabbit(rabbit_url).await {
+            Ok(connection) => return connection,
+            Err(e) => {
+                tracing::warn!(
+                    retry_interval_secs = retry_interval.as_secs(),
+                    %e,
+                    "Rabbit connect failed, retrying"
+                );
+                tokio::time::sleep(retry_interval).await;
+            }
+        }
+    }
+}
+
+pub async fn wait_for_shared_publisher(
+    rabbit_url: &str,
+    exchange_name: &str,
+    recovery_wait: Duration,
+    retry_interval: Duration,
+) -> Arc<SharedRabbitPublisher> {
+    loop {
+        match create_shared_publisher(rabbit_url, exchange_name, recovery_wait).await {
+            Ok(publisher) => return publisher,
+            Err(e) => {
+                tracing::warn!(
+                    retry_interval_secs = retry_interval.as_secs(),
+                    %e,
+                    "Rabbit publisher connect failed, retrying"
+                );
+                tokio::time::sleep(retry_interval).await;
+            }
+        }
+    }
+}
+
+/// Bounded consumer recovery: never blocks unbounded; sleeps on timeout to avoid tight loops.
+pub async fn wait_for_consumer_recovery(
+    channel: &Channel,
+    error: lapin::Error,
+    recovery_wait: Duration,
+    backoff: Duration,
+) {
+    match tokio::time::timeout(recovery_wait, channel.wait_for_recovery(error)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            tracing::error!(%e, "Rabbit consumer error is not recoverable");
+        }
+        Err(_) => {
+            tracing::warn!(
+                recovery_wait_secs = recovery_wait.as_secs(),
+                "Rabbit consumer recovery timed out, backing off"
+            );
+            tokio::time::sleep(backoff).await;
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum PublishError {
     Serialize(serde_json::Error),
     Queue(lapin::Error),
+    TimedOut,
 }
 
 impl fmt::Display for PublishError {
@@ -17,6 +160,7 @@ impl fmt::Display for PublishError {
         match self {
             PublishError::Serialize(e) => write!(f, "serialize chat message: {}", e),
             PublishError::Queue(e) => write!(f, "message queue: {}", e),
+            PublishError::TimedOut => write!(f, "rabbit operation timed out"),
         }
     }
 }
@@ -80,23 +224,22 @@ pub async fn publish_to_retry_delay(
     payload: &[u8],
     retry_num: u32,
     policy: &RetryPolicy,
+    recovery_wait: Duration,
 ) -> Result<(), lapin::Error> {
     let delay_ms = policy.retry_delay_ms(retry_num);
     let expiration = ShortString::from(delay_ms.to_string());
     let props = BasicProperties::default()
         .with_delivery_mode(2)
         .with_expiration(expiration);
-    channel
-        .basic_publish(
-            retry_delay_exchange,
-            routing_key,
-            BasicPublishOptions::default(),
-            payload,
-            props,
-        )
-        .await?
-        .await?;
-    Ok(())
+    basic_publish_with_recovery(
+        channel,
+        retry_delay_exchange,
+        routing_key,
+        payload,
+        props,
+        recovery_wait,
+    )
+    .await
 }
 
 /// Publishes a message that exceeded max retries to the dead letter exchange. No TTL; messages stay for later processing/logging.
@@ -105,37 +248,56 @@ pub async fn publish_to_dead_letter(
     dead_letter_exchange: &str,
     routing_key: &str,
     payload: &[u8],
+    recovery_wait: Duration,
 ) -> Result<(), lapin::Error> {
     let props = BasicProperties::default().with_delivery_mode(2);
-    channel
-        .basic_publish(
-            dead_letter_exchange,
-            routing_key,
-            BasicPublishOptions::default(),
-            payload,
-            props,
-        )
-        .await?
-        .await?;
-    Ok(())
+    basic_publish_with_recovery(
+        channel,
+        dead_letter_exchange,
+        routing_key,
+        payload,
+        props,
+        recovery_wait,
+    )
+    .await
 }
 
 pub struct SharedRabbitPublisher {
     _connection: Connection,
     channel: lapin::Channel,
+    recovery_wait: Duration,
 }
 
 /// Creates a shared publisher connection and channel. Assumes exchanges/queues are already created (e.g. via queue_setup_http.sh).
 pub async fn create_shared_publisher(
     rabbit_url: &str,
     _exchange_name: &str,
+    recovery_wait: Duration,
 ) -> Result<Arc<SharedRabbitPublisher>, lapin::Error> {
-    let connection = Connection::connect(rabbit_url, ConnectionProperties::default()).await?;
+    let connection = connect_rabbit(rabbit_url).await?;
     let channel = connection.create_channel().await?;
     Ok(Arc::new(SharedRabbitPublisher {
         _connection: connection,
         channel,
+        recovery_wait,
     }))
+}
+
+pub async fn create_shared_publisher_timed(
+    rabbit_url: &str,
+    exchange_name: &str,
+    recovery_wait: Duration,
+    timeout: Duration,
+) -> Result<Arc<SharedRabbitPublisher>, lapin::Error> {
+    match tokio::time::timeout(
+        timeout,
+        create_shared_publisher(rabbit_url, exchange_name, recovery_wait),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(rabbit_timed_out_lapin_error()),
+    }
 }
 
 pub async fn publish_with_channel(
@@ -145,18 +307,41 @@ pub async fn publish_with_channel(
     payload: &[u8],
 ) -> Result<(), lapin::Error> {
     let props = BasicProperties::default().with_delivery_mode(2);
-    publisher
-        .channel
-        .basic_publish(
+    basic_publish_with_recovery(
+        &publisher.channel,
+        exchange_name,
+        routing_key,
+        payload,
+        props,
+        publisher.recovery_wait,
+    )
+    .await
+}
+
+pub async fn publish_with_channel_timed(
+    publisher: &SharedRabbitPublisher,
+    exchange_name: &str,
+    routing_key: &str,
+    payload: &[u8],
+    timeout: Duration,
+) -> Result<(), PublishError> {
+    let props = BasicProperties::default().with_delivery_mode(2);
+    match tokio::time::timeout(
+        timeout,
+        basic_publish_once(
+            &publisher.channel,
             exchange_name,
             routing_key,
-            BasicPublishOptions::default(),
             payload,
             props,
-        )
-        .await?
-        .await?;
-    Ok(())
+        ),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(PublishError::Queue(e)),
+        Err(_) => Err(PublishError::TimedOut),
+    }
 }
 
 /// Creates a consumer for a durable queue on an existing connection.
@@ -174,8 +359,8 @@ pub async fn create_work_consumer_on_connection(
     consume_opts.no_ack = false;
     let consumer = channel
         .basic_consume(
-            queue_name,
-            &consumer_tag,
+            queue_name.into(),
+            consumer_tag.into(),
             consume_opts,
             FieldTable::default(),
         )

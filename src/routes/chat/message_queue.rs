@@ -8,6 +8,7 @@ use lapin::{Connection, Consumer};
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
 pub const CHAT_SESSION_EXCHANGE: &str = "chat_session_exchange";
@@ -152,6 +153,24 @@ pub async fn publish_with_publisher(
     )
     .await
     .map_err(PublishError::Queue)
+}
+
+pub async fn publish_with_publisher_timed(
+    publisher: &Arc<SharedRabbitPublisher>,
+    project_id: Uuid,
+    session_id: Uuid,
+    message: &ChatSessionQueueMessage,
+    timeout: Duration,
+) -> Result<(), PublishError> {
+    let payload = serde_json::to_vec(message).map_err(PublishError::Serialize)?;
+    message_queue::publish_with_channel_timed(
+        publisher.as_ref(),
+        CHAT_SESSION_EXCHANGE,
+        &chat_session_routing_key(project_id, session_id),
+        &payload,
+        timeout,
+    )
+    .await
 }
 
 pub async fn create_chat_work_consumer_on_connection(

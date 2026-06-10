@@ -81,6 +81,12 @@ pub struct Settings {
     /// HMAC secret for signed GitHub OAuth state (PKCE + callback URL).
     pub github_oauth_state_secret: Option<String>,
     pub rabbit_url: String,
+    /// Max seconds for API-facing Rabbit connect/publish before returning an error (no background retry).
+    pub rabbit_operation_timeout_secs: u64,
+    /// Max seconds workers wait on a single publish/consumer recovery before failing that operation.
+    pub rabbit_worker_recovery_wait_secs: u64,
+    /// Seconds between Rabbit connect retries in worker startup loops.
+    pub rabbit_connect_retry_interval_secs: u64,
     /// Exchange used for retry delay: failed messages are published here, then after TTL are dead-lettered back to the original queue.
     pub retry_delay_exchange: String,
     /// TTL in milliseconds for messages in retry delay queues (e.g. 3000 = 3 seconds).
@@ -196,6 +202,19 @@ impl Settings {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         let rabbit_url = env::var("RABBIT_URL").expect("RABBIT_URL must be set");
+        let rabbit_operation_timeout_secs: u64 = env::var("RABBIT_OPERATION_TIMEOUT_SECS")
+            .expect("RABBIT_OPERATION_TIMEOUT_SECS must be set")
+            .parse()
+            .expect("RABBIT_OPERATION_TIMEOUT_SECS must be a valid u64");
+        let rabbit_worker_recovery_wait_secs: u64 = env::var("RABBIT_WORKER_RECOVERY_WAIT_SECS")
+            .expect("RABBIT_WORKER_RECOVERY_WAIT_SECS must be set")
+            .parse()
+            .expect("RABBIT_WORKER_RECOVERY_WAIT_SECS must be a valid u64");
+        let rabbit_connect_retry_interval_secs: u64 =
+            env::var("RABBIT_CONNECT_RETRY_INTERVAL_SECS")
+                .expect("RABBIT_CONNECT_RETRY_INTERVAL_SECS must be set")
+                .parse()
+                .expect("RABBIT_CONNECT_RETRY_INTERVAL_SECS must be a valid u64");
         let retry_delay_exchange =
             env::var("RETRY_DELAY_EXCHANGE").expect("RETRY_DELAY_EXCHANGE must be set");
         let retry_delay_ttl_ms: u32 = env::var("RETRY_DELAY_TTL_MS")
@@ -400,6 +419,9 @@ impl Settings {
             github_oauth_redirect_uri,
             github_oauth_state_secret,
             rabbit_url,
+            rabbit_operation_timeout_secs,
+            rabbit_worker_recovery_wait_secs,
+            rabbit_connect_retry_interval_secs,
             retry_delay_exchange,
             retry_delay_ttl_ms,
             chat_consumer_timeout_secs,

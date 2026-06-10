@@ -24,12 +24,13 @@ use crate::services::chat_worker::reject_controller_box;
 use crate::services::chat_worker::release_controller_box;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::message_queue::{
-    create_shared_publisher, publish_to_dead_letter, publish_to_retry_delay,
+    publish_to_dead_letter, publish_to_retry_delay, wait_for_consumer_recovery,
+    wait_for_rabbit_connection, wait_for_shared_publisher,
 };
 use diesel::prelude::*;
-use lapin::ConnectionProperties;
 use lapin::options::BasicAckOptions;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tracing::info;
@@ -97,11 +98,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let rabbit_url = settings.rabbit_url.clone();
     let retry_delay_exchange = settings.retry_delay_exchange.clone();
 
+    let rabbit_recovery_wait =
+        Duration::from_secs(settings.rabbit_worker_recovery_wait_secs);
+    let rabbit_connect_retry =
+        Duration::from_secs(settings.rabbit_connect_retry_interval_secs);
+
     info!("Connecting to RabbitMQ...");
-    let connection = lapin::Connection::connect(&rabbit_url, ConnectionProperties::default())
-        .await
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
-    let (_consumer_channel, mut consumer) =
+    let connection = wait_for_rabbit_connection(&rabbit_url, rabbit_connect_retry).await;
+    let (consumer_channel, mut consumer) =
         chat_message_queue::create_chat_work_consumer_on_connection(&connection)
             .await
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
@@ -109,19 +113,28 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .create_channel()
         .await
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
-    let rabbit_publisher =
-        create_shared_publisher(&rabbit_url, chat_message_queue::CHAT_SESSION_EXCHANGE)
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    let rabbit_publisher = wait_for_shared_publisher(
+        &rabbit_url,
+        chat_message_queue::CHAT_SESSION_EXCHANGE,
+        rabbit_recovery_wait,
+        rabbit_connect_retry,
+    )
+    .await;
     info!("Chat worker started. Consuming from work queue.");
 
     'consumer: while let Some(delivery_result) = consumer.next().await {
         let delivery = match delivery_result {
             Ok(d) => d,
             Err(e) => {
-                tracing::error!("Consumer error: {}", e);
-                // Channel is dead (e.g. consumer ack timeout); exit so the supervisor can restart with a fresh connection.
-                return Err(std::io::Error::other(format!("consumer error: {e}")).into());
+                tracing::warn!("Consumer error, waiting for RabbitMQ recovery: {}", e);
+                wait_for_consumer_recovery(
+                    &consumer_channel,
+                    e,
+                    rabbit_recovery_wait,
+                    rabbit_connect_retry,
+                )
+                .await;
+                continue;
             }
         };
 
@@ -354,6 +367,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             &dead_letter_spec.exchange_name,
                             &retry_routing_key,
                             &delivery_data,
+                            rabbit_recovery_wait,
                         )
                         .await
                         {
@@ -393,6 +407,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                         &dead_letter_spec.exchange_name,
                                         &retry_routing_key,
                                         &delivery_data,
+                                        rabbit_recovery_wait,
                                     )
                                     .await
                                     {
@@ -447,6 +462,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             &payload_bytes,
                             retry_num,
                             &retry_policy,
+                            rabbit_recovery_wait,
                         )
                         .await
                         {
