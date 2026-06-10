@@ -1,8 +1,10 @@
+mod github;
 mod google;
 mod login;
 mod pkce;
 mod state;
 
+pub use github::GitHubOAuth;
 pub use google::GoogleOAuth;
 pub use login::{OAuthUserProfile, complete_oauth_login};
 pub use pkce::{generate_code_verifier, pkce_challenge};

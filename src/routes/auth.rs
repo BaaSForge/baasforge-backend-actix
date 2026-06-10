@@ -10,8 +10,8 @@ use crate::services::auth::{
     create_access_cookie, create_access_token, create_clear_cookie,
 };
 use crate::services::oauth::{
-    GoogleOAuth, OAuthProvider, OAuthUserProfile, complete_oauth_login, create_oauth_state,
-    generate_code_verifier, pkce_challenge, verify_oauth_state,
+    GitHubOAuth, GoogleOAuth, OAuthProvider, OAuthUserProfile, complete_oauth_login,
+    create_oauth_state, generate_code_verifier, pkce_challenge, verify_oauth_state,
 };
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use chrono::{Duration, Utc};
@@ -160,6 +160,145 @@ pub async fn handle_google_auth_callback(
             Ok(cookies) => cookies,
             Err(_) => {
                 log::error!("[handle_google_auth_callback] DB/block error");
+                return oauth_error_redirect(&callback_url, "Login failed");
+            }
+        };
+
+    HttpResponse::Found()
+        .append_header(("Location", callback_url))
+        .cookie(access_cookie)
+        .cookie(refresh_cookie)
+        .finish()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InitiateGitHubAuthQuery {
+    #[serde(rename = "callback-url")]
+    pub callback_url: Option<String>,
+}
+
+pub async fn initiate_github_auth(
+    context: web::Data<AppContext>,
+    query: web::Query<InitiateGitHubAuthQuery>,
+) -> HttpResponse {
+    let Some(callback_url) = query.callback_url.clone() else {
+        return HttpResponse::BadRequest()
+            .json(api_error("callback-url is required", json!({})));
+    };
+
+    let github = match GitHubOAuth::from_settings(&context.settings) {
+        Ok(g) => g,
+        Err(_) => {
+            return HttpResponse::ServiceUnavailable().json(api_error(
+                "GitHub login is not configured",
+                json!({}),
+            ));
+        }
+    };
+
+    let code_verifier = generate_code_verifier();
+    let state = match create_oauth_state(
+        &context.settings,
+        OAuthProvider::Github,
+        callback_url,
+        code_verifier.clone(),
+    ) {
+        Ok(s) => s,
+        Err(_) => {
+            return HttpResponse::InternalServerError()
+                .json(api_error("Failed to start GitHub login", json!({})));
+        }
+    };
+
+    let location = github.authorization_url(&state, &pkce_challenge(&code_verifier));
+
+    HttpResponse::SeeOther()
+        .append_header(("Location", location))
+        .finish()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CallbackGitHubAuthQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    #[serde(rename = "error_description")]
+    error_description: Option<String>,
+}
+
+pub async fn handle_github_auth_callback(
+    context: web::Data<AppContext>,
+    query: web::Query<CallbackGitHubAuthQuery>,
+) -> HttpResponse {
+    if let Some(err) = &query.error {
+        let message = query
+            .error_description
+            .as_deref()
+            .unwrap_or(err.as_str());
+        if let Some(state) = &query.state {
+            if let Ok(oauth_state) =
+                verify_oauth_state(&context.settings, state, OAuthProvider::Github)
+            {
+                return oauth_error_redirect(&oauth_state.callback_url, message);
+            }
+        }
+        return HttpResponse::BadRequest().json(api_error(message, json!({})));
+    }
+
+    let (code, state) = match (&query.code, &query.state) {
+        (Some(code), Some(state)) => (code.as_str(), state.as_str()),
+        _ => {
+            return HttpResponse::BadRequest()
+                .json(api_error("Missing OAuth code or state", json!({})));
+        }
+    };
+
+    let oauth_state = match verify_oauth_state(&context.settings, state, OAuthProvider::Github) {
+        Ok(s) => s,
+        Err(_) => {
+            return HttpResponse::BadRequest()
+                .json(api_error("Invalid or expired OAuth state", json!({})));
+        }
+    };
+
+    let callback_url = oauth_state.callback_url.clone();
+    let code_verifier = oauth_state.code_verifier.clone();
+
+    let github = match GitHubOAuth::from_settings(&context.settings) {
+        Ok(g) => g,
+        Err(_) => {
+            return oauth_error_redirect(&callback_url, "GitHub login is not configured");
+        }
+    };
+
+    let access_token = match github.exchange_code(code, &code_verifier).await {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("[handle_github_auth_callback] token exchange failed: {e}");
+            return oauth_error_redirect(&callback_url, "GitHub login failed");
+        }
+    };
+
+    let user_info = match github.fetch_user_info(&access_token).await {
+        Ok(u) => u,
+        Err(e) => {
+            log::error!("[handle_github_auth_callback] userinfo failed: {e}");
+            return oauth_error_redirect(&callback_url, "GitHub login failed");
+        }
+    };
+
+    let profile = OAuthUserProfile {
+        platform: PlatformType::Github,
+        id_in_platform: user_info.id,
+        full_name: user_info.name,
+        email_in_platform: user_info.email,
+    };
+
+    let (access_cookie, refresh_cookie) =
+        match complete_oauth_login(&context.pool, &context.settings, profile).await {
+            Ok(cookies) => cookies,
+            Err(_) => {
+                log::error!("[handle_github_auth_callback] DB/block error");
                 return oauth_error_redirect(&callback_url, "Login failed");
             }
         };

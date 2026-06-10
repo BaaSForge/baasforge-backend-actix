@@ -68,12 +68,18 @@ pub struct Settings {
     pub database_connection_timeout_secs: u64,
     pub auth_access_token_secret: String,
     pub auth_refresh_token_secret: String,
-    /// HMAC secret for signed OAuth state (PKCE + callback URL).
-    pub auth_oauth_state_secret: String,
     pub google_oauth_client_id: Option<String>,
     pub google_oauth_client_secret: Option<String>,
     /// Must match the redirect URI registered in Google Cloud Console exactly.
     pub google_oauth_redirect_uri: Option<String>,
+    /// HMAC secret for signed Google OAuth state (PKCE + callback URL).
+    pub google_oauth_state_secret: Option<String>,
+    pub github_oauth_client_id: Option<String>,
+    pub github_oauth_client_secret: Option<String>,
+    /// Must match the callback URL registered in the GitHub OAuth app exactly.
+    pub github_oauth_redirect_uri: Option<String>,
+    /// HMAC secret for signed GitHub OAuth state (PKCE + callback URL).
+    pub github_oauth_state_secret: Option<String>,
     pub rabbit_url: String,
     /// Exchange used for retry delay: failed messages are published here, then after TTL are dead-lettered back to the original queue.
     pub retry_delay_exchange: String,
@@ -157,8 +163,6 @@ impl Settings {
             env::var("AUTH_ACCESS_TOKEN_SECRET").expect("AUTH_ACCESS_TOKEN_SECRET must be set");
         let auth_refresh_token_secret =
             env::var("AUTH_REFRESH_TOKEN_SECRET").expect("AUTH_REFRESH_TOKEN_SECRET must be set");
-        let auth_oauth_state_secret =
-            env::var("AUTH_OAUTH_STATE_SECRET").expect("AUTH_OAUTH_STATE_SECRET must be set");
         let google_oauth_client_id = env::var("GOOGLE_OAUTH_CLIENT_ID")
             .ok()
             .map(|s| s.trim().to_string())
@@ -168,6 +172,26 @@ impl Settings {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         let google_oauth_redirect_uri = env::var("GOOGLE_OAUTH_REDIRECT_URI")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let google_oauth_state_secret = env::var("GOOGLE_OAUTH_STATE_SECRET")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let github_oauth_client_id = env::var("APP_GITHUB_OAUTH_CLIENT_ID")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let github_oauth_client_secret = env::var("APP_GITHUB_OAUTH_CLIENT_SECRET")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let github_oauth_redirect_uri = env::var("APP_GITHUB_OAUTH_REDIRECT_URI")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let github_oauth_state_secret = env::var("APP_GITHUB_OAUTH_STATE_SECRET")
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
@@ -367,10 +391,14 @@ impl Settings {
             database_connection_timeout_secs,
             auth_access_token_secret,
             auth_refresh_token_secret,
-            auth_oauth_state_secret,
             google_oauth_client_id,
             google_oauth_client_secret,
             google_oauth_redirect_uri,
+            google_oauth_state_secret,
+            github_oauth_client_id,
+            github_oauth_client_secret,
+            github_oauth_redirect_uri,
+            github_oauth_state_secret,
             rabbit_url,
             retry_delay_exchange,
             retry_delay_ttl_ms,

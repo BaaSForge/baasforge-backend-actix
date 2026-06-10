@@ -174,6 +174,18 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .wrap(from_fn(auth_opened_guard_middleware)),
                     )
                     .route(
+                        "/github/initiate",
+                        web::post()
+                            .to(auth::initiate_github_auth)
+                            .wrap(from_fn(auth_opened_guard_middleware)),
+                    )
+                    .route(
+                        "/github/callback",
+                        web::get()
+                            .to(auth::handle_github_auth_callback)
+                            .wrap(from_fn(auth_opened_guard_middleware)),
+                    )
+                    .route(
                         "/logout",
                         web::post()
                             .to(auth::handle_logout)

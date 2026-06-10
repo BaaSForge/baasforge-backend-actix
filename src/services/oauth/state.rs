@@ -23,6 +23,17 @@ pub struct OAuthStateClaims {
     pub exp: usize,
 }
 
+fn oauth_state_secret<'a>(
+    settings: &'a Settings,
+    provider: OAuthProvider,
+) -> Result<&'a str, Error> {
+    let secret = match provider {
+        OAuthProvider::Google => settings.google_oauth_state_secret.as_deref(),
+        OAuthProvider::Github => settings.github_oauth_state_secret.as_deref(),
+    };
+    secret.ok_or_else(|| Error::from(ErrorKind::InvalidToken))
+}
+
 pub fn create_oauth_state(
     settings: &Settings,
     provider: OAuthProvider,
@@ -36,10 +47,11 @@ pub fn create_oauth_state(
         code_verifier,
         exp,
     };
+    let secret = oauth_state_secret(settings, provider)?;
     encode(
         &Header::new(Algorithm::HS256),
         &claims,
-        &EncodingKey::from_secret(settings.auth_oauth_state_secret.as_ref()),
+        &EncodingKey::from_secret(secret.as_bytes()),
     )
 }
 
@@ -48,10 +60,11 @@ pub fn verify_oauth_state(
     token: &str,
     expected_provider: OAuthProvider,
 ) -> Result<OAuthStateClaims, Error> {
+    let secret = oauth_state_secret(settings, expected_provider)?;
     let validation = Validation::new(Algorithm::HS256);
     let token_data = decode::<OAuthStateClaims>(
         token,
-        &DecodingKey::from_secret(settings.auth_oauth_state_secret.as_ref()),
+        &DecodingKey::from_secret(secret.as_bytes()),
         &validation,
     )?;
 
