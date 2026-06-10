@@ -18,7 +18,7 @@ use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::GenerateOutcome;
 use futures::StreamExt;
 use openai::Credentials;
-use redis::aio::MultiplexedConnection;
+use crate::services::redis_conn::RedisConnection;
 use reqwest::header::{AUTHORIZATION, HeaderValue};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
@@ -329,7 +329,7 @@ pub async fn call_gpt_stream(
     pool: &crate::database::DbPool,
     session_messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
     user_text: &str,
-    redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
+    redis_conn: Option<crate::services::redis_conn::RedisConn>,
     topic: &str,
     message_id: uuid::Uuid,
     user_id: uuid::Uuid,
@@ -377,8 +377,8 @@ pub async fn call_gpt_stream(
         if let Some(r) = chunk.reasoning_content.as_ref().filter(|s| !s.is_empty()) {
             full_thinking.push_str(r);
             if let Some(ref conn) = redis_conn {
-                let mut guard = conn.lock().await;
-                if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+                if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                     return Ok(GenerateOutcome::Stopped(TextPayload {
                         text: full_text,
                         requested_tool_calls: None,
@@ -394,7 +394,7 @@ pub async fn call_gpt_stream(
                     false,
                 );
                 let ws_event = WsServerEvent::ChatSessionNewThinkingChunk(payload);
-                if let Err(e) = publish_event_to_channel(&mut *guard, topic, &ws_event).await {
+                if let Err(e) = publish_event_to_channel(&mut guard, topic, &ws_event).await {
                     tracing::warn!("Failed to publish OpenAI thinking chunk to Redis: {}", e);
                 }
                 thinking_chunk_index += 1;
@@ -403,8 +403,8 @@ pub async fn call_gpt_stream(
         if let Some(c) = chunk.content.as_ref().filter(|s| !s.is_empty()) {
             full_text.push_str(c);
             if !is_tool_response && let Some(ref conn) = redis_conn {
-                let mut guard = conn.lock().await;
-                if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+                if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                     return Ok(GenerateOutcome::Stopped(TextPayload {
                         text: full_text,
                         requested_tool_calls: None,
@@ -420,7 +420,7 @@ pub async fn call_gpt_stream(
                     false,
                 );
                 let _ = publish_event_to_channel(
-                    &mut *guard,
+                    &mut guard,
                     topic,
                     &WsServerEvent::ChatSessionNewMessageChunk(payload),
                 )
@@ -473,8 +473,8 @@ pub async fn call_gpt_stream(
 
     if has_tool_calls
         && let Some(ref conn) = redis_conn {
-            let mut guard = conn.lock().await;
-            if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+            let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+            if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                 return Ok(GenerateOutcome::Stopped(TextPayload {
                     text: full_text,
                     requested_tool_calls: None,
@@ -527,8 +527,8 @@ pub async fn call_gpt_stream(
             }
         }
         if let Some(ref conn) = redis_conn {
-            let mut guard = conn.lock().await;
-            if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+            let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+            if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                 return Ok(GenerateOutcome::Stopped(TextPayload {
                     text: full_text,
                     requested_tool_calls: None,
@@ -574,7 +574,7 @@ pub async fn call_gpt_stream(
     };
 
     if published_stream_chunks && let Some(ref conn) = redis_conn {
-        let mut guard = conn.lock().await;
+        let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
         if thinking_chunk_index > 0 {
             let thinking_done = ChatSessionNewThinkingChunkPayload::new(
                 project_id,
@@ -585,7 +585,7 @@ pub async fn call_gpt_stream(
                 true,
             );
             let _ = publish_event_to_channel(
-                &mut *guard,
+                &mut guard,
                 topic,
                 &WsServerEvent::ChatSessionNewThinkingChunk(thinking_done),
             )
@@ -601,7 +601,7 @@ pub async fn call_gpt_stream(
             true,
         );
         let _ = publish_event_to_channel(
-            &mut *guard,
+            &mut guard,
             topic,
             &WsServerEvent::ChatSessionNewMessageChunk(payload),
         )

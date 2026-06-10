@@ -739,8 +739,8 @@ pub async fn handle_create_chat_session_message(
             session_id,
         };
         let event = WsServerEvent::ChatSessionGenerationStarted(payload);
-        let mut guard = redis_conn.lock().await;
-        if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &event).await {
+        let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+        if let Err(e) = publish_event_to_channel(&mut guard, &topic, &event).await {
             tracing::warn!("Failed to broadcast generation started to Redis: {}", e);
         }
     }
@@ -921,7 +921,7 @@ pub async fn handle_retry_failed_planner_message(
 
             if let Some(ref redis_conn) = context.redis_conn {
                 let topic = user_channel(user_id);
-                let mut guard = redis_conn.lock().await;
+                let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
                 let status_event =
                     WsServerEvent::ChatSessionMessageStatusChange(ChatSessionMessageStatusChangePayload {
                         project_id,
@@ -929,7 +929,7 @@ pub async fn handle_retry_failed_planner_message(
                         message_id,
                         status: ChatMessageStatus::Generating,
                     });
-                if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &status_event).await {
+                if let Err(e) = publish_event_to_channel(&mut guard, &topic, &status_event).await {
                     tracing::warn!(
                         "retry planner: failed to publish status Generating to Redis: {}",
                         e
@@ -941,7 +941,7 @@ pub async fn handle_retry_failed_planner_message(
                         session_id,
                     },
                 );
-                if let Err(e) = publish_event_to_channel(&mut *guard, &topic, &gen_event).await {
+                if let Err(e) = publish_event_to_channel(&mut guard, &topic, &gen_event).await {
                     tracing::warn!(
                         "retry planner: failed to broadcast generation started to Redis: {}",
                         e
@@ -1050,9 +1050,9 @@ pub async fn handle_stop_generating(
     }
 
     if let Some(ref redis_conn) = context.redis_conn {
-        let mut guard = redis_conn.lock().await;
+        let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
         for message_id in &generating_message_ids {
-            if let Err(e) = set_stopped_message_id(&mut *guard, *message_id, ttl_secs).await {
+            if let Err(e) = set_stopped_message_id(&mut guard, *message_id, ttl_secs).await {
                 tracing::warn!(
                     %message_id,
                     "Failed to set stopped message id in Redis: {}",
@@ -1070,7 +1070,7 @@ pub async fn handle_stop_generating(
                     status: ChatMessageStatus::Stopped,
                 },
             );
-            if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+            if let Err(e) = publish_event_to_channel(&mut guard, &channel, &event).await {
                 tracing::warn!(
                     %message_id,
                     "Failed to publish message status change to Redis: {}",
@@ -1082,7 +1082,7 @@ pub async fn handle_stop_generating(
             project_id: project_id_ws,
             session_id: session_id_ws,
         });
-        if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+        if let Err(e) = publish_event_to_channel(&mut guard, &channel, &event).await {
             tracing::warn!("Failed to publish generation ended to Redis: {}", e);
         }
     }
@@ -1818,9 +1818,9 @@ pub async fn broadcast_production_live_release_changed(
     let event = WsServerEvent::ProductionLiveReleaseChanged(ProductionLiveReleaseChangedPayload {
         project_id,
     });
-    let mut guard = redis_conn.lock().await;
+    let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
     if let Err(e) =
-        publish_event_to_channel(&mut *guard, &user_channel(owner_user_id), &event).await
+        publish_event_to_channel(&mut guard, &user_channel(owner_user_id), &event).await
     {
         tracing::warn!(
             "[broadcast_production_live_release_changed] WS publish failed: {}",
@@ -1847,8 +1847,8 @@ pub async fn broadcast_stage_release_create_effects(
             session_id,
             message,
         });
-        let mut guard = redis_conn.lock().await;
-        if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
+        let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+        if let Err(e) = publish_event_to_channel(&mut guard, &user_channel(user_id), &event).await
         {
             tracing::warn!(
                 "[broadcast_stage_release_create_effects] WS publish failed: {}",
@@ -2158,8 +2158,8 @@ pub async fn handle_create_production_release(
                     session_id,
                     message,
                 });
-                let mut guard = redis_conn.lock().await;
-                if let Err(e) = publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
+                let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+                if let Err(e) = publish_event_to_channel(&mut guard, &user_channel(user_id), &event).await
                 {
                     tracing::warn!("[handle_create_production_release] WS publish failed: {}", e);
                 }
@@ -2172,7 +2172,7 @@ pub async fn handle_create_production_release(
                             message: message_reject,
                         });
                     if let Err(e) =
-                        publish_event_to_channel(&mut *guard, &user_channel(user_id), &event_reject)
+                        publish_event_to_channel(&mut guard, &user_channel(user_id), &event_reject)
                             .await
                     {
                         tracing::warn!(
@@ -2190,7 +2190,7 @@ pub async fn handle_create_production_release(
                             message: message_user,
                         });
                     if let Err(e) =
-                        publish_event_to_channel(&mut *guard, &user_channel(user_id), &event_user)
+                        publish_event_to_channel(&mut guard, &user_channel(user_id), &event_user)
                             .await
                     {
                         tracing::warn!(
@@ -2530,9 +2530,9 @@ pub async fn handle_confirm_reject_controller(
                         session_id,
                         message,
                     });
-                let mut guard = redis_conn.lock().await;
+                let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
                 if let Err(e) =
-                    publish_event_to_channel(&mut *guard, &user_channel(user_id), &event).await
+                    publish_event_to_channel(&mut guard, &user_channel(user_id), &event).await
                 {
                     tracing::warn!(
                         "[handle_confirm_reject_controller] WS publish (reject) failed: {}",
@@ -2549,7 +2549,7 @@ pub async fn handle_confirm_reject_controller(
                         },
                     );
                     if let Err(e) =
-                        publish_event_to_channel(&mut *guard, &user_channel(user_id), &event_r)
+                        publish_event_to_channel(&mut guard, &user_channel(user_id), &event_r)
                             .await
                     {
                         tracing::warn!(

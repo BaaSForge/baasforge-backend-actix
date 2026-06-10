@@ -122,9 +122,9 @@ pub async fn process_remove_unit_rule_check(
                             session_id: message.session_id,
                             unit: removed_unit,
                         });
-                        let mut guard = redis_conn.lock().await;
+                        let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
                         if let Err(e) =
-                            publish_event_to_channel(&mut *guard, &channel, &unit_event).await
+                            publish_event_to_channel(&mut guard, &channel, &unit_event).await
                         {
                             tracing::warn!(
                                 "unit reviewer: failed to broadcast ProjectUnitDeleted: {}",

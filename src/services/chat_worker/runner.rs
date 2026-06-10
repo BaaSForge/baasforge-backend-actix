@@ -27,11 +27,11 @@ use crate::services::message_queue::{
     publish_to_dead_letter, publish_to_retry_delay, wait_for_consumer_recovery,
     wait_for_rabbit_connection, wait_for_shared_publisher,
 };
+use crate::services::redis_conn::{self, RedisConn};
 use diesel::prelude::*;
 use lapin::options::BasicAckOptions;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tracing::info;
 use uuid::Uuid;
@@ -40,14 +40,12 @@ use crate::database::DbPool;
 
 /// One-turn user line when a nested sub-agent completed with text but no `tool_calls` (see chat-queue flow).
 const SUB_AGENT_STUCK_NUDGE: &str = "Your last reply in this nested run had no tool_calls. The worker only schedules your next turn after tool_calls execute (or after you call the finish tool). Reply again with at least one tool_call—use your data tools as needed, or call the finish tool when done. Do not send assistant text without tool_calls.";
-use redis::aio::MultiplexedConnection;
-
 /// Ensures the placeholder AI message exists with status Failed in the DB (inserts if it was never
 /// created because the LLM failed before streaming any chunk), then notifies the client via
 /// WebSocket. Call this whenever generation has failed and we will not retry.
 async fn set_message_failed_and_notify(
     pool: &DbPool,
-    redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    redis_conn: &RedisConn,
     rabbit_publisher: &Arc<SharedRabbitPublisher>,
     user_id: Uuid,
     project_id: Uuid,
@@ -85,9 +83,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let llm_client = build_llm_client(&settings)?;
     info!(provider = %llm_provider, "Using LLM provider");
 
-    let redis_client = redis::Client::open(settings.redis_url.as_str())?;
-    let redis_conn = redis_client.get_multiplexed_async_connection().await?;
-    let redis_conn = Arc::new(Mutex::new(redis_conn));
+    let redis_conn = redis_conn::connect_redis_conn(&settings.redis_url)
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
     info!("Connected to Redis for streaming chunks");
 
     let pool = establish_pool(
@@ -177,8 +175,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let agent = payload.agent.clone();
 
             {
-                let mut guard = redis_conn.lock().await;
-                if let Ok(true) = is_message_stopped(&mut *guard, response_message_id).await {
+                let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+                if let Ok(true) = is_message_stopped(&mut guard, response_message_id).await {
                     tracing::info!(
                         %project_id,
                         %session_id,
@@ -642,8 +640,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     message: created_message,
                 });
             {
-                let mut guard = redis_conn.lock().await;
-                if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+                let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+                if let Err(e) = publish_event_to_channel(&mut guard, &channel, &event).await {
                     tracing::warn!("Failed to publish new message to Redis: {}", e);
                 }
             }

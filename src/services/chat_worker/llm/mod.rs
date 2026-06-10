@@ -4,7 +4,7 @@ use crate::models::chat_messages::{
     ChatAgentType, ChatMessageType, ChatSessionRoleType, TextPayload,
 };
 use crate::services::chat_worker::agent_flow::AgentFlowSession;
-use redis::aio::MultiplexedConnection;
+use crate::services::redis_conn::RedisConnection;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex as StdMutex};
@@ -103,7 +103,7 @@ impl LlmClient {
         pool: &DbPool,
         session_messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
         user_text: &str,
-        redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
+        redis_conn: Option<crate::services::redis_conn::RedisConn>,
         topic: &str,
         message_id: Uuid,
         user_id: Uuid,

@@ -18,14 +18,14 @@ use crate::schema::chat_messages;
 use crate::services::chat_worker::llm::tools::cascade_sub_agent_ai_text_failure_to_planner;
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
-use redis::aio::MultiplexedConnection;
+use crate::services::redis_conn::RedisConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 pub async fn fail_generating_placeholder_message(
     pool: &DbPool,
-    redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    redis_conn: &crate::services::redis_conn::RedisConn,
     rabbit_publisher: &Arc<SharedRabbitPublisher>,
     user_id: Uuid,
     project_id: Uuid,
@@ -135,8 +135,8 @@ pub async fn fail_generating_placeholder_message(
         message_id: response_message_id,
         status: ChatMessageStatus::Failed,
     });
-    let mut guard = redis_conn.lock().await;
-    if let Err(redis_e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+    let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+    if let Err(redis_e) = publish_event_to_channel(&mut guard, &channel, &event).await {
         tracing::warn!(
             "fail_generating_placeholder_message: Redis status event failed: {}",
             redis_e
@@ -148,7 +148,7 @@ pub async fn fail_generating_placeholder_message(
 /// Called from the runner only, after `process_one` for a TEXT message. When `will_schedule_continuation`
 /// is false (no tool calls and no stuck-sub-agent re-queue), broadcast `ChatSessionGenerationEnded`.
 pub async fn notify_if_generation_loop_finished(
-    redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    redis_conn: &crate::services::redis_conn::RedisConn,
     user_id: Uuid,
     project_id: Uuid,
     session_id: Uuid,
@@ -162,8 +162,8 @@ pub async fn notify_if_generation_loop_finished(
         project_id,
         session_id,
     });
-    let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+    let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+    if let Err(e) = publish_event_to_channel(&mut guard, &channel, &event).await {
         tracing::warn!("Failed to broadcast generation ended to Redis: {}", e);
     }
 }

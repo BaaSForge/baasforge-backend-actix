@@ -87,7 +87,7 @@ pub fn payload_from_args(
 /// The analyzer must call `finish_solution_analysis` when done, which fills this tool row and completes the planner invoker.
 pub async fn handler(
     _pool: DbPool,
-    _redis_conn: Arc<Mutex<redis::aio::MultiplexedConnection>>,
+    _redis_conn: crate::services::redis_conn::RedisConn,
     project_id: Uuid,
     session_id: Uuid,
     message_id: Uuid,

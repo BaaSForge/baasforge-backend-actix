@@ -15,7 +15,7 @@ use crate::services::chat_worker::llm::{GenerateOutcome, LlmClient};
 use crate::services::chat_worker::circuit_breaker::{self};
 use crate::services::releases::chat_session_stale_base_release;
 use diesel::prelude::*;
-use redis::aio::MultiplexedConnection;
+use crate::services::redis_conn::RedisConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -42,7 +42,7 @@ fn text_payload_for_empty_llm_response() -> TextPayload {
 pub async fn process_one(
     pool: &DbPool,
     llm_client: &LlmClient,
-    redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    redis_conn: &crate::services::redis_conn::RedisConn,
     rabbit_publisher: &Arc<crate::services::message_queue::SharedRabbitPublisher>,
     user_id: Uuid,
     project_id: Uuid,
@@ -238,8 +238,7 @@ pub async fn process_one(
                             message,
                         },
                     );
-                    let mut guard = redis_conn.lock().await;
-                    publish_event_to_channel(&mut *guard, &channel, &event)
+                    crate::routes::ws::redis::publish_event_on_conn(redis_conn.clone(), &channel, &event)
                         .await
                         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                             e.to_string().into()
@@ -310,8 +309,7 @@ pub async fn process_one(
                                 message,
                             },
                         );
-                        let mut guard = redis_conn.lock().await;
-                        publish_event_to_channel(&mut *guard, &channel, &event)
+                        crate::routes::ws::redis::publish_event_on_conn(redis_conn.clone(), &channel, &event)
                             .await
                             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                                 e.to_string().into()

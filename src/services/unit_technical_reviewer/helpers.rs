@@ -15,13 +15,11 @@ use crate::services::unit_technical_reviewer::queue::{
     UnitReviewerMessageType, UnitReviewerQueueMessage,
 };
 use diesel::prelude::*;
-use redis::aio::MultiplexedConnection;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
-pub type RedisConn = Arc<Mutex<MultiplexedConnection>>;
+pub use crate::services::redis_conn::RedisConn;
 
 /// Re-exported for convenience so callers can import from `helpers` without knowing the module
 /// structure changed.
@@ -129,8 +127,8 @@ pub async fn broadcast_message_updated(
         session_id,
         message,
     });
-    let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+    let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+    if let Err(e) = publish_event_to_channel(&mut guard, &channel, &event).await {
         tracing::warn!(
             "unit reviewer: failed to broadcast ChatSessionMessageUpdated: {}",
             e

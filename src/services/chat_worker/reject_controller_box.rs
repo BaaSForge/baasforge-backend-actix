@@ -16,7 +16,7 @@ use crate::schema::chat_messages;
 use crate::services::message_queue::SharedRabbitPublisher;
 use crate::services::releases::{LogicalUnitKey, logical_unit_key};
 use diesel::prelude::*;
-use redis::aio::MultiplexedConnection;
+use crate::services::redis_conn::RedisConnection;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -99,7 +99,7 @@ fn unit_changes_from_tool_rows(rows: &[ChatMessageRow]) -> Vec<ProjectUnitRespon
 
 pub async fn consume_reject_controller_box_queue_message(
     pool: &DbPool,
-    redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    redis_conn: &crate::services::redis_conn::RedisConn,
     user_id: Uuid,
     project_id: Uuid,
     session_id: Uuid,
@@ -209,8 +209,8 @@ pub async fn consume_reject_controller_box_queue_message(
         session_id,
         message,
     });
-    let mut guard = redis_conn.lock().await;
-    let _ = publish_event_to_channel(&mut *guard, &channel, &event).await;
+    let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+    let _ = publish_event_to_channel(&mut guard, &channel, &event).await;
     Ok(())
 }
 

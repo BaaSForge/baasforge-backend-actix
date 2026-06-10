@@ -87,7 +87,7 @@ pub fn payload_from_args(
 
 pub async fn handler(
     pool: DbPool,
-    redis_conn: Arc<Mutex<redis::aio::MultiplexedConnection>>,
+    redis_conn: crate::services::redis_conn::RedisConn,
     project_id: Uuid,
     session_id: Uuid,
     message_id: Uuid,
@@ -208,8 +208,8 @@ pub async fn handler(
             session_id,
             message,
         });
-        let mut guard = redis_conn.lock().await;
-        if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+        let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+        if let Err(e) = publish_event_to_channel(&mut guard, &channel, &event).await {
             tracing::warn!(
                 "finish_solution_analysis: failed to publish message update: {}",
                 e

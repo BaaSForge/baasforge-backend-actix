@@ -16,7 +16,7 @@ use crate::services::chat_worker::llm::history::{
     UpstreamHistoryEntry, session_messages_to_upstream_entries,
 };
 use futures::StreamExt;
-use redis::aio::MultiplexedConnection;
+use crate::services::redis_conn::RedisConnection;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -402,7 +402,7 @@ pub async fn call_claude_stream(
     pool: &crate::database::DbPool,
     session_messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
     user_text: &str,
-    redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
+    redis_conn: Option<crate::services::redis_conn::RedisConn>,
     topic: &str,
     message_id: Uuid,
     user_id: Uuid,
@@ -507,8 +507,8 @@ pub async fn call_claude_stream(
                         .or_default()
                         .push_str(&thinking);
                     if let Some(ref conn) = redis_conn {
-                        let mut guard = conn.lock().await;
-                        if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                        let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+                        if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                             return Ok(GenerateOutcome::Stopped(TextPayload {
                                 text: full_text,
                                 requested_tool_calls: None,
@@ -529,7 +529,7 @@ pub async fn call_claude_stream(
                         );
                         let ws_event = WsServerEvent::ChatSessionNewThinkingChunk(payload);
                         if let Err(e) =
-                            publish_event_to_channel(&mut *guard, topic, &ws_event).await
+                            publish_event_to_channel(&mut guard, topic, &ws_event).await
                         {
                             tracing::warn!("Failed to publish thinking chunk to Redis: {}", e);
                         }
@@ -541,8 +541,8 @@ pub async fn call_claude_stream(
                 if !text.is_empty() {
                     full_text.push_str(&text);
                     if let Some(ref conn) = redis_conn {
-                        let mut guard = conn.lock().await;
-                        if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                        let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+                        if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                             return Ok(GenerateOutcome::Stopped(TextPayload {
                                 text: full_text,
                                 requested_tool_calls: None,
@@ -563,7 +563,7 @@ pub async fn call_claude_stream(
                         );
                         let ws_event = WsServerEvent::ChatSessionNewMessageChunk(payload);
                         if let Err(e) =
-                            publish_event_to_channel(&mut *guard, topic, &ws_event).await
+                            publish_event_to_channel(&mut guard, topic, &ws_event).await
                         {
                             tracing::warn!("Failed to publish chat chunk to Redis: {}", e);
                         }
@@ -637,8 +637,8 @@ pub async fn call_claude_stream(
         None
     } else {
         if let Some(ref conn) = redis_conn {
-            let mut guard = conn.lock().await;
-            if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+            let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+            if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                 return Ok(GenerateOutcome::Stopped(TextPayload {
                     text: full_text,
                     requested_tool_calls: None,
@@ -686,8 +686,8 @@ pub async fn call_claude_stream(
                 }
             }
             if let Some(ref conn) = redis_conn {
-                let mut guard = conn.lock().await;
-                if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+                if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                     return Ok(GenerateOutcome::Stopped(TextPayload {
                         text: full_text,
                         requested_tool_calls: None,
@@ -731,7 +731,7 @@ pub async fn call_claude_stream(
     };
 
     if published_stream_chunks && let Some(ref conn) = redis_conn {
-        let mut guard = conn.lock().await;
+        let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
         if thinking_chunk_index > 0 {
             let thinking_done = ChatSessionNewThinkingChunkPayload::new(
                 project_id,
@@ -742,7 +742,7 @@ pub async fn call_claude_stream(
                 true,
             );
             if let Err(e) = publish_event_to_channel(
-                &mut *guard,
+                &mut guard,
                 topic,
                 &WsServerEvent::ChatSessionNewThinkingChunk(thinking_done),
             )
@@ -760,7 +760,7 @@ pub async fn call_claude_stream(
             true,
         );
         let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
-        if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
+        if let Err(e) = publish_event_to_channel(&mut guard, topic, &event).await {
             tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
         }
     }

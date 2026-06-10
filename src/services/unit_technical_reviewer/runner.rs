@@ -4,6 +4,7 @@ use crate::services::message_queue::{
     SharedRabbitPublisher, publish_to_dead_letter, publish_to_retry_delay,
     wait_for_consumer_recovery, wait_for_rabbit_connection, wait_for_shared_publisher,
 };
+use crate::services::redis_conn;
 use crate::services::unit_technical_reviewer::handlers::{
     process_create_unit_compiler_check, process_create_unit_lint_check, process_create_unit_rule_check,
     process_modify_unit_compiler_check, process_modify_unit_lint_check, process_modify_unit_rule_check,
@@ -20,7 +21,6 @@ use crate::services::unit_technical_reviewer::queue::{
 use lapin::options::BasicAckOptions;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tracing::info;
 
@@ -29,9 +29,9 @@ pub async fn run() -> Result<(), BoxError> {
 
     let settings = Settings::new().map_err(|e| -> BoxError { e.to_string().into() })?;
 
-    let redis_client = redis::Client::open(settings.redis_url.as_str())?;
-    let redis_conn = redis_client.get_multiplexed_async_connection().await?;
-    let redis_conn = Arc::new(Mutex::new(redis_conn));
+    let redis_conn = redis_conn::connect_redis_conn(&settings.redis_url)
+        .await
+        .map_err(|e| -> BoxError { e.to_string().into() })?;
     info!("Connected to Redis");
 
     let pool = establish_pool(

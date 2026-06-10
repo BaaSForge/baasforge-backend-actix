@@ -544,8 +544,10 @@ pub async fn handle_delete_project(
                 let event = WsServerEvent::ProjectDeleted(ProjectDeletedPayload {
                     project_id: project_id.to_string(),
                 });
-                let mut guard = redis.lock().await;
-                if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+                if let Err(e) =
+                    crate::routes::ws::redis::publish_event_on_conn(redis.clone(), &channel, &event)
+                        .await
+                {
                     log::warn!("[ws] Failed to broadcast project deleted to Redis: {}", e);
                 }
             }

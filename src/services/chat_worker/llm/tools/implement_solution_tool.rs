@@ -24,7 +24,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-type RedisConn = Arc<Mutex<redis::aio::MultiplexedConnection>>;
+type RedisConn = crate::services::redis_conn::RedisConn;
 
 const SUBTREE_FALLBACK_ROW_CAP: usize = 100;
 
@@ -107,7 +107,7 @@ pub fn payload_from_args(
 /// Queues [`ChatAgentType::Developer`] with empty user text; history is nested under this tool row.
 pub async fn handler(
     _pool: DbPool,
-    _redis_conn: Arc<Mutex<redis::aio::MultiplexedConnection>>,
+    _redis_conn: crate::services::redis_conn::RedisConn,
     project_id: Uuid,
     session_id: Uuid,
     message_id: Uuid,
@@ -344,8 +344,8 @@ pub async fn merge_sub_agent_failure_fallback_into_tool_row(
         session_id,
         message,
     });
-    let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+    let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+    if let Err(e) = publish_event_to_channel(&mut guard, &channel, &event).await {
         tracing::warn!(
             "merge_sub_agent_failure_fallback_into_tool_row: ws update failed: {}",
             e

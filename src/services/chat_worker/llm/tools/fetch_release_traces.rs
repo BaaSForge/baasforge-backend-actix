@@ -167,7 +167,7 @@ pub fn spec() -> ToolSpec {
 
 pub async fn handler(
     pool: DbPool,
-    redis_conn: std::sync::Arc<Mutex<redis::aio::MultiplexedConnection>>,
+    redis_conn: crate::services::redis_conn::RedisConn,
     _project_id: Uuid,
     session_id: Uuid,
     message_id: Uuid,
@@ -346,7 +346,7 @@ fn jaeger_err_message(e: &JaegerQueryError) -> String {
 
 async fn persist_completed(
     pool: DbPool,
-    redis_conn: std::sync::Arc<Mutex<redis::aio::MultiplexedConnection>>,
+    redis_conn: crate::services::redis_conn::RedisConn,
     project_id: Uuid,
     session_id: Uuid,
     message_id: Uuid,
@@ -373,8 +373,7 @@ async fn persist_completed(
         session_id,
         message,
     });
-    let mut guard = redis_conn.lock().await;
-    publish_event_to_channel(&mut *guard, &channel, &event)
+    crate::routes::ws::redis::publish_event_on_conn(redis_conn.clone(), &channel, &event)
         .await
         .map_err(|e| -> BoxError { e.to_string().into() })?;
     Ok(())

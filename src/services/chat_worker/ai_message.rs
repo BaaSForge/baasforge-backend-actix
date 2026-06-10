@@ -12,7 +12,7 @@ use crate::routes::ws::events::{
 use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
 use diesel::prelude::*;
-use redis::aio::MultiplexedConnection;
+use crate::services::redis_conn::RedisConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -22,7 +22,7 @@ use uuid::Uuid;
 /// ChatSessionMessageCreated to Redis. Call when the first streaming content chunk arrives.
 pub async fn ensure_ai_message_created_and_publish(
     pool: &DbPool,
-    redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    redis_conn: &crate::services::redis_conn::RedisConn,
     session_id: Uuid,
     response_message_id: Uuid,
     user_id: Uuid,
@@ -63,8 +63,7 @@ pub async fn ensure_ai_message_created_and_publish(
             session_id,
             message: created_message,
         });
-        let mut guard = redis_conn.lock().await;
-        publish_event_to_channel(&mut *guard, &channel, &event).await?;
+        crate::routes::ws::redis::publish_event_on_conn(redis_conn.clone(), &channel, &event).await?;
     }
     Ok(())
 }
@@ -91,7 +90,7 @@ fn has_requested_tool_calls(text_payload: &TextPayload) -> bool {
 /// inserted first, the conflict branch updates payload/status only and leaves `invoking_message_id` intact.
 pub async fn create_ai_message_with_payload_and_publish(
     pool: &DbPool,
-    redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    redis_conn: &crate::services::redis_conn::RedisConn,
     session_id: Uuid,
     response_message_id: Uuid,
     user_id: Uuid,
@@ -135,8 +134,7 @@ pub async fn create_ai_message_with_payload_and_publish(
                     session_id,
                     message: created_message,
                 });
-            let mut guard = redis_conn.lock().await;
-            publish_event_to_channel(&mut *guard, &channel, &event).await?;
+            crate::routes::ws::redis::publish_event_on_conn(redis_conn.clone(), &channel, &event).await?;
             info!(
                 %project_id,
                 %session_id,
@@ -182,8 +180,7 @@ pub async fn create_ai_message_with_payload_and_publish(
                         session_id,
                         message,
                     });
-                let mut guard = redis_conn.lock().await;
-                publish_event_to_channel(&mut *guard, &channel, &event).await?;
+                crate::routes::ws::redis::publish_event_on_conn(redis_conn.clone(), &channel, &event).await?;
             }
         }
         Err(e) => return Err(e.into()),

@@ -504,8 +504,8 @@ async fn persist_failed_tool_child_message(
         session_id,
         message: created_message,
     });
-    let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+    let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+    if let Err(e) = publish_event_to_channel(&mut guard, &channel, &event).await {
         tracing::warn!(
             context = log_ctx,
             "persist_failed_tool_child_message: failed to publish ChatSessionMessageCreated: {}",
@@ -707,7 +707,7 @@ pub async fn execute_tool_async(
 
 // ----- Tool message handlers (runner → worker) -----
 
-type RedisConn = Arc<Mutex<redis::aio::MultiplexedConnection>>;
+type RedisConn = crate::services::redis_conn::RedisConn;
 
 /// Persists a tool message as Failed in the DB, merges `error` into the message JSON payload when
 /// possible (so LLM history replays include the failure reason), and notifies the client via WebSocket
@@ -782,14 +782,14 @@ pub async fn set_tool_message_failed(
             message_id,
             status: ChatMessageStatus::Failed,
         });
-    let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &updated_event).await {
+    let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+    if let Err(e) = publish_event_to_channel(&mut guard, &channel, &updated_event).await {
         tracing::warn!(
             "set_tool_message_failed: failed to publish message updated: {}",
             e
         );
     }
-    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &status_event).await {
+    if let Err(e) = publish_event_to_channel(&mut guard, &channel, &status_event).await {
         tracing::warn!(
             "set_tool_message_failed: failed to publish status change: {}",
             e
@@ -1126,8 +1126,8 @@ pub async fn maybe_complete_invoking_message(
             message_id: invoking_message_id,
             status: new_status,
         });
-    let mut guard = redis_conn.lock().await;
-    if let Err(e) = publish_event_to_channel(&mut *guard, &channel, &event).await {
+    let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+    if let Err(e) = publish_event_to_channel(&mut guard, &channel, &event).await {
         tracing::warn!(
             "maybe_complete_invoking_message: failed to publish status change: {}",
             e

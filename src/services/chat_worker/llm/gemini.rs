@@ -20,7 +20,7 @@ use crate::services::chat_worker::llm::history::{
 use gemini_rust::client::GenerationStream;
 use gemini_rust::tools::model::{FunctionCall, FunctionCallingMode, FunctionDeclaration};
 use gemini_rust::{Content, Gemini, Message, Part, Role, ThinkingLevel};
-use redis::aio::MultiplexedConnection;
+use crate::services::redis_conn::RedisConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -212,7 +212,7 @@ pub async fn call_gemini_stream(
     pool: &crate::database::DbPool,
     session_messages: &[(ChatSessionRoleType, ChatMessageType, Option<Value>)],
     user_text: &str,
-    redis_conn: Option<Arc<Mutex<MultiplexedConnection>>>,
+    redis_conn: Option<crate::services::redis_conn::RedisConn>,
     topic: &str,
     message_id: Uuid,
     user_id: Uuid,
@@ -464,8 +464,8 @@ pub async fn call_gemini_stream(
                     thinking_signature_capture = Some(s.clone());
                 }
                 if let Some(ref conn) = redis_conn {
-                    let mut guard = conn.lock().await;
-                    if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                    let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+                    if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                         return Ok(GenerateOutcome::Stopped(TextPayload {
                             text: full_text,
                             requested_tool_calls: None,
@@ -484,7 +484,7 @@ pub async fn call_gemini_stream(
                         false,
                     );
                     let event = WsServerEvent::ChatSessionNewThinkingChunk(payload);
-                    if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
+                    if let Err(e) = publish_event_to_channel(&mut guard, topic, &event).await {
                         tracing::warn!("Failed to publish Gemini thinking chunk to Redis: {}", e);
                     }
                     thinking_chunk_index += 1;
@@ -492,8 +492,8 @@ pub async fn call_gemini_stream(
             } else {
                 full_text.push_str(&text);
                 if let Some(ref conn) = redis_conn {
-                    let mut guard = conn.lock().await;
-                    if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+                    let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+                    if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                         return Ok(GenerateOutcome::Stopped(TextPayload {
                             text: full_text,
                             requested_tool_calls: None,
@@ -512,7 +512,7 @@ pub async fn call_gemini_stream(
                         false,
                     );
                     let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
-                    if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
+                    if let Err(e) = publish_event_to_channel(&mut guard, topic, &event).await {
                         tracing::warn!("Failed to publish chat chunk to Redis: {}", e);
                     }
                     chunk_index += 1;
@@ -537,8 +537,8 @@ pub async fn call_gemini_stream(
         None
     } else {
         if let Some(ref conn) = redis_conn {
-            let mut guard = conn.lock().await;
-            if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+            let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+            if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                 return Ok(GenerateOutcome::Stopped(TextPayload {
                     text: full_text,
                     requested_tool_calls: None,
@@ -580,8 +580,8 @@ pub async fn call_gemini_stream(
             }
         }
         if let Some(ref conn) = redis_conn {
-            let mut guard = conn.lock().await;
-            if is_message_stopped(&mut *guard, message_id).await.ok() == Some(true) {
+            let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
+            if is_message_stopped(&mut guard, message_id).await.ok() == Some(true) {
                 return Ok(GenerateOutcome::Stopped(TextPayload {
                     text: full_text,
                     requested_tool_calls: None,
@@ -625,7 +625,7 @@ pub async fn call_gemini_stream(
     }
 
     if published_stream_chunks && let Some(ref conn) = redis_conn {
-        let mut guard = conn.lock().await;
+        let mut guard = crate::services::redis_conn::clone_connection(conn.clone());
         if thinking_chunk_index > 0 {
             let thinking_done = ChatSessionNewThinkingChunkPayload::new(
                 project_id,
@@ -636,7 +636,7 @@ pub async fn call_gemini_stream(
                 true,
             );
             if let Err(e) = publish_event_to_channel(
-                &mut *guard,
+                &mut guard,
                 topic,
                 &WsServerEvent::ChatSessionNewThinkingChunk(thinking_done),
             )
@@ -657,7 +657,7 @@ pub async fn call_gemini_stream(
             true,
         );
         let event = WsServerEvent::ChatSessionNewMessageChunk(payload);
-        if let Err(e) = publish_event_to_channel(&mut *guard, topic, &event).await {
+        if let Err(e) = publish_event_to_channel(&mut guard, topic, &event).await {
             tracing::warn!("Failed to publish final chat chunk to Redis: {}", e);
         }
     }

@@ -1,4 +1,5 @@
 use crate::routes::ws::WsBroker;
+use crate::services::redis_conn::{self, RedisConn, CONNECT_TIMEOUT, SUBSCRIBER_RECONNECT_INTERVAL};
 use redis::AsyncCommands;
 use serde::Serialize;
 use std::sync::Arc;
@@ -27,6 +28,15 @@ where
     conn.set_ex::<_, _, ()>(key, "1", ttl_secs).await
 }
 
+pub async fn set_stopped_message_on_conn(
+    conn: RedisConn,
+    message_id: Uuid,
+    ttl_secs: u64,
+) -> Result<(), redis::RedisError> {
+    let mut c = redis_conn::clone_connection(conn);
+    set_stopped_message_id(&mut c, message_id, ttl_secs).await
+}
+
 /// Check if a message ID is marked as stopped in Redis. Used by chat workers before and during streaming.
 pub async fn is_message_stopped<C>(
     conn: &mut C,
@@ -38,6 +48,14 @@ where
     let key = redis_key_stopped_message(message_id);
     let exists: bool = conn.exists(&key).await?;
     Ok(exists)
+}
+
+pub async fn is_message_stopped_on_conn(
+    conn: RedisConn,
+    message_id: Uuid,
+) -> Result<bool, redis::RedisError> {
+    let mut c = redis_conn::clone_connection(conn);
+    is_message_stopped(&mut c, message_id).await
 }
 
 pub fn user_channel(user_id: Uuid) -> String {
@@ -64,30 +82,61 @@ where
     Ok(())
 }
 
+pub async fn publish_event_on_conn<E>(
+    conn: RedisConn,
+    channel: &str,
+    event: &E,
+) -> Result<(), redis::RedisError>
+where
+    E: Serialize + ?Sized,
+{
+    let mut c = redis_conn::clone_connection(conn);
+    publish_event_to_channel(&mut c, channel, event).await
+}
+
 pub fn run_redis_subscriber(redis_url: String, broker: Arc<WsBroker>) {
     actix_web::rt::spawn(async move {
+        let client = match redis_conn::open_client(&redis_url) {
+            Ok(client) => client,
+            Err(e) => {
+                log::error!("[ws-redis] Invalid REDIS_URL: {}", e);
+                return;
+            }
+        };
         loop {
-            match run_redis_subscriber_loop(&redis_url, &broker).await {
+            match run_redis_subscriber_loop(&client, &broker).await {
                 Ok(()) => {}
                 Err(e) => {
                     log::warn!(
-                        "[ws-redis] Subscriber loop error: {}. Reconnecting in 5s.",
-                        e
+                        "[ws-redis] Subscriber loop error: {}. Reconnecting in {}s.",
+                        e,
+                        SUBSCRIBER_RECONNECT_INTERVAL.as_secs()
                     );
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(SUBSCRIBER_RECONNECT_INTERVAL).await;
                 }
             }
         }
     });
 }
 
+async fn connect_pubsub(
+    client: &redis::Client,
+) -> Result<redis::aio::PubSub, redis::RedisError> {
+    match tokio::time::timeout(CONNECT_TIMEOUT, client.get_async_pubsub()).await {
+        Ok(Ok(pubsub)) => Ok(pubsub),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(redis::RedisError::from((
+            redis::ErrorKind::Io,
+            "pubsub connect timed out",
+        ))),
+    }
+}
+
 async fn run_redis_subscriber_loop(
-    redis_url: &str,
+    client: &redis::Client,
     broker: &WsBroker,
 ) -> Result<(), redis::RedisError> {
-    let client = redis::Client::open(redis_url)?;
-    let mut pubsub = client.get_async_pubsub().await?;
-    // Single channel pattern: all events (chat, project deleted, runtime created) are published to user:{user_id}.
+    let mut pubsub = connect_pubsub(client).await?;
     pubsub
         .psubscribe(format!("{}*", USER_CHANNEL_PREFIX))
         .await?;

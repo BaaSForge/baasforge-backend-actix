@@ -17,7 +17,7 @@ use crate::schema::chat_messages;
 use crate::services::chat_worker::reject_controller_box;
 use crate::services::message_queue::SharedRabbitPublisher;
 use diesel::prelude::*;
-use redis::aio::MultiplexedConnection;
+use crate::services::redis_conn::RedisConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -72,7 +72,7 @@ pub async fn publish_release_controller_probe(
 /// publishes the `reject_controller_box` queue message for the same `assistant_turn_id`.
 pub async fn consume_release_controller_queue_message(
     pool: &DbPool,
-    redis_conn: &Arc<Mutex<MultiplexedConnection>>,
+    redis_conn: &crate::services::redis_conn::RedisConn,
     rabbit_publisher: &Arc<SharedRabbitPublisher>,
     user_id: Uuid,
     project_id: Uuid,
@@ -182,8 +182,8 @@ pub async fn consume_release_controller_queue_message(
         session_id,
         message,
     });
-    let mut guard = redis_conn.lock().await;
-    let _ = publish_event_to_channel(&mut *guard, &channel, &event).await;
+    let mut guard = crate::services::redis_conn::clone_connection(redis_conn.clone());
+    let _ = publish_event_to_channel(&mut guard, &channel, &event).await;
     drop(guard);
 
     if let Some(tid) = assistant_turn_id {

@@ -92,7 +92,7 @@ pub fn payload_from_args(
 /// See [`super::tool_message_type_skips_generic_invoker_completion`]: on success the generic invoker completion path is skipped.
 pub async fn handler(
     _pool: DbPool,
-    _redis_conn: Arc<Mutex<redis::aio::MultiplexedConnection>>,
+    _redis_conn: crate::services::redis_conn::RedisConn,
     project_id: Uuid,
     session_id: Uuid,
     message_id: Uuid,

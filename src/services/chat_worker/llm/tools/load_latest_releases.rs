@@ -105,7 +105,7 @@ pub fn spec() -> ToolSpec {
 /// Returns Err on any failure; the caller marks the message Failed and runs invoker completion.
 pub async fn handler(
     pool: DbPool,
-    redis_conn: Arc<Mutex<redis::aio::MultiplexedConnection>>,
+    redis_conn: crate::services::redis_conn::RedisConn,
     project_id: Uuid,
     session_id: Uuid,
     message_id: Uuid,
@@ -158,8 +158,7 @@ pub async fn handler(
         session_id,
         message,
     });
-    let mut guard = redis_conn.lock().await;
-    publish_event_to_channel(&mut *guard, &channel, &event)
+    crate::routes::ws::redis::publish_event_on_conn(redis_conn.clone(), &channel, &event)
         .await
         .map_err(|e| -> BoxError { e.to_string().into() })?;
     Ok(())

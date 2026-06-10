@@ -3,6 +3,7 @@ pub mod oauth;
 pub mod chat_session_truncate;
 pub mod chat_worker;
 pub mod message_queue;
+pub mod redis_conn;
 pub mod observability;
 pub mod payment;
 pub mod releases;

@@ -22,6 +22,7 @@ use crate::middlewares::project::projects_owner_guard_middleware_factory;
 use crate::middlewares::test::test_closed_stage_guard_middleware;
 use crate::routes::chat::message_queue;
 use crate::services::message_queue as mq_service;
+use crate::services::redis_conn::{self, SharedRedisConn};
 use crate::services::runtime_nats::RuntimeNatsPublisher;
 use actix_web::Result;
 use actix_web::middleware::from_fn;
@@ -29,9 +30,6 @@ use actix_web::web;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
-
-pub type SharedRedisConn = Option<Arc<Mutex<redis::aio::MultiplexedConnection>>>;
 
 pub type SharedRuntimeNatsPublisher = Option<Arc<RuntimeNatsPublisher>>;
 
@@ -108,21 +106,12 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                 None
             }
         };
-    let redis_conn: SharedRedisConn = match redis::Client::open(settings.redis_url.as_str()) {
-        Ok(client) => match client.get_multiplexed_async_connection().await {
-            Ok(conn) => {
-                log::info!("[redis] Publish connection connected");
-                Some(Arc::new(Mutex::new(conn)))
-            }
-            Err(e) => {
-                log::warn!("[redis] Publish connection failed: {}", e);
-                None
-            }
-        },
-        Err(e) => {
-            log::warn!("[redis] Client open failed: {}", e);
-            None
+    let redis_conn = match redis_conn::connect_redis_conn(&settings.redis_url).await {
+        Ok(conn) => {
+            log::info!("[redis] Publish ConnectionManager connected");
+            Some(conn)
         }
+        Err(e) => return Err(e.into()),
     };
     let runtime_nats_publisher: SharedRuntimeNatsPublisher =
         match settings.runtime_nats_url.as_ref() {
