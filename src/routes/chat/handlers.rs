@@ -21,7 +21,10 @@ use crate::models::projects::{
     PlatformEnvironmentType, ProjectReleaseResponse, ProjectReleaseWithBaseline,
     ProjectUnitResponse,
 };
-use crate::routes::AppContext;
+use crate::routes::{
+    AppContext, ensure_runtime_nats_available, runtime_nats_required_publisher,
+    runtime_nats_unavailable_response,
+};
 use crate::routes::chat::message_queue::{self as chat_message_queue, ChatSessionQueueMessage};
 use crate::routes::ws::events::{
     ChatSessionGenerationEndedPayload, ChatSessionGenerationStartedPayload,
@@ -39,9 +42,10 @@ use crate::schema::project_units;
 use crate::schema::projects;
 use crate::services::chat_session_truncate::{
     RetryFailedPlannerTruncateOutcome, TruncateNatsContext, TruncateSessionFromMessageOutcome,
-    transaction_retry_failed_planner_truncate_and_reset_with_nats,
+    TruncateWithNatsError, transaction_retry_failed_planner_truncate_and_reset_with_nats,
     truncate_session_from_user_message_with_nats,
 };
+use crate::services::runtime_nats::RuntimeNatsPublishError;
 use crate::services::chat_worker::db::{
     ChatSessionListReleasePair, ChatSessionListUnitFilter, DraftUnitsAsOfReleaseControllerError,
     LastReleaseControllerNotDisabledLookup, list_project_chat_sessions_page,
@@ -772,7 +776,12 @@ pub async fn handle_retry_failed_planner_message(
         .user_id;
     let (project_id, session_id, message_id) = path.into_inner();
 
+    if let Err(e) = ensure_runtime_nats_available(context.get_ref()).await {
+        return runtime_nats_unavailable_response(&e);
+    }
+
     let nats_ctx = TruncateNatsContext {
+        nats_required: context.settings.runtime_nats_url.is_some(),
         publisher: context.runtime_nats_publisher.as_deref(),
         subject: context.settings.runtime_nats_subject_release.as_str(),
         project_id,
@@ -789,10 +798,13 @@ pub async fn handle_retry_failed_planner_message(
     .await
     {
         Ok(o) => o,
-        Err(database::BlockingDbError::Query(e)) => {
+        Err(TruncateWithNatsError::Nats(e)) => {
+            return runtime_nats_unavailable_response(&e);
+        }
+        Err(TruncateWithNatsError::Db(database::BlockingDbError::Query(e))) => {
             return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
         }
-        Err(_) => {
+        Err(TruncateWithNatsError::Db(_)) => {
             tracing::error!("[handle_retry_failed_planner_message] DB/block error");
             return HttpResponse::ServiceUnavailable()
                 .json(api_error("Database temporarily unavailable", json!({})));
@@ -1839,7 +1851,7 @@ pub async fn broadcast_stage_release_create_effects(
     release: &ProjectReleaseResponse,
     row: ChatMessageRow,
     previous_stage_release_id: Option<Uuid>,
-) {
+) -> Result<(), RuntimeNatsPublishError> {
     if let Some(ref redis_conn) = context.redis_conn {
         let message: ChatMessageResponse = row.into();
         let event = WsServerEvent::ChatSessionMessageUpdated(ChatSessionMessageUpdatedPayload {
@@ -1856,33 +1868,19 @@ pub async fn broadcast_stage_release_create_effects(
             );
         }
     }
-    if let Some(ref nats) = context.runtime_nats_publisher {
+    if context.settings.runtime_nats_url.is_some() {
+        let nats = runtime_nats_required_publisher(context.get_ref())?;
         let subject = context.settings.runtime_nats_subject_release.as_str();
-        if let Err(e) = nats
-            .publish_stage_release(
-                subject,
-                project_id,
-                stage_runtime_id,
-                release.id,
-                previous_stage_release_id,
-            )
-            .await
-        {
-            tracing::warn!(
-                "[broadcast_stage_release_create_effects] NATS publish failed: {}",
-                e
-            );
-        }
-    } else {
-        tracing::warn!(
-            target: "runtime_nats",
-            project_id = %project_id,
-            stage_runtime_id = %stage_runtime_id,
-            deployed_release_id = %release.id,
-            ?previous_stage_release_id,
-            "runtime NATS publisher not configured; stage release not announced to runtimes"
-        );
+        nats.publish_stage_release(
+            subject,
+            project_id,
+            stage_runtime_id,
+            release.id,
+            previous_stage_release_id,
+        )
+        .await?;
     }
+    Ok(())
 }
 
 /// POST — create a stage release from the current session draft unit tips vs latest production,
@@ -1902,6 +1900,10 @@ pub async fn handle_create_stage_release(
     let (project_id, session_id, message_id) = path.into_inner();
     let user_id = access_payload.user_id;
     let stage_runtime_id = body.stage_project_runtime_id;
+
+    if let Err(e) = ensure_runtime_nats_available(context.get_ref()).await {
+        return runtime_nats_unavailable_response(&e);
+    }
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
         transaction_create_stage_release_from_controller(
@@ -1940,7 +1942,7 @@ pub async fn handle_create_stage_release(
                         .json(api_error("Database temporarily unavailable", json!({})));
                 }
             };
-            broadcast_stage_release_create_effects(
+            if let Err(e) = broadcast_stage_release_create_effects(
                 &context,
                 project_id,
                 session_id,
@@ -1950,7 +1952,10 @@ pub async fn handle_create_stage_release(
                 row,
                 previous_stage_release_id,
             )
-            .await;
+            .await
+            {
+                return runtime_nats_unavailable_response(&e);
+            }
             HttpResponse::Ok().json(api_success(
                 "Stage release created successfully",
                 json!({ "release": release_with_base }),
@@ -1977,6 +1982,10 @@ pub async fn handle_create_production_release(
     let (project_id, session_id, message_id) = path.into_inner();
     let user_id = access_payload.user_id;
     let stage_release_id = body.stage_release_id;
+
+    if let Err(e) = ensure_runtime_nats_available(context.get_ref()).await {
+        return runtime_nats_unavailable_response(&e);
+    }
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
         conn.transaction(|conn| {
@@ -2201,7 +2210,11 @@ pub async fn handle_create_production_release(
                 }
             }
             broadcast_production_live_release_changed(&context, project_id).await;
-            if let Some(ref nats) = context.runtime_nats_publisher {
+            if context.settings.runtime_nats_url.is_some() {
+                let nats = match runtime_nats_required_publisher(context.get_ref()) {
+                    Ok(nats) => nats,
+                    Err(e) => return runtime_nats_unavailable_response(&e),
+                };
                 let subject = context.settings.runtime_nats_subject_release.as_str();
                 if let Err(e) = nats
                     .publish_prod_release(
@@ -2212,16 +2225,8 @@ pub async fn handle_create_production_release(
                     )
                     .await
                 {
-                    tracing::warn!("[handle_create_production_release] NATS publish failed: {}", e);
+                    return runtime_nats_unavailable_response(&e);
                 }
-            } else {
-                tracing::warn!(
-                    target: "runtime_nats",
-                    project_id = %project_id,
-                    deployed_release_id = %release.id,
-                    ?previous_prod_release_id,
-                    "runtime NATS publisher not configured; production release not announced to runtimes"
-                );
             }
             HttpResponse::Ok().json(api_success(
                 "Production release created successfully",
@@ -2303,6 +2308,10 @@ pub async fn handle_confirm_reject_controller(
 
     let (project_id, session_id, message_id) = path.into_inner();
     let user_id = access_payload.user_id;
+
+    if let Err(e) = ensure_runtime_nats_available(context.get_ref()).await {
+        return runtime_nats_unavailable_response(&e);
+    }
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
         conn.transaction(|conn| -> Result<ConfirmRejectOutcome, diesel::result::Error> {
@@ -2560,27 +2569,29 @@ pub async fn handle_confirm_reject_controller(
                 }
             }
 
-            if let (Some(stage_release_id), true) =
-                (stage_release_id_opt, !stage_runtime_ids_cleared.is_empty())
-                && let Some(ref nats) = context.runtime_nats_publisher {
-                    let subject = context.settings.runtime_nats_subject_release.as_str();
-                    for runtime_id in stage_runtime_ids_cleared {
-                        if let Err(e) = nats
-                            .publish_stage_release_cleared(
-                                subject,
-                                project_id,
-                                runtime_id,
-                                Some(stage_release_id),
-                            )
-                            .await
-                        {
-                            tracing::warn!(
-                                "[handle_confirm_reject_controller] NATS publish stage cleared failed: {}",
-                                e
-                            );
-                        }
+            if context.settings.runtime_nats_url.is_some()
+                && let (Some(stage_release_id), true) =
+                    (stage_release_id_opt, !stage_runtime_ids_cleared.is_empty())
+            {
+                let nats = match runtime_nats_required_publisher(context.get_ref()) {
+                    Ok(nats) => nats,
+                    Err(e) => return runtime_nats_unavailable_response(&e),
+                };
+                let subject = context.settings.runtime_nats_subject_release.as_str();
+                for runtime_id in stage_runtime_ids_cleared {
+                    if let Err(e) = nats
+                        .publish_stage_release_cleared(
+                            subject,
+                            project_id,
+                            runtime_id,
+                            Some(stage_release_id),
+                        )
+                        .await
+                    {
+                        return runtime_nats_unavailable_response(&e);
                     }
                 }
+            }
             HttpResponse::Ok().json(api_success("Reject confirmed", json!({})))
         }
         ConfirmRejectOutcome::SessionNotFound => {
@@ -2624,7 +2635,12 @@ pub async fn handle_truncate_chat_session_from_user_message(
     let user_id = access_payload.user_id;
     let (project_id, session_id, user_message_id) = path.into_inner();
 
+    if let Err(e) = ensure_runtime_nats_available(context.get_ref()).await {
+        return runtime_nats_unavailable_response(&e);
+    }
+
     let nats_ctx = TruncateNatsContext {
+        nats_required: context.settings.runtime_nats_url.is_some(),
         publisher: context.runtime_nats_publisher.as_deref(),
         subject: context.settings.runtime_nats_subject_release.as_str(),
         project_id,
@@ -2641,7 +2657,10 @@ pub async fn handle_truncate_chat_session_from_user_message(
     .await
     {
         Ok(o) => o,
-        Err(e) => {
+        Err(TruncateWithNatsError::Nats(e)) => {
+            return runtime_nats_unavailable_response(&e);
+        }
+        Err(TruncateWithNatsError::Db(e)) => {
             tracing::error!(
                 "[handle_truncate_chat_session_from_user_message] DB error: {}",
                 e

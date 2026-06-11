@@ -23,15 +23,43 @@ use crate::middlewares::test::test_closed_stage_guard_middleware;
 use crate::routes::chat::message_queue;
 use crate::services::message_queue as mq_service;
 use crate::services::redis_conn::{self, SharedRedisConn};
-use crate::services::runtime_nats::RuntimeNatsPublisher;
+use crate::libs::api_response::api_error;
+use crate::services::runtime_nats::{RuntimeNatsPublishError, RuntimeNatsPublisher};
+use actix_web::HttpResponse;
 use actix_web::Result;
 use actix_web::middleware::from_fn;
 use actix_web::web;
+use serde_json::json;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
 pub type SharedRuntimeNatsPublisher = Option<Arc<RuntimeNatsPublisher>>;
+
+pub fn runtime_nats_required_publisher<'a>(
+    context: &'a AppContext,
+) -> Result<&'a RuntimeNatsPublisher, RuntimeNatsPublishError> {
+    context
+        .runtime_nats_publisher
+        .as_deref()
+        .ok_or(RuntimeNatsPublishError::Unavailable)
+}
+
+pub fn runtime_nats_unavailable_response(error: &RuntimeNatsPublishError) -> HttpResponse {
+    HttpResponse::ServiceUnavailable().json(api_error(
+        "Runtime notification service is temporarily unavailable. Please try again shortly.",
+        json!({ "detail": error.to_string() }),
+    ))
+}
+
+pub async fn ensure_runtime_nats_available(
+    context: &AppContext,
+) -> Result<(), RuntimeNatsPublishError> {
+    if context.settings.runtime_nats_url.is_none() {
+        return Ok(());
+    }
+    runtime_nats_required_publisher(context)?.ping().await
+}
 
 #[derive(Clone)]
 pub struct AppContext {
@@ -115,24 +143,26 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
     };
     let runtime_nats_publisher: SharedRuntimeNatsPublisher =
         match settings.runtime_nats_url.as_ref() {
-            Some(url) => match RuntimeNatsPublisher::connect(url).await {
-                Ok(p) => {
-                    log::info!(
-                        "[runtime_nats] Connected (release: stream={}, consumer={}, subject={}; env: stream={}, consumer={}, subject={})",
-                        settings.runtime_nats_jetstream_stream_release,
-                        settings.runtime_nats_jetstream_consumer_release,
-                        settings.runtime_nats_subject_release,
-                        settings.runtime_nats_jetstream_stream_env,
-                        settings.runtime_nats_jetstream_consumer_env,
-                        settings.runtime_nats_subject_env,
-                    );
-                    Some(Arc::new(p))
+            Some(url) => {
+                let nats_timeout =
+                    Duration::from_secs(settings.runtime_nats_operation_timeout_secs);
+                match RuntimeNatsPublisher::connect(url, nats_timeout).await {
+                    Ok(p) => {
+                        log::info!(
+                            "[runtime_nats] Client ready (async_nats auto-reconnect; release: stream={}, consumer={}, subject={}; env: stream={}, consumer={}, subject={}; publish_timeout={}s)",
+                            settings.runtime_nats_jetstream_stream_release,
+                            settings.runtime_nats_jetstream_consumer_release,
+                            settings.runtime_nats_subject_release,
+                            settings.runtime_nats_jetstream_stream_env,
+                            settings.runtime_nats_jetstream_consumer_env,
+                            settings.runtime_nats_subject_env,
+                            settings.runtime_nats_operation_timeout_secs,
+                        );
+                        Some(Arc::new(p))
+                    }
+                    Err(e) => return Err(format!("[runtime_nats] Failed to create client: {e}").into()),
                 }
-                Err(e) => {
-                    log::warn!("[runtime_nats] Failed to connect: {}", e);
-                    None
-                }
-            },
+            }
             None => None,
         };
     let app_context = AppContext::new(

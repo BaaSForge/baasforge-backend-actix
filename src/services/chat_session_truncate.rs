@@ -12,7 +12,7 @@ use crate::services::chat_worker::db::{
     extend_truncated_ids_with_unit_tools_in_deleted_invoking_chains,
 };
 use crate::services::releases::all_live_production_release_ids;
-use crate::services::runtime_nats::RuntimeNatsPublisher;
+use crate::services::runtime_nats::{RuntimeNatsPublishError, RuntimeNatsPublisher};
 use diesel::prelude::*;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -66,6 +66,7 @@ struct TruncateAnchorPolicy {
 }
 
 pub struct TruncateNatsContext<'a> {
+    pub nats_required: bool,
     pub publisher: Option<&'a RuntimeNatsPublisher>,
     pub subject: &'a str,
     pub project_id: Uuid,
@@ -74,44 +75,40 @@ pub struct TruncateNatsContext<'a> {
 pub async fn publish_truncate_stage_cleared_nats(
     ctx: &TruncateNatsContext<'_>,
     stage_runtime_nats: &[(Uuid, Uuid)],
-) {
-    let Some(nats) = ctx.publisher else {
-        return;
-    };
+) -> Result<(), RuntimeNatsPublishError> {
+    if !ctx.nats_required {
+        return Ok(());
+    }
+    let nats = ctx
+        .publisher
+        .ok_or(RuntimeNatsPublishError::Unavailable)?;
     if stage_runtime_nats.is_empty() {
-        return;
+        return Ok(());
     }
     for &(runtime_id, cleared_stage_release_id) in stage_runtime_nats {
-        if let Err(e) = nats
-            .publish_stage_release_cleared(
-                ctx.subject,
-                ctx.project_id,
-                runtime_id,
-                Some(cleared_stage_release_id),
-            )
-            .await
-        {
-            tracing::warn!(
-                project_id = %ctx.project_id,
-                %runtime_id,
-                "truncate: NATS publish stage_release_cleared failed: {}",
-                e
-            );
-        }
+        nats.publish_stage_release_cleared(
+            ctx.subject,
+            ctx.project_id,
+            runtime_id,
+            Some(cleared_stage_release_id),
+        )
+        .await?;
     }
+    Ok(())
 }
 
 pub async fn publish_truncate_outcome_nats(
     ctx: &TruncateNatsContext<'_>,
     outcome: &TruncateSessionFromMessageOutcome,
-) {
+) -> Result<(), RuntimeNatsPublishError> {
     if let TruncateSessionFromMessageOutcome::Success {
         stage_runtime_nats,
         ..
     } = outcome
     {
-        publish_truncate_stage_cleared_nats(ctx, stage_runtime_nats).await;
+        publish_truncate_stage_cleared_nats(ctx, stage_runtime_nats).await?;
     }
+    Ok(())
 }
 
 /// DB truncate only. Must run inside an active Diesel transaction.
@@ -518,6 +515,12 @@ fn transaction_retry_failed_planner_truncate_and_reset(
     })
 }
 
+#[derive(Debug)]
+pub enum TruncateWithNatsError {
+    Db(BlockingDbError),
+    Nats(RuntimeNatsPublishError),
+}
+
 pub async fn truncate_session_from_user_message_with_nats(
     pool: &DbPool,
     ctx: TruncateNatsContext<'_>,
@@ -525,7 +528,7 @@ pub async fn truncate_session_from_user_message_with_nats(
     project_id: Uuid,
     session_id: Uuid,
     user_message_id: Uuid,
-) -> Result<TruncateSessionFromMessageOutcome, BlockingDbError> {
+) -> Result<TruncateSessionFromMessageOutcome, TruncateWithNatsError> {
     let outcome = block_on_db(pool, move |conn| {
         truncate_session_from_user_message(
             conn,
@@ -535,8 +538,11 @@ pub async fn truncate_session_from_user_message_with_nats(
             user_message_id,
         )
     })
-    .await?;
-    publish_truncate_outcome_nats(&ctx, &outcome).await;
+    .await
+    .map_err(TruncateWithNatsError::Db)?;
+    publish_truncate_outcome_nats(&ctx, &outcome)
+        .await
+        .map_err(TruncateWithNatsError::Nats)?;
     Ok(outcome)
 }
 
@@ -547,7 +553,7 @@ pub async fn transaction_retry_failed_planner_truncate_and_reset_with_nats(
     project_id: Uuid,
     session_id: Uuid,
     message_id: Uuid,
-) -> Result<RetryFailedPlannerTruncateOutcome, BlockingDbError> {
+) -> Result<RetryFailedPlannerTruncateOutcome, TruncateWithNatsError> {
     let db_result = block_on_db(pool, move |conn| {
         transaction_retry_failed_planner_truncate_and_reset(
             conn,
@@ -557,10 +563,13 @@ pub async fn transaction_retry_failed_planner_truncate_and_reset_with_nats(
             message_id,
         )
     })
-    .await?;
+    .await
+    .map_err(TruncateWithNatsError::Db)?;
 
     if let Some(truncate_outcome) = db_result.truncate_outcome {
-        publish_truncate_outcome_nats(&ctx, &truncate_outcome).await;
+        publish_truncate_outcome_nats(&ctx, &truncate_outcome)
+            .await
+            .map_err(TruncateWithNatsError::Nats)?;
     }
 
     Ok(db_result.retry_outcome)

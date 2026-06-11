@@ -5,7 +5,11 @@ use crate::models::runtime_env_vars::{
     ProjectRuntimeEnvVarInsert, ProjectRuntimeEnvVarRow, RuntimeEnvVarGroupedResponse,
     RuntimeEnvVarRevealResponse,
 };
-use crate::routes::AppContext;
+use crate::routes::{
+    AppContext, ensure_runtime_nats_available, runtime_nats_required_publisher,
+    runtime_nats_unavailable_response,
+};
+use crate::services::runtime_nats::RuntimeNatsPublishError;
 use crate::schema::project_runtime_env_vars;
 use crate::schema::project_runtimes;
 use crate::schema::projects;
@@ -38,23 +42,16 @@ async fn notify_runtime_env_cache_invalidate(
     project_id: Uuid,
     invalidations: &[(Uuid, String)],
     op_label: &'static str,
-) {
+) -> Result<(), RuntimeNatsPublishError> {
+    if context.settings.runtime_nats_url.is_none() {
+        return Ok(());
+    }
     let invalidations = dedupe_invalidations(invalidations.to_vec());
     if invalidations.is_empty() {
-        return;
+        return Ok(());
     }
+    let nats = runtime_nats_required_publisher(context.get_ref())?;
     let subject = context.settings.runtime_nats_subject_env.as_str();
-    let Some(ref nats) = context.runtime_nats_publisher else {
-        tracing::warn!(
-            target: "runtime_nats",
-            op = op_label,
-            subject = %subject,
-            project_id = %project_id,
-            count = invalidations.len(),
-            "runtime NATS publisher not configured; runtimes will not invalidate env cache via NATS"
-        );
-        return;
-    };
     tracing::info!(
         target: "runtime_nats",
         op = op_label,
@@ -64,22 +61,10 @@ async fn notify_runtime_env_cache_invalidate(
         "notifying runtimes via NATS (env cache invalidation)"
     );
     for (runtime_id, key) in &invalidations {
-        if let Err(e) = nats
-            .publish_runtime_env_invalidate(subject, project_id, *runtime_id, key.as_str())
-            .await
-        {
-            tracing::warn!(
-                target: "runtime_nats",
-                op = op_label,
-                subject = %subject,
-                project_id = %project_id,
-                runtime_id = %runtime_id,
-                key = %key.as_str(),
-                error = %e,
-                "NATS env invalidation publish failed after DB success; runtime cache may be stale"
-            );
-        }
+        nats.publish_runtime_env_invalidate(subject, project_id, *runtime_id, key.as_str())
+            .await?;
     }
+    Ok(())
 }
 
 #[derive(Clone, Deserialize)]
@@ -306,6 +291,10 @@ pub async fn handle_upsert_project_runtime_env_vars(
     let project_id = path.into_inner();
     let user_id = access_payload.user_id;
 
+    if let Err(e) = ensure_runtime_nats_available(context.get_ref()).await {
+        return runtime_nats_unavailable_response(&e);
+    }
+
     let upsert_result = database::block_on_db(&context.pool, move |conn| {
         let allowed_runtime_ids = load_project_runtime_ids(conn, project_id, user_id)?;
         let items = parse_upsert_items(body.items.clone(), &allowed_runtime_ids).map_err(|code| {
@@ -367,13 +356,16 @@ pub async fn handle_upsert_project_runtime_env_vars(
 
     match upsert_result {
         Ok((invalidations, saved)) => {
-            notify_runtime_env_cache_invalidate(
+            if let Err(e) = notify_runtime_env_cache_invalidate(
                 &context,
                 project_id,
                 &invalidations,
                 "upsert_runtime_env_vars",
             )
-            .await;
+            .await
+            {
+                return runtime_nats_unavailable_response(&e);
+            }
             HttpResponse::Ok().json(api_success(
                 "Runtime environment variables saved successfully",
                 json!({ "items": saved }),
@@ -445,6 +437,10 @@ pub async fn handle_delete_project_runtime_env_vars(
 
     let keys_for_response = keys.clone();
 
+    if let Err(e) = ensure_runtime_nats_available(context.get_ref()).await {
+        return runtime_nats_unavailable_response(&e);
+    }
+
     let delete_result = match database::block_on_db(&context.pool, move |conn| {
         let runtime_ids: Vec<Uuid> = project_runtimes::table
             .inner_join(projects::table.on(project_runtimes::project_id.eq(projects::id)))
@@ -488,13 +484,16 @@ pub async fn handle_delete_project_runtime_env_vars(
         return HttpResponse::NotFound().json(api_error("Environment variables not found", json!({})));
     }
 
-    notify_runtime_env_cache_invalidate(
+    if let Err(e) = notify_runtime_env_cache_invalidate(
         &context,
         project_id,
         &invalidations,
         "delete_runtime_env_vars",
     )
-    .await;
+    .await
+    {
+        return runtime_nats_unavailable_response(&e);
+    }
 
     HttpResponse::Ok().json(api_success(
         "Runtime environment variables deleted successfully",

@@ -133,6 +133,8 @@ pub struct Settings {
     pub runtime_nats_jetstream_stream_env: String,
     /// JetStream consumer on the env stream (used by the runtime env listener).
     pub runtime_nats_jetstream_consumer_env: String,
+    /// Max seconds per runtime NATS JetStream publish (one retry within this budget per attempt).
+    pub runtime_nats_operation_timeout_secs: u64,
     /// When `true`, every unit reviewer processing attempt returns an error immediately,
     /// exercising the full retry → dead-letter → fail_tool_message_and_continue path.
     /// Set `UNIT_REVIEWER_SIMULATE_FAILURE=true` in .env.local; absent or `false` disables it.
@@ -351,6 +353,12 @@ impl Settings {
             return Err("RUNTIME_NATS_JETSTREAM_CONSUMER_ENV must not be empty".into());
         }
         let runtime_nats_jetstream_consumer_env = runtime_nats_jetstream_consumer_env.to_string();
+        
+        let runtime_nats_operation_timeout_secs: u64 =
+            env::var("RUNTIME_NATS_OPERATION_TIMEOUT_SECS")
+                .expect("RUNTIME_NATS_OPERATION_TIMEOUT_SECS must be set")
+                .parse()
+                .expect("RUNTIME_NATS_OPERATION_TIMEOUT_SECS must be a valid u64");
 
         let llm_simulate_error_after_calls = {
             let raw = env::var("LLM_SIMULATE_ERROR_AFTER_CALLS")
@@ -453,6 +461,7 @@ impl Settings {
             runtime_nats_subject_env,
             runtime_nats_jetstream_stream_env,
             runtime_nats_jetstream_consumer_env,
+            runtime_nats_operation_timeout_secs,
             unit_reviewer_simulate_failure,
             base_runtime_endpoint,
             jaeger_query_base_url,

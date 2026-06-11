@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::cmp;
 use std::fmt;
 use std::io;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// Matches the consumer’s [`ReleaseDeployEnvironment`] (JSON: `production` / `stage`).
@@ -36,6 +38,8 @@ pub struct ReleaseDeployEvent {
 pub enum RuntimeNatsPublishError {
     Serialize(serde_json::Error),
     Publish(String),
+    TimedOut,
+    Unavailable,
 }
 
 impl fmt::Display for RuntimeNatsPublishError {
@@ -43,38 +47,132 @@ impl fmt::Display for RuntimeNatsPublishError {
         match self {
             RuntimeNatsPublishError::Serialize(e) => write!(f, "serialize NATS payload: {}", e),
             RuntimeNatsPublishError::Publish(s) => write!(f, "nats publish: {}", s),
+            RuntimeNatsPublishError::TimedOut => write!(f, "nats operation timed out"),
+            RuntimeNatsPublishError::Unavailable => {
+                write!(f, "runtime NATS publisher is not configured")
+            }
         }
     }
 }
 
 impl std::error::Error for RuntimeNatsPublishError {}
 
+fn runtime_nats_connect_options(user: String, pass: String) -> async_nats::ConnectOptions {
+    async_nats::ConnectOptions::with_user_and_password(user, pass)
+        .name("baal-backend-runtime-nats")
+        .retry_on_initial_connect()
+        .max_reconnects(None)
+        .connection_timeout(Duration::from_secs(5))
+        .reconnect_delay_callback(|attempts| {
+            let secs = cmp::min(cmp::max(attempts as u64, 1), 30);
+            Duration::from_secs(secs)
+        })
+}
+
+fn parse_runtime_nats_url(url: &str) -> Result<(async_nats::ServerAddr, String, String), io::Error> {
+    let server_addr: async_nats::ServerAddr = url
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    if !server_addr.has_user_pass() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "runtime NATS: missing user and password in URL (use nats://user:pass@host:port)",
+        ));
+    }
+    let user = server_addr.username().map(String::from).unwrap_or_default();
+    let pass = server_addr.password().map(String::from).unwrap_or_default();
+    Ok((server_addr, user, pass))
+}
+
 /// JetStream context on a shared [`async_nats::Client`]. Release events must use JetStream publish
 /// so messages land in the stream (core publish does not unless the server mirrors it).
+///
+/// The underlying [`async_nats::Client`] reconnects indefinitely via crate defaults; API publishes
+/// are bounded by [`Self::operation_timeout`] with one retry (no in-memory buffering).
 pub struct RuntimeNatsPublisher {
     jetstream: async_nats::jetstream::Context,
+    operation_timeout: Duration,
 }
 
 impl RuntimeNatsPublisher {
-    pub async fn connect(url: &str) -> Result<Self, async_nats::Error> {
-        // `async_nats::connect` does not apply user:pass from the URL to the CONNECT frame; only
-        // `ConnectOptions` auth is sent. Use explicit options when the URL embeds credentials.
-        let server_addr: async_nats::ServerAddr = url.parse()?;
-        let mut options = async_nats::ConnectOptions::new();
-        if server_addr.has_user_pass() {
-            let user = server_addr.username().map(String::from).unwrap_or_default();
-            let pass = server_addr.password().map(String::from).unwrap_or_default();
-            options = async_nats::ConnectOptions::with_user_and_password(user, pass);
-        } else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "runtime NATS: missing user and password in URL (use nats://user:pass@host:port)",
-            )
-            .into());
-        }
-        let client = async_nats::connect_with_options(server_addr, options).await?;
+    pub async fn connect(
+        url: &str,
+        operation_timeout: Duration,
+    ) -> Result<Self, async_nats::Error> {
+        let (server_addr, user, pass) = parse_runtime_nats_url(url)?;
+        let options = runtime_nats_connect_options(user, pass);
+        let client = options.connect(server_addr).await?;
         let jetstream = async_nats::jetstream::new(client);
-        Ok(Self { jetstream })
+        Ok(Self {
+            jetstream,
+            operation_timeout,
+        })
+    }
+
+    pub async fn ping(&self) -> Result<(), RuntimeNatsPublishError> {
+        use async_nats::connection::State;
+        let client = self.jetstream.client();
+        if client.connection_state() != State::Connected {
+            return Err(RuntimeNatsPublishError::Unavailable);
+        }
+        match tokio::time::timeout(self.operation_timeout, client.flush()).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(RuntimeNatsPublishError::Publish(format!("nats ping: {e}"))),
+            Err(_) => Err(RuntimeNatsPublishError::TimedOut),
+        }
+    }
+
+    async fn publish_bytes_once(
+        &self,
+        subject: &str,
+        bytes: Vec<u8>,
+        event_kind: &'static str,
+    ) -> Result<(), RuntimeNatsPublishError> {
+        self.jetstream
+            .publish(subject.to_string(), bytes.into())
+            .await
+            .map_err(|e| RuntimeNatsPublishError::Publish(e.to_string()))?;
+        tracing::info!(
+            target: "runtime_nats",
+            subject = %subject,
+            event_kind,
+            "runtime event published via JetStream successfully"
+        );
+        Ok(())
+    }
+
+    async fn publish_bytes_with_recovery(
+        &self,
+        subject: &str,
+        bytes: Vec<u8>,
+        event_kind: &'static str,
+    ) -> Result<(), RuntimeNatsPublishError> {
+        let err = match tokio::time::timeout(
+            self.operation_timeout,
+            self.publish_bytes_once(subject, bytes.clone(), event_kind),
+        )
+        .await
+        {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(e)) => e,
+            Err(_) => RuntimeNatsPublishError::TimedOut,
+        };
+        tracing::warn!(
+            target: "runtime_nats",
+            subject = %subject,
+            event_kind,
+            error = %err,
+            "runtime NATS publish failed; retrying once"
+        );
+        match tokio::time::timeout(
+            self.operation_timeout,
+            self.publish_bytes_once(subject, bytes, event_kind),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(RuntimeNatsPublishError::TimedOut),
+        }
     }
 
     /// Publish arbitrary JSON to a JetStream subject (core publish does not land in the stream).
@@ -93,17 +191,8 @@ impl RuntimeNatsPublisher {
             event_kind,
             "publishing runtime event via JetStream (for runtimes to consume)"
         );
-        self.jetstream
-            .publish(subject.to_string(), bytes.into())
+        self.publish_bytes_with_recovery(subject, bytes, event_kind)
             .await
-            .map_err(|e| RuntimeNatsPublishError::Publish(e.to_string()))?;
-        tracing::info!(
-            target: "runtime_nats",
-            subject = %subject,
-            event_kind,
-            "runtime event published via JetStream successfully"
-        );
-        Ok(())
     }
 
     pub async fn publish_stage_release(
