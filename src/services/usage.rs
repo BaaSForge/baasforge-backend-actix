@@ -1,12 +1,68 @@
 use crate::models::project_usage_entries::ProjectUsageEntryResponse;
 use crate::schema::{project_usage_entries, projects};
 use crate::services::payment::get_user_active_paid_packages;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use diesel::prelude::*;
+use diesel::sql_query;
+use diesel::sql_types::{BigInt, Double, Nullable, Text, Timestamptz, Uuid as SqlUuid};
+use diesel::QueryableByName;
 use serde::Serialize;
-use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
+
+const USAGE_SCOPE_WHERE: &str = "
+  INNER JOIN projects pr ON pr.id = pue.project_id
+  WHERE pr.owner_user_id = $1
+    AND ($2::uuid IS NULL OR pue.project_id = $2)
+    AND ($3::timestamptz IS NULL OR pue.recorded_at >= $3)
+    AND ($4::timestamptz IS NULL OR pue.recorded_at < $4)
+";
+
+const AGGREGATE_NON_STORAGE_SQL: &str = "
+SELECT pue.kind, pue.metric, pue.price_unit,
+  SUM(pue.quantity)::bigint AS billable_quantity
+FROM project_usage_entries pue
+";
+
+const STORAGE_NET_BYTES_SQL: &str = "
+SELECT pue.metric, pue.price_unit,
+  SUM(
+    CASE WHEN pue.details->>'op' = 'decr' THEN -pue.quantity ELSE pue.quantity END
+  )::bigint AS net_bytes
+FROM project_usage_entries pue
+";
+
+const STORAGE_BYTE_HOURS_SQL: &str = "
+WITH signed AS (
+  SELECT pue.recorded_at, pue.metric, pue.price_unit,
+         pue.quantity * CASE WHEN pue.details->>'op' = 'decr' THEN -1 ELSE 1 END AS delta
+  FROM project_usage_entries pue
+  INNER JOIN projects pr ON pr.id = pue.project_id
+  WHERE pr.owner_user_id = $1
+    AND ($2::uuid IS NULL OR pue.project_id = $2)
+    AND pue.kind = 'storage'
+    AND pue.recorded_at < $4
+),
+running AS (
+  SELECT recorded_at, metric, price_unit,
+         SUM(delta) OVER (PARTITION BY metric, price_unit ORDER BY recorded_at) AS bytes
+  FROM signed
+),
+segments AS (
+  SELECT metric, price_unit, bytes, recorded_at,
+         LEAD(recorded_at, 1, $4::timestamptz) OVER (
+           PARTITION BY metric, price_unit ORDER BY recorded_at
+         ) AS next_at
+  FROM running
+  WHERE recorded_at >= $3
+)
+SELECT metric, price_unit,
+       SUM(
+         GREATEST(bytes, 0) * EXTRACT(EPOCH FROM (next_at - recorded_at)) / 3600.0
+       ) AS byte_hours
+FROM segments
+GROUP BY metric, price_unit
+";
 
 const MAX_PAGE_SIZE: u32 = 100;
 
@@ -67,22 +123,44 @@ pub fn rate_for_metric(tier: i32, kind: &str, metric: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn storage_quantity_sign(quantity: i64, details: &Value) -> i64 {
-    let sign = match details.get("op").and_then(|v| v.as_str()) {
-        Some("decr") => -1,
-        _ => 1,
-    };
-    quantity.saturating_mul(sign)
+#[derive(QueryableByName)]
+struct UsageAggregateRow {
+    #[diesel(sql_type = Text)]
+    kind: String,
+    #[diesel(sql_type = Text)]
+    metric: String,
+    #[diesel(sql_type = Text)]
+    price_unit: String,
+    #[diesel(sql_type = BigInt)]
+    billable_quantity: i64,
 }
 
-pub fn line_cost(tier: i32, kind: &str, metric: &str, quantity: i64, details: &Value) -> f64 {
-    let rate = rate_for_metric(tier, kind, metric);
-    let billable_quantity = if kind == "storage" {
-        storage_quantity_sign(quantity, details)
-    } else {
-        quantity
-    };
-    billable_quantity as f64 * rate
+#[derive(QueryableByName)]
+struct StorageNetBytesRow {
+    #[diesel(sql_type = Text)]
+    metric: String,
+    #[diesel(sql_type = Text)]
+    price_unit: String,
+    #[diesel(sql_type = BigInt)]
+    net_bytes: i64,
+}
+
+#[derive(QueryableByName)]
+struct StorageByteHoursRow {
+    #[diesel(sql_type = Text)]
+    metric: String,
+    #[diesel(sql_type = Text)]
+    price_unit: String,
+    #[diesel(sql_type = Double)]
+    byte_hours: f64,
+}
+
+fn add_storage_cost(by_kind: &mut HashMap<String, f64>, total_cost: &mut f64, cost: f64) {
+    if cost <= 0.0 {
+        return;
+    }
+    *total_cost += cost;
+    *by_kind.entry("storage".to_string()).or_insert(0.0) += cost;
 }
 
 pub fn ensure_owned_project<C>(
@@ -218,37 +296,75 @@ where
     let (_, largest_tier) = get_user_active_paid_packages(conn, user_id)?;
     let tier = effective_tier(largest_tier);
 
-    let mut query = project_usage_entries::table
-        .inner_join(projects::table.on(project_usage_entries::project_id.eq(projects::id)))
-        .filter(projects::owner_user_id.eq(user_id))
-        .into_boxed();
-
-    if let Some(project_id) = project_id {
-        query = query.filter(project_usage_entries::project_id.eq(project_id));
-    }
-    if let Some(from) = from {
-        query = query.filter(project_usage_entries::recorded_at.ge(from));
-    }
-    if let Some(to) = to {
-        query = query.filter(project_usage_entries::recorded_at.lt(to));
-    }
-
-    let rows = query
-        .select((
-            project_usage_entries::kind,
-            project_usage_entries::metric,
-            project_usage_entries::quantity,
-            project_usage_entries::details,
-        ))
-        .load::<(String, String, i64, Value)>(conn)?;
+    let non_storage_sql = format!(
+        "{AGGREGATE_NON_STORAGE_SQL}{USAGE_SCOPE_WHERE} AND pue.kind != 'storage' \
+         GROUP BY pue.kind, pue.metric, pue.price_unit"
+    );
+    let non_storage_rows = sql_query(&non_storage_sql)
+        .bind::<SqlUuid, _>(user_id)
+        .bind::<Nullable<SqlUuid>, _>(project_id)
+        .bind::<Nullable<Timestamptz>, _>(from)
+        .bind::<Nullable<Timestamptz>, _>(to)
+        .load::<UsageAggregateRow>(conn)?;
 
     let mut by_kind: HashMap<String, f64> = HashMap::new();
     let mut total_cost = 0.0_f64;
 
-    for (kind, metric, quantity, details) in rows {
-        let cost = line_cost(tier, &kind, &metric, quantity, &details);
+    for row in non_storage_rows {
+        let rate = rate_for_metric(tier, &row.kind, &row.metric);
+        if rate <= 0.0 {
+            continue;
+        }
+        let cost = row.billable_quantity as f64 * rate;
+        if cost <= 0.0 {
+            continue;
+        }
         total_cost += cost;
-        *by_kind.entry(kind).or_insert(0.0) += cost;
+        *by_kind.entry(row.kind).or_insert(0.0) += cost;
+    }
+
+    if matches!((from, to), (Some(_), Some(_))) {
+        let period_hours = (to.unwrap() - from.unwrap()).num_seconds() as f64 / 3600.0;
+        let storage_sql = format!(
+            "{STORAGE_NET_BYTES_SQL}{USAGE_SCOPE_WHERE} AND pue.kind = 'storage' \
+             GROUP BY pue.metric, pue.price_unit \
+             HAVING SUM( \
+               CASE WHEN pue.details->>'op' = 'decr' THEN -pue.quantity ELSE pue.quantity END \
+             ) > 0"
+        );
+        let storage_rows = sql_query(&storage_sql)
+            .bind::<SqlUuid, _>(user_id)
+            .bind::<Nullable<SqlUuid>, _>(project_id)
+            .bind::<Nullable<Timestamptz>, _>(from)
+            .bind::<Nullable<Timestamptz>, _>(to)
+            .load::<StorageNetBytesRow>(conn)?;
+
+        for row in storage_rows {
+            let rate = rate_for_metric(tier, "storage", &row.metric);
+            if rate <= 0.0 {
+                continue;
+            }
+            let cost = row.net_bytes as f64 * period_hours * rate;
+            add_storage_cost(&mut by_kind, &mut total_cost, cost);
+        }
+    } else {
+        let period_start = from.unwrap_or_else(|| Utc.timestamp_opt(0, 0).unwrap());
+        let period_end = to.unwrap_or_else(Utc::now);
+        let storage_rows = sql_query(STORAGE_BYTE_HOURS_SQL)
+            .bind::<SqlUuid, _>(user_id)
+            .bind::<Nullable<SqlUuid>, _>(project_id)
+            .bind::<Timestamptz, _>(period_start)
+            .bind::<Timestamptz, _>(period_end)
+            .load::<StorageByteHoursRow>(conn)?;
+
+        for row in storage_rows {
+            let rate = rate_for_metric(tier, "storage", &row.metric);
+            if rate <= 0.0 {
+                continue;
+            }
+            let cost = row.byte_hours * rate;
+            add_storage_cost(&mut by_kind, &mut total_cost, cost);
+        }
     }
 
     let mut breakdown: Vec<UsageCostKindBreakdown> = by_kind
