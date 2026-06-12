@@ -8,6 +8,7 @@ pub mod project;
 pub mod runtime_env_vars;
 pub mod purchase;
 pub mod test;
+pub mod usage;
 pub mod ws;
 
 use crate::configs::Settings;
@@ -276,6 +277,18 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
             )
             .service(
                 web::scope("/api/v1/platform")
+                    .route(
+                        "/usage-entries",
+                        web::get()
+                            .to(usage::handle_list_usage_entries)
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/usage-cost",
+                        web::get()
+                            .to(usage::handle_get_usage_cost)
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
                     .route(
                         "/packages-type-definition-files",
                         web::post()

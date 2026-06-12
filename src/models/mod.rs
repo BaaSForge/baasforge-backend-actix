@@ -2,6 +2,7 @@ pub mod chat_messages;
 pub mod chat_sessions;
 pub mod packages;
 pub mod payments;
+pub mod project_usage_entries;
 pub mod projects;
 pub mod runtime_env_vars;
 pub mod user_tokens;
