@@ -189,6 +189,22 @@ diesel::table! {
 }
 
 diesel::table! {
+    project_usage_entries (id) {
+        id -> Uuid,
+        project_id -> Uuid,
+        recorded_at -> Timestamptz,
+        #[max_length = 32]
+        kind -> Varchar,
+        #[max_length = 64]
+        metric -> Varchar,
+        quantity -> Int8,
+        #[max_length = 16]
+        price_unit -> Varchar,
+        details -> Jsonb,
+    }
+}
+
+diesel::table! {
     projects (id) {
         id -> Uuid,
         owner_user_id -> Uuid,
@@ -245,6 +261,7 @@ diesel::joinable!(project_runtimes -> project_releases (live_release_id));
 diesel::joinable!(project_runtimes -> projects (project_id));
 diesel::joinable!(project_units -> chat_sessions (chat_session_id));
 diesel::joinable!(project_units -> projects (project_id));
+diesel::joinable!(project_usage_entries -> projects (project_id));
 diesel::joinable!(projects -> users (owner_user_id));
 diesel::joinable!(user_tokens -> users (user_id));
 
@@ -259,6 +276,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     project_runtime_env_vars,
     project_runtimes,
     project_units,
+    project_usage_entries,
     projects,
     user_tokens,
     users,
