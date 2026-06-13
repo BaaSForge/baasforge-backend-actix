@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:18-alpine3.21
+    container_name: postgres_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: baal_db
+      POSTGRES_USER: baal
+      POSTGRES_PASSWORD: "tbtFgrNcRu0icn0Tw6Jeo74beypeF5KeKoB70oX51RSO1iNHM7"
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "2563:5432"
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
+  rabbit:
+    image: rabbitmq:4.2.3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: baal
+      RABBITMQ_DEFAULT_PASS: "E88uJ49TyIOCYcIjdrTZyANqh1ofNO7CLc6q1MkVwK57kWRIkP"
+      RABBITMQ_NODENAME: "rabbit@rabbit"
+    ports:
+      - "3567:5672"
+      - "31567:15672"
+    volumes:
+      - ./rabbit:/var/lib/rabbitmq
+  redis:
+    image: redis:8.2.1-alpine3.22
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+    ports:
+      - "9637:6379"
+    volumes:
+      - ./redis:/data
+  nats:
+    image: nats:alpine3.22
+    restart: unless-stopped
+    container_name: baal-runtime-nats
+    ports:
+      - "2422:4222"
+      - "2822:8222"
+      - "2622:6222"
+    command:
+      - "-js"
+      - "-sd"
+      - "/data"
+      - "-m"
+      - "8222"
+      - "--user"
+      - "runtime_nats"
+      - "--pass"
+      - "cLuzNQ17vAehCs8HLuY3Btqakzijk34u20lhAKIY4414Xt5Bcc"
+    volumes:
+      - ./nats-jetstream:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "61668:16686"
+      - "7431:4317"
+      - "8431:4318"

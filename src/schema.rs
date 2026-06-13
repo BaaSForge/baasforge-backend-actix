@@ -212,6 +212,7 @@ diesel::table! {
         name -> Varchar,
         #[max_length = 255]
         slug -> Varchar,
+        last_cost_calculated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -245,6 +246,7 @@ diesel::table! {
         full_name -> Nullable<Varchar>,
         #[max_length = 255]
         email_in_platform -> Nullable<Varchar>,
+        last_subscription_cost_calculated_at -> Nullable<Timestamptz>,
     }
 }
 

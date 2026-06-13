@@ -134,6 +134,14 @@ pub struct UsageCostSummary {
     pub sum_output_tokens: i64,
     pub llm_input_cost: f64,
     pub llm_output_cost: f64,
+    pub subscription_entity_seconds: i64,
+    pub project_entity_seconds: i64,
+    pub unit_entity_seconds: i64,
+    pub stage_runtime_entity_seconds: i64,
+    pub subscription_cost: f64,
+    pub project_cost: f64,
+    pub unit_cost: f64,
+    pub stage_runtime_cost: f64,
     pub total_cost: f64,
 }
 
@@ -157,6 +165,14 @@ impl UsageCostSummary {
             sum_output_tokens: billing.sum_output_tokens,
             llm_input_cost: billing.llm_input_cost,
             llm_output_cost: billing.llm_output_cost,
+            subscription_entity_seconds: billing.platform.subscription_entity_seconds,
+            project_entity_seconds: billing.platform.project_entity_seconds,
+            unit_entity_seconds: billing.platform.unit_entity_seconds,
+            stage_runtime_entity_seconds: billing.platform.stage_runtime_entity_seconds,
+            subscription_cost: billing.platform.subscription_cost,
+            project_cost: billing.platform.project_cost,
+            unit_cost: billing.platform.unit_cost,
+            stage_runtime_cost: billing.platform.stage_runtime_cost,
             total_cost: billing.total,
         }
     }

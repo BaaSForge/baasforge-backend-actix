@@ -64,7 +64,8 @@ jobs:
                 "image": ($base + ":" + $tag),
                 "container_suffix": "",
                 "expose_ports": true,
-                "cargo_features": ""
+                "cargo_features": "",
+                "cron_expression": ""
               },
               {
                 "service": "chat-worker",
@@ -72,7 +73,8 @@ jobs:
                 "image": ($base + "-chat-worker:" + $tag),
                 "container_suffix": "-chat-worker",
                 "expose_ports": false,
-                "cargo_features": ""
+                "cargo_features": "",
+                "cron_expression": ""
               },
               {
                 "service": "unit-technical-reviewer",
@@ -80,7 +82,26 @@ jobs:
                 "image": ($base + "-unit-technical-reviewer:" + $tag),
                 "container_suffix": "-unit-technical-reviewer",
                 "expose_ports": false,
-                "cargo_features": "unit_technical_reviewer"
+                "cargo_features": "unit_technical_reviewer",
+                "cron_expression": ""
+              },
+              {
+                "service": "platform-cost-calculate-consumer",
+                "dockerfile": "docker/Dockerfile.platform_cost_calculate_consumer",
+                "image": ($base + "-platform-cost-calculate-consumer:" + $tag),
+                "container_suffix": "-platform-cost-calculate-consumer",
+                "expose_ports": false,
+                "cargo_features": "",
+                "cron_expression": ""
+              },
+              {
+                "service": "platform-cost-calculate-scheduler",
+                "dockerfile": "docker/Dockerfile.platform_cost_calculate_scheduler",
+                "image": ($base + "-platform-cost-calculate-scheduler:" + $tag),
+                "container_suffix": "-platform-cost-calculate-scheduler",
+                "expose_ports": false,
+                "cargo_features": "",
+                "cron_expression": "*/3 * * * *"
               }
             ]')
           echo "services=$SERVICES" >> "$GITHUB_OUTPUT"
@@ -233,6 +254,8 @@ jobs:
           IMAGE: ${{ matrix.image }}
           CONTAINER_NAME: baal-backend${{ matrix.container_suffix }}-${{ needs.resolve-meta.outputs.deploy_suffix }}
           EXPOSE_PORTS: ${{ matrix.expose_ports }}
+          CRON_EXPRESSION: ${{ matrix.cron_expression }}
+          DEPLOY_SUFFIX: ${{ needs.resolve-meta.outputs.deploy_suffix }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -240,7 +263,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: >-
-            IMAGE,CONTAINER_NAME,EXPOSE_PORTS,GHCR_USER,GHCR_TOKEN,
+            IMAGE,CONTAINER_NAME,EXPOSE_PORTS,CRON_EXPRESSION,DEPLOY_SUFFIX,GHCR_USER,GHCR_TOKEN,
             DATABASE_URL,AUTH_ACCESS_TOKEN_SECRET,AUTH_REFRESH_TOKEN_SECRET,
             GOOGLE_OAUTH_CLIENT_ID,GOOGLE_OAUTH_CLIENT_SECRET,GOOGLE_OAUTH_STATE_SECRET,
             APP_GITHUB_OAUTH_CLIENT_ID,APP_GITHUB_OAUTH_CLIENT_SECRET,APP_GITHUB_OAUTH_STATE_SECRET,
@@ -264,13 +287,8 @@ jobs:
 
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             docker pull "$IMAGE"
-            docker stop "$CONTAINER_NAME" 2>/dev/null || true
-            docker rm "$CONTAINER_NAME" 2>/dev/null || true
 
-            RUN_ARGS=(
-              -d
-              --name "$CONTAINER_NAME"
-              --restart unless-stopped
+            DOCKER_ENV_ARGS=(
               -e "DATABASE_URL=$DATABASE_URL"
               -e "AUTH_ACCESS_TOKEN_SECRET=$AUTH_ACCESS_TOKEN_SECRET"
               -e "AUTH_REFRESH_TOKEN_SECRET=$AUTH_REFRESH_TOKEN_SECRET"
@@ -287,6 +305,39 @@ jobs:
               -e "RUNTIME_NATS_URL=$RUNTIME_NATS_URL"
               -e "BASE_RUNTIME_ENDPOINT=$BASE_RUNTIME_ENDPOINT"
               -e "JAEGER_QUERY_BASE_URL=$JAEGER_QUERY_BASE_URL"
+            )
+
+            if [ -n "${CRON_EXPRESSION:-}" ]; then
+              docker stop "$CONTAINER_NAME" 2>/dev/null || true
+              docker rm "$CONTAINER_NAME" 2>/dev/null || true
+
+              WRAPPER="$HOME/baal-run-${CONTAINER_NAME}.sh"
+              CRON_MARKER="baal-cron-${CONTAINER_NAME}"
+
+              {
+                echo '#!/usr/bin/env bash'
+                echo 'set -euo pipefail'
+                echo -n 'docker run --rm --network host'
+                for arg in "${DOCKER_ENV_ARGS[@]}"; do
+                  printf ' %q' "$arg"
+                done
+                printf ' %q\n' "$IMAGE"
+              } > "$WRAPPER"
+              chmod +x "$WRAPPER"
+
+              (crontab -l 2>/dev/null | grep -v "$CRON_MARKER" || true; echo "$CRON_EXPRESSION $WRAPPER # $CRON_MARKER") | crontab -
+              echo "Installed cron ($CRON_EXPRESSION): $WRAPPER"
+              exit 0
+            fi
+
+            docker stop "$CONTAINER_NAME" 2>/dev/null || true
+            docker rm "$CONTAINER_NAME" 2>/dev/null || true
+
+            RUN_ARGS=(
+              -d
+              --name "$CONTAINER_NAME"
+              --restart unless-stopped
+              "${DOCKER_ENV_ARGS[@]}"
             )
 
             if [ "$EXPOSE_PORTS" = "true" ]; then

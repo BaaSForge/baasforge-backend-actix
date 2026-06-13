@@ -129,4 +129,45 @@ curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
   "$MGMT/api/bindings/$VHOST/e/unit_reviewer_dead_letter_exchange/q/unit_reviewer_dead_letter_queue" \
   -d '{"routing_key":"unit_reviewer.#"}'
 
+# Project cost calculate exchange and work queue — scheduler publishes, consumer(s) process.
+echo "Declaring platform_cost_calculate_exchange (topic, durable)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/exchanges/$VHOST/platform_cost_calculate_exchange" \
+  -d '{"type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}}'
+
+echo "Declaring platform_cost_calculate_work_queue (durable)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/queues/$VHOST/platform_cost_calculate_work_queue" \
+  -d '{"durable":true,"auto_delete":false,"arguments":{}}'
+
+echo "Binding platform_cost_calculate_work_queue to platform_cost_calculate_exchange with routing_key platform_cost_calculate.#..."
+curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
+  "$MGMT/api/bindings/$VHOST/e/platform_cost_calculate_exchange/q/platform_cost_calculate_work_queue" \
+  -d '{"routing_key":"platform_cost_calculate.#"}'
+
+echo "Declaring retry_delay_platform_cost_calculate_work_queue (per-message TTL only, DLX to platform_cost_calculate_exchange)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/queues/$VHOST/retry_delay_platform_cost_calculate_work_queue" \
+  -d '{"durable":true,"auto_delete":false,"arguments":{"x-dead-letter-exchange":"platform_cost_calculate_exchange"}}'
+
+echo "Binding retry_delay_platform_cost_calculate_work_queue to $RETRY_EXCHANGE with routing_key platform_cost_calculate.#..."
+curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
+  "$MGMT/api/bindings/$VHOST/e/$RETRY_EXCHANGE/q/retry_delay_platform_cost_calculate_work_queue" \
+  -d '{"routing_key":"platform_cost_calculate.#"}'
+
+echo "Declaring platform_cost_calculate_dead_letter_exchange (topic, durable)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/exchanges/$VHOST/platform_cost_calculate_dead_letter_exchange" \
+  -d '{"type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}}'
+
+echo "Declaring platform_cost_calculate_dead_letter_queue (durable, no TTL)..."
+curl -sS -f $AUTH -X PUT -H "Content-Type: application/json" \
+  "$MGMT/api/queues/$VHOST/platform_cost_calculate_dead_letter_queue" \
+  -d '{"durable":true,"auto_delete":false,"arguments":{}}'
+
+echo "Binding platform_cost_calculate_dead_letter_queue to platform_cost_calculate_dead_letter_exchange with routing_key platform_cost_calculate.#..."
+curl -sS -f $AUTH -X POST -H "Content-Type: application/json" \
+  "$MGMT/api/bindings/$VHOST/e/platform_cost_calculate_dead_letter_exchange/q/platform_cost_calculate_dead_letter_queue" \
+  -d '{"routing_key":"platform_cost_calculate.#"}'
+
 echo "Queue setup done (HTTP API)."

@@ -73,6 +73,9 @@ pub async fn run() -> Result<(), BoxError> {
     )
     .await;
 
+    let retry_policy = reviewer_retry_policy(settings.retry_delay_ttl_ms);
+    let dead_letter_spec = reviewer_dead_letter_spec();
+
     info!("Unit technical reviewer started. Consuming from reviewer work queue.");
 
     while let Some(delivery_result) = consumer.next().await {
@@ -108,8 +111,6 @@ pub async fn run() -> Result<(), BoxError> {
         );
 
         let retry_num = message.retry_num;
-        let retry_policy = reviewer_retry_policy();
-        let dead_letter_spec = reviewer_dead_letter_spec();
 
         let result = process_message(
             &pool,

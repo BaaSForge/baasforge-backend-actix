@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use diesel::Insertable;
 use diesel::Queryable;
 use serde::Serialize;
@@ -23,6 +24,8 @@ pub struct User {
     #[allow(dead_code)]
     pub full_name: Option<String>,
     pub email_in_platform: Option<String>,
+    #[allow(dead_code)]
+    pub last_subscription_cost_calculated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Insertable)]

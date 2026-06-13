@@ -32,6 +32,10 @@ echo "==> Stopping unit_technical_reviewer processes..."
 pkill -x unit_technical_reviewer 2>/dev/null && echo "    pkill -x unit_technical_reviewer" || true
 pkill -f 'run --bin unit_technical_reviewer' 2>/dev/null && echo "    pkill -f 'run --bin unit_technical_reviewer'" || true
 
+echo "==> Stopping platform_cost_calculate_consumer processes..."
+pkill -x platform_cost_calculate_consumer 2>/dev/null && echo "    pkill -x platform_cost_calculate_consumer" || true
+pkill -f 'run --bin platform_cost_calculate_consumer' 2>/dev/null && echo "    pkill -f 'run --bin platform_cost_calculate_consumer'" || true
+
 echo "==> Stopping cargo watch..."
 # dev.sh / dev-chat-worker.sh / dev-unit-technical-reviewer.sh use `cargo watch` (installed binary is often `cargo-watch`)
 pkill -f "cargo watch" 2>/dev/null && echo "    pkill -f \"cargo watch\"" || true

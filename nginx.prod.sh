@@ -1,0 +1,1 @@
+docker run -d   --name=nginx-proxy   --network=host   --restart=unless-stopped   --volume /root/nginx/nginx.conf:/etc/nginx/nginx.conf:ro   --volume /etc/letsencrypt/live/api.baasforge.com:/etc/letsencrypt/live/api.baasforge.com:ro   --volume /etc/letsencrypt/archive:/etc/letsencrypt/archive:ro   nginx:1.29-bookworm nginx -g 'daemon off;'

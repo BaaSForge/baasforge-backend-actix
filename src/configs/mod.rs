@@ -90,7 +90,7 @@ pub struct Settings {
     pub rabbit_connect_retry_interval_secs: u64,
     /// Exchange used for retry delay: failed messages are published here, then after TTL are dead-lettered back to the original queue.
     pub retry_delay_exchange: String,
-    /// TTL in milliseconds for messages in retry delay queues (e.g. 3000 = 3 seconds).
+    /// Exponential retry backoff base in ms (`RETRY_DELAY_TTL_MS`); `base_secs = value / 1000` in `1000 * base_secs^(1 + retry_num)`.
     pub retry_delay_ttl_ms: u32,
     /// Chat session queue: if a consumer doesn't ack within this time (seconds), RabbitMQ closes the channel and requeues (e.g. after crash). Used by queue_setup_http.sh for `x-consumer-timeout`.
     /// Size this for **one** queue message (one LLM pass + retrievals for that step); tool **executions** are separate messages—see `docs/chat-queue.md`.
@@ -122,6 +122,10 @@ pub struct Settings {
     pub usage_publish_batch_size: usize,
     pub usage_publish_flush_ms: u64,
     pub usage_publish_channel_capacity: usize,
+    /// Max projects enqueued per scheduler run.
+    pub platform_cost_calculate_scheduler_batch_size: usize,
+    /// Minutes advanced on `projects.last_cost_calculated_at` per scheduled window.
+    pub platform_cost_calculate_window_minutes: i64,
     pub nats_jetstream_stream_usage: Option<String>,
     pub nats_subject_usage_batch: Option<String>,
     /// When set, the API connects to NATS on startup and publishes release events.
@@ -307,6 +311,22 @@ impl Settings {
             .expect("USAGE_PUBLISH_CHANNEL_CAPACITY must be set")
             .parse()
             .expect("USAGE_PUBLISH_CHANNEL_CAPACITY must be a valid usize");
+        let platform_cost_calculate_scheduler_batch_size: usize =
+            env::var("PLATFORM_COST_CALCULATE_SCHEDULER_BATCH_SIZE")
+                .expect("PLATFORM_COST_CALCULATE_SCHEDULER_BATCH_SIZE must be set")
+                .parse()
+                .expect("PLATFORM_COST_CALCULATE_SCHEDULER_BATCH_SIZE must be a valid usize");
+        if platform_cost_calculate_scheduler_batch_size == 0 {
+            return Err("PLATFORM_COST_CALCULATE_SCHEDULER_BATCH_SIZE must be greater than 0".into());
+        }
+        let platform_cost_calculate_window_minutes: i64 =
+            env::var("PLATFORM_COST_CALCULATE_WINDOW_MINUTES")
+                .expect("PLATFORM_COST_CALCULATE_WINDOW_MINUTES must be set")
+                .parse()
+                .expect("PLATFORM_COST_CALCULATE_WINDOW_MINUTES must be a valid i64");
+        if platform_cost_calculate_window_minutes <= 0 {
+            return Err("PLATFORM_COST_CALCULATE_WINDOW_MINUTES must be greater than 0".into());
+        }
         let nats_jetstream_stream_usage = env::var("NATS_JETSTREAM_STREAM_USAGE")
             .ok()
             .map(|s| s.trim().to_string())
@@ -483,6 +503,8 @@ impl Settings {
             usage_publish_batch_size,
             usage_publish_flush_ms,
             usage_publish_channel_capacity,
+            platform_cost_calculate_scheduler_batch_size,
+            platform_cost_calculate_window_minutes,
             nats_jetstream_stream_usage,
             nats_subject_usage_batch,
             runtime_nats_url,

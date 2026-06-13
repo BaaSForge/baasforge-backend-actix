@@ -32,9 +32,10 @@ pub const CHAT_MAX_RETRIES: u32 = 1;
 /// returns text-only, the chat worker re-queues with a nudge at most this many times per stuck chain.
 pub const MAX_SUB_AGENT_STUCK_CONTINUATIONS: u8 = 5;
 
-pub fn chat_retry_policy() -> RetryPolicy {
+pub fn chat_retry_policy(retry_delay_ttl_ms: u32) -> RetryPolicy {
     RetryPolicy {
         max_retries: CHAT_MAX_RETRIES,
+        retry_delay_ttl_ms,
     }
 }
 

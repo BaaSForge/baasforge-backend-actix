@@ -11,5 +11,7 @@ trap cleanup SIGINT SIGTERM
 ./dev-chat-worker.sh &
 ./dev-unit-technical-reviewer.sh &
 ./dev-unit-technical-reviewer.sh &
+./dev-platform-cost-calculate-consumer.sh &
+./dev-platform-cost-calculate-consumer.sh &
 
 wait

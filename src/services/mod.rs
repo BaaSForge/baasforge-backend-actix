@@ -6,6 +6,7 @@ pub mod message_queue;
 pub mod redis_conn;
 pub mod observability;
 pub mod payment;
+pub mod platform_cost_calculate;
 pub mod releases;
 pub mod runtime_nats;
 pub mod runtime_secrets;

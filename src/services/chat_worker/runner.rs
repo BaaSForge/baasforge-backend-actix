@@ -122,6 +122,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await;
     info!("Chat worker started. Consuming from work queue.");
 
+    let retry_policy = chat_retry_policy(settings.retry_delay_ttl_ms);
+    let dead_letter_spec = chat_dead_letter_spec();
+
     'consumer: while let Some(delivery_result) = consumer.next().await {
         let delivery = match delivery_result {
             Ok(d) => d,
@@ -214,8 +217,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let retry_num = payload.retry_num;
             let delivery_data = delivery.data.clone();
             let retry_routing_key = routing_key.clone();
-            let retry_policy = chat_retry_policy();
-            let dead_letter_spec = chat_dead_letter_spec();
 
             // Await here (not tokio::spawn): ack must follow processing for RabbitMQ x-consumer-timeout,
             // and prefetch=1 already serializes deliveries until we ack.

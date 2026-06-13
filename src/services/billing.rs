@@ -11,9 +11,10 @@ use crate::services::llm_usage::{log_llm_usage, LlmUsageRecord};
 pub const MAX_BILLING_PERIOD_DAYS: i64 = 62;
 
 pub use pricing::{
-    billing_rates_for_package_tier, BillingRates, COMPUTE_GB_MS_METRIC, LLM_INPUT_TOKENS_METRIC,
-    LLM_KIND, LLM_OUTPUT_TOKENS_METRIC, STORAGE_TIER_ACTIVE, STORAGE_TIER_RETAINED,
-    TOKEN_PRICE_UNIT,
+    billing_rates_for_package_tier, platform_rates_for_package_tier, BillingRates,
+    PlatformResourceRates, COMPUTE_GB_MS_METRIC, ENTITY_SECOND_PRICE_UNIT, LLM_INPUT_TOKENS_METRIC,
+    LLM_KIND, LLM_OUTPUT_TOKENS_METRIC, PLATFORM_KIND, PROJECT_METRIC, STAGE_RUNTIME_METRIC,
+    STORAGE_TIER_ACTIVE, STORAGE_TIER_RETAINED, SUBSCRIPTION_METRIC, TOKEN_PRICE_UNIT, UNIT_METRIC,
 };
 
 #[derive(Debug, Clone)]
@@ -269,6 +270,58 @@ fn hours_between(from: DateTime<Utc>, to: DateTime<Utc>) -> f64 {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct PlatformPeriodBilling {
+    pub subscription_entity_seconds: i64,
+    pub project_entity_seconds: i64,
+    pub unit_entity_seconds: i64,
+    pub stage_runtime_entity_seconds: i64,
+    pub subscription_cost: f64,
+    pub project_cost: f64,
+    pub unit_cost: f64,
+    pub stage_runtime_cost: f64,
+}
+
+impl PlatformPeriodBilling {
+    pub fn total_cost(&self) -> f64 {
+        self.subscription_cost + self.project_cost + self.unit_cost + self.stage_runtime_cost
+    }
+
+    pub fn from_entity_seconds(rates: PlatformResourceRates, sums: &[(String, i64)]) -> Self {
+        let mut subscription_entity_seconds = 0_i64;
+        let mut project_entity_seconds = 0_i64;
+        let mut unit_entity_seconds = 0_i64;
+        let mut stage_runtime_entity_seconds = 0_i64;
+
+        for (metric, quantity) in sums {
+            match metric.as_str() {
+                SUBSCRIPTION_METRIC => subscription_entity_seconds += quantity,
+                PROJECT_METRIC => project_entity_seconds += quantity,
+                UNIT_METRIC => unit_entity_seconds += quantity,
+                STAGE_RUNTIME_METRIC => stage_runtime_entity_seconds += quantity,
+                _ => {}
+            }
+        }
+
+        Self {
+            subscription_entity_seconds,
+            project_entity_seconds,
+            unit_entity_seconds,
+            stage_runtime_entity_seconds,
+            subscription_cost: rates.cost_for_entity_seconds(
+                SUBSCRIPTION_METRIC,
+                subscription_entity_seconds,
+            ),
+            project_cost: rates.cost_for_entity_seconds(PROJECT_METRIC, project_entity_seconds),
+            unit_cost: rates.cost_for_entity_seconds(UNIT_METRIC, unit_entity_seconds),
+            stage_runtime_cost: rates.cost_for_entity_seconds(
+                STAGE_RUNTIME_METRIC,
+                stage_runtime_entity_seconds,
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct PeriodBilling {
     pub sum_gb_ms: i64,
     pub compute_cost: f64,
@@ -280,6 +333,7 @@ pub struct PeriodBilling {
     pub sum_output_tokens: i64,
     pub llm_input_cost: f64,
     pub llm_output_cost: f64,
+    pub platform: PlatformPeriodBilling,
     pub total: f64,
 }
 
@@ -290,10 +344,12 @@ impl PeriodBilling {
         byte_hours_active: f64,
         byte_hours_retained: f64,
         llm: LlmPeriodCost,
+        platform: PlatformPeriodBilling,
     ) -> Self {
         let compute_cost = sum_gb_ms as f64 * rates.compute_gb_ms;
         let storage_hot_cost = byte_hours_active * rates.storage_active;
         let storage_cold_cost = byte_hours_retained * rates.storage_retained;
+        let platform_total = platform.total_cost();
         Self {
             sum_gb_ms,
             compute_cost,
@@ -305,7 +361,12 @@ impl PeriodBilling {
             sum_output_tokens: llm.sum_output_tokens,
             llm_input_cost: llm.input_cost,
             llm_output_cost: llm.output_cost,
-            total: compute_cost + storage_hot_cost + storage_cold_cost + llm.total_cost(),
+            platform,
+            total: compute_cost
+                + storage_hot_cost
+                + storage_cold_cost
+                + llm.total_cost()
+                + platform_total,
         }
     }
 }
@@ -353,6 +414,27 @@ WHERE pr.owner_user_id = $1
   AND pue.recorded_at < $3
 ORDER BY pue.recorded_at, pue.id
 ";
+
+const PLATFORM_SUM_SQL: &str = "
+SELECT pue.metric AS metric, COALESCE(SUM(pue.quantity), 0)::bigint AS quantity
+FROM project_usage_entries pue
+INNER JOIN projects pr ON pr.id = pue.project_id
+WHERE pr.owner_user_id = $1
+  AND ($2::uuid IS NULL OR pue.project_id = $2)
+  AND pue.kind = 'platform'
+  AND pue.metric IN ('subscription', 'project', 'unit', 'stage_runtime')
+  AND pue.recorded_at >= $3
+  AND pue.recorded_at < $4
+GROUP BY pue.metric
+";
+
+#[derive(QueryableByName)]
+struct PlatformSumRow {
+    #[diesel(sql_type = Text)]
+    metric: String,
+    #[diesel(sql_type = BigInt)]
+    quantity: i64,
+}
 
 #[derive(QueryableByName)]
 struct ComputeSumRow {
@@ -446,12 +528,26 @@ where
     let byte_hours_retained =
         StorageBilling::byte_hours(&storage_events, STORAGE_TIER_RETAINED, start, end);
 
+    let platform_rows = sql_query(PLATFORM_SUM_SQL)
+        .bind::<SqlUuid, _>(user_id)
+        .bind::<diesel::sql_types::Nullable<SqlUuid>, _>(project_id)
+        .bind::<Timestamptz, _>(start)
+        .bind::<Timestamptz, _>(end)
+        .load::<PlatformSumRow>(conn)?;
+    let platform_sums: Vec<(String, i64)> = platform_rows
+        .into_iter()
+        .map(|row| (row.metric, row.quantity))
+        .collect();
+    let platform_rates = platform_rates_for_package_tier(package_tier);
+    let platform = PlatformPeriodBilling::from_entity_seconds(platform_rates, &platform_sums);
+
     Ok(PeriodBilling::from_metered(
         rates,
         compute_row.sum_gb_ms,
         byte_hours_active,
         byte_hours_retained,
         llm,
+        platform,
     ))
 }
 
@@ -564,6 +660,15 @@ mod tests {
         assert!((billing.total - total).abs() < 1e-6, "total");
     }
 
+    fn empty_platform_billing() -> PlatformPeriodBilling {
+        PlatformPeriodBilling::from_entity_seconds(PlatformResourceRates {
+            subscription_per_hour: 0.0,
+            project_per_hour: 0.0,
+            unit_per_hour: 0.0,
+            stage_runtime_per_hour: 0.0,
+        }, &[])
+    }
+
     fn bill(
         compute_events: &[ComputeMeterEvent],
         storage_events: &[StorageMeterEvent],
@@ -590,6 +695,7 @@ mod tests {
             byte_hours_active,
             byte_hours_retained,
             llm,
+            empty_platform_billing(),
         )
     }
 
@@ -793,6 +899,7 @@ mod tests {
                     input_cost: 0.0,
                     output_cost: 0.0,
                 },
+                empty_platform_billing(),
             )
         };
 
@@ -837,5 +944,325 @@ mod tests {
         let start = period_start();
         let end = start + chrono::Duration::days(63);
         assert!(validate_billing_period(start, end).is_err());
+    }
+
+    fn test_platform_rates() -> PlatformResourceRates {
+        PlatformResourceRates {
+            subscription_per_hour: 1.0,
+            project_per_hour: 0.01,
+            unit_per_hour: 0.001,
+            stage_runtime_per_hour: 0.1,
+        }
+    }
+
+    fn platform_from_sums(sums: &[(String, i64)]) -> PlatformPeriodBilling {
+        PlatformPeriodBilling::from_entity_seconds(test_platform_rates(), sums)
+    }
+
+    fn assert_platform(
+        billing: &PlatformPeriodBilling,
+        subscription_entity_seconds: i64,
+        project_entity_seconds: i64,
+        unit_entity_seconds: i64,
+        stage_runtime_entity_seconds: i64,
+        subscription_cost: f64,
+        project_cost: f64,
+        unit_cost: f64,
+        stage_runtime_cost: f64,
+    ) {
+        assert_eq!(
+            billing.subscription_entity_seconds, subscription_entity_seconds,
+            "subscription_entity_seconds"
+        );
+        assert_eq!(
+            billing.project_entity_seconds, project_entity_seconds,
+            "project_entity_seconds"
+        );
+        assert_eq!(billing.unit_entity_seconds, unit_entity_seconds, "unit_entity_seconds");
+        assert_eq!(
+            billing.stage_runtime_entity_seconds, stage_runtime_entity_seconds,
+            "stage_runtime_entity_seconds"
+        );
+        assert!(
+            (billing.subscription_cost - subscription_cost).abs() < 1e-12,
+            "subscription_cost: got {} expected {}",
+            billing.subscription_cost,
+            subscription_cost
+        );
+        assert!(
+            (billing.project_cost - project_cost).abs() < 1e-12,
+            "project_cost: got {} expected {}",
+            billing.project_cost,
+            project_cost
+        );
+        assert!(
+            (billing.unit_cost - unit_cost).abs() < 1e-12,
+            "unit_cost: got {} expected {}",
+            billing.unit_cost,
+            unit_cost
+        );
+        assert!(
+            (billing.stage_runtime_cost - stage_runtime_cost).abs() < 1e-12,
+            "stage_runtime_cost: got {} expected {}",
+            billing.stage_runtime_cost,
+            stage_runtime_cost
+        );
+        assert!(
+            (billing.total_cost()
+                - (subscription_cost + project_cost + unit_cost + stage_runtime_cost))
+                .abs()
+                < 1e-12,
+            "total_cost"
+        );
+    }
+
+    #[test]
+    fn platform_empty_sums_are_zero() {
+        let billing = platform_from_sums(&[]);
+        assert_platform(&billing, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0);
+    }
+
+    #[test]
+    fn platform_project_one_entity_hour() {
+        let billing = platform_from_sums(&[(PROJECT_METRIC.to_string(), 3_600)]);
+        assert_platform(&billing, 0, 3_600, 0, 0, 0.0, 0.01, 0.0, 0.0);
+    }
+
+    #[test]
+    fn platform_subscription_one_entity_hour() {
+        let billing = platform_from_sums(&[(SUBSCRIPTION_METRIC.to_string(), 3_600)]);
+        assert_platform(&billing, 3_600, 0, 0, 0, 1.0, 0.0, 0.0, 0.0);
+    }
+
+    #[test]
+    fn platform_units_scaled_by_count_and_duration() {
+        let entity_seconds = 5_i64 * 1_800;
+        let billing = platform_from_sums(&[(UNIT_METRIC.to_string(), entity_seconds)]);
+        let expected = entity_seconds as f64 * (0.001 / 3600.0);
+        assert_platform(&billing, 0, 0, entity_seconds, 0, 0.0, 0.0, expected, 0.0);
+    }
+
+    #[test]
+    fn platform_stage_runtime_metering() {
+        let entity_seconds = 2_i64 * 3_600;
+        let billing = platform_from_sums(&[(STAGE_RUNTIME_METRIC.to_string(), entity_seconds)]);
+        let expected = entity_seconds as f64 * (0.1 / 3600.0);
+        assert_platform(&billing, 0, 0, 0, entity_seconds, 0.0, 0.0, 0.0, expected);
+    }
+
+    #[test]
+    fn platform_sums_multiple_rows_per_metric() {
+        let billing = platform_from_sums(&[
+            (PROJECT_METRIC.to_string(), 1_800),
+            (PROJECT_METRIC.to_string(), 1_800),
+            (UNIT_METRIC.to_string(), 600),
+            (UNIT_METRIC.to_string(), 400),
+        ]);
+        let project_cost = 3_600.0 * (0.01 / 3600.0);
+        let unit_cost = 1_000.0 * (0.001 / 3600.0);
+        assert_platform(&billing, 0, 3_600, 1_000, 0, 0.0, project_cost, unit_cost, 0.0);
+    }
+
+    #[test]
+    fn platform_all_metrics_combined() {
+        let billing = platform_from_sums(&[
+            (SUBSCRIPTION_METRIC.to_string(), 3_600),
+            (PROJECT_METRIC.to_string(), 3_600),
+            (UNIT_METRIC.to_string(), 3_600),
+            (STAGE_RUNTIME_METRIC.to_string(), 3_600),
+        ]);
+        assert_platform(&billing, 3_600, 3_600, 3_600, 3_600, 1.0, 0.01, 0.001, 0.1);
+    }
+
+    #[test]
+    fn platform_ignores_unknown_metric() {
+        let billing = platform_from_sums(&[
+            (PROJECT_METRIC.to_string(), 3_600),
+            ("unknown.metric".to_string(), 9_999),
+        ]);
+        assert_platform(&billing, 0, 3_600, 0, 0, 0.0, 0.01, 0.0, 0.0);
+    }
+
+    #[test]
+    fn platform_zero_and_negative_entity_seconds_are_free() {
+        let rates = test_platform_rates();
+        assert_eq!(rates.cost_for_entity_seconds(PROJECT_METRIC, 0), 0.0);
+        assert_eq!(rates.cost_for_entity_seconds(PROJECT_METRIC, -100), 0.0);
+        assert_eq!(rates.cost_for_entity_seconds("unknown", 3_600), 0.0);
+
+        let billing = platform_from_sums(&[(PROJECT_METRIC.to_string(), 0)]);
+        assert_platform(&billing, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0);
+    }
+
+    #[test]
+    fn platform_entity_second_rates_match_hourly_rates() {
+        let rates = test_platform_rates();
+        assert!((rates.subscription_per_entity_second() - 1.0 / 3600.0).abs() < 1e-15);
+        assert!((rates.project_per_entity_second() - 0.01 / 3600.0).abs() < 1e-15);
+        assert!((rates.unit_per_entity_second() - 0.001 / 3600.0).abs() < 1e-15);
+        assert!((rates.stage_runtime_per_entity_second() - 0.1 / 3600.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn platform_rates_for_package_tier_tier1() {
+        let rates = platform_rates_for_package_tier(1);
+        assert_eq!(rates.subscription_per_hour, 0.0);
+        assert_eq!(rates.project_per_hour, 0.002);
+        assert_eq!(rates.unit_per_hour, 0.0002);
+        assert_eq!(rates.stage_runtime_per_hour, 0.01);
+    }
+
+    #[test]
+    fn platform_rates_for_package_tier_tier2() {
+        let rates = platform_rates_for_package_tier(2);
+        assert!((rates.subscription_per_hour - 10.0 / (30.0 * 24.0)).abs() < 1e-12);
+        assert_eq!(rates.project_per_hour, 0.0016);
+        assert_eq!(rates.unit_per_hour, 0.00016);
+        assert_eq!(rates.stage_runtime_per_hour, 0.008);
+    }
+
+    #[test]
+    fn platform_rates_for_package_tier_tier3_plus() {
+        let rates = platform_rates_for_package_tier(3);
+        assert!((rates.subscription_per_hour - 30.0 / (30.0 * 24.0)).abs() < 1e-12);
+        assert_eq!(rates.project_per_hour, 0.0012);
+        assert_eq!(rates.unit_per_hour, 0.00012);
+        assert_eq!(rates.stage_runtime_per_hour, 0.006);
+
+        let tier5 = platform_rates_for_package_tier(5);
+        assert_eq!(tier5, rates);
+    }
+
+    #[test]
+    fn platform_rates_non_positive_tier_defaults_to_tier1() {
+        assert_eq!(
+            platform_rates_for_package_tier(0),
+            platform_rates_for_package_tier(1)
+        );
+        assert_eq!(
+            platform_rates_for_package_tier(-1),
+            platform_rates_for_package_tier(1)
+        );
+    }
+
+    #[test]
+    fn platform_tier2_subscription_cost_from_entity_seconds() {
+        let rates = platform_rates_for_package_tier(2);
+        let billing =
+            PlatformPeriodBilling::from_entity_seconds(rates, &[(SUBSCRIPTION_METRIC.to_string(), 3_600)]);
+        let expected = 10.0 / (30.0 * 24.0);
+        assert!((billing.subscription_cost - expected).abs() < 1e-12);
+        assert_eq!(billing.subscription_entity_seconds, 3_600);
+    }
+
+    #[test]
+    fn period_billing_includes_platform_in_total() {
+        let rates = BillingRates::test_rates();
+        let platform = platform_from_sums(&[
+            (PROJECT_METRIC.to_string(), 3_600),
+            (UNIT_METRIC.to_string(), 3_600),
+        ]);
+        let llm = LlmPeriodCost {
+            sum_input_tokens: 0,
+            sum_output_tokens: 0,
+            input_cost: 0.0,
+            output_cost: 0.0,
+        };
+        let billing = PeriodBilling::from_metered(rates, 0, 0.0, 0.0, llm, platform);
+        let platform_total = 0.01 + 0.001;
+        assert!((billing.platform.total_cost() - platform_total).abs() < 1e-12);
+        assert!((billing.total - platform_total).abs() < 1e-12);
+    }
+
+    #[test]
+    fn t12_platform_only_project_meter() {
+        let platform = platform_from_sums(&[(PROJECT_METRIC.to_string(), 3_600)]);
+        let billing = PeriodBilling::from_metered(
+            BillingRates::test_rates(),
+            0,
+            0.0,
+            0.0,
+            LlmPeriodCost {
+                sum_input_tokens: 0,
+                sum_output_tokens: 0,
+                input_cost: 0.0,
+                output_cost: 0.0,
+            },
+            platform,
+        );
+        assert_platform(&billing.platform, 0, 3_600, 0, 0, 0.0, 0.01, 0.0, 0.0);
+        assert!((billing.total - 0.01).abs() < 1e-12);
+    }
+
+    #[test]
+    fn t13_mixed_compute_storage_llm_and_platform() {
+        let compute_billing = bill(
+            &[compute(at(1, 1, 10), 1000)],
+            &[storage(
+                1,
+                at_2024(12, 31, 0),
+                STORAGE_TIER_ACTIVE,
+                "incr",
+                1_000_000,
+            )],
+            &[llm(
+                at(1, 1, 10),
+                "openai",
+                "gpt-4o-mini",
+                LLM_INPUT_TOKENS_METRIC,
+                1_000_000,
+            )],
+        );
+        let platform = platform_from_sums(&[
+            (SUBSCRIPTION_METRIC.to_string(), 3_600),
+            (PROJECT_METRIC.to_string(), 3_600),
+            (UNIT_METRIC.to_string(), 7_200),
+            (STAGE_RUNTIME_METRIC.to_string(), 3_600),
+        ]);
+        let billing = PeriodBilling::from_metered(
+            BillingRates::test_rates(),
+            compute_billing.sum_gb_ms,
+            compute_billing.byte_hours_active,
+            compute_billing.byte_hours_retained,
+            LlmPeriodCost {
+                sum_input_tokens: compute_billing.sum_input_tokens,
+                sum_output_tokens: compute_billing.sum_output_tokens,
+                input_cost: compute_billing.llm_input_cost,
+                output_cost: compute_billing.llm_output_cost,
+            },
+            platform,
+        );
+
+        let byte_hours = 1_000_000.0 * 24.0;
+        let storage_cost = byte_hours * 0.01;
+        let platform_total = 1.0 + 0.01 + 0.002 + 0.1;
+        let expected_total = 1.0 + storage_cost + 0.15 * 1.08 + platform_total;
+
+        assert_eq!(billing.sum_gb_ms, 1000);
+        assert!((billing.compute_cost - 1.0).abs() < 1e-9);
+        assert!((billing.byte_hours_active - byte_hours).abs() < 1e-6);
+        assert!((billing.storage_hot_cost - storage_cost).abs() < 1e-6);
+        assert_eq!(billing.sum_input_tokens, 1_000_000);
+        assert!((billing.llm_input_cost - 0.15 * 1.08).abs() < 1e-9);
+        assert_platform(
+            &billing.platform,
+            3_600,
+            3_600,
+            7_200,
+            3_600,
+            1.0,
+            0.01,
+            0.002,
+            0.1,
+        );
+        assert!((billing.total - expected_total).abs() < 1e-6, "total");
+    }
+
+    #[test]
+    fn t14_platform_partial_hour_fractional_cost() {
+        let entity_seconds = 1_800;
+        let billing = platform_from_sums(&[(PROJECT_METRIC.to_string(), entity_seconds)]);
+        let expected = 0.5 * 0.01;
+        assert_platform(&billing, 0, entity_seconds, 0, 0, 0.0, expected, 0.0, 0.0);
     }
 }

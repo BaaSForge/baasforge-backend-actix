@@ -24,9 +24,10 @@ pub const UNIT_REVIEWER_DEAD_LETTER_BINDING: &str = "unit_reviewer.#";
 /// Max retries: attempt 0, 1, 2 (3 total). After attempt 2 fails, send to DLQ.
 pub const UNIT_REVIEWER_MAX_RETRIES: u32 = 2;
 
-pub fn reviewer_retry_policy() -> RetryPolicy {
+pub fn reviewer_retry_policy(retry_delay_ttl_ms: u32) -> RetryPolicy {
     RetryPolicy {
         max_retries: UNIT_REVIEWER_MAX_RETRIES,
+        retry_delay_ttl_ms,
     }
 }
 

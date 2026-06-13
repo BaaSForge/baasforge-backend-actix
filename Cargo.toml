@@ -11,6 +11,14 @@ name = "chat_worker"
 path = "src/bin/chat_worker.rs"
 
 [[bin]]
+name = "platform_cost_calculate_scheduler"
+path = "src/bin/platform_cost_calculate_scheduler.rs"
+
+[[bin]]
+name = "platform_cost_calculate_consumer"
+path = "src/bin/platform_cost_calculate_consumer.rs"
+
+[[bin]]
 name = "unit_technical_reviewer"
 path = "src/bin/unit_technical_reviewer.rs"
 required-features = ["unit_technical_reviewer"]

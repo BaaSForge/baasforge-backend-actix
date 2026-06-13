@@ -167,19 +167,21 @@ impl fmt::Display for PublishError {
 
 impl std::error::Error for PublishError {}
 
-/// Policy for retries: max attempts and exponential delay. Reusable for any channel.
+/// Policy for retries: max attempts and exponential delay before re-delivery. Reusable for any channel.
 #[derive(Clone, Debug)]
 pub struct RetryPolicy {
     /// Maximum number of retries (0 = no retries, 1 = one retry, etc.). After this, message goes to dead letter.
     pub max_retries: u32,
+    /// Exponential backoff base (`RETRY_DELAY_TTL_MS` / 1000); replaces the old hardcoded `BASE_SECS = 4`.
+    pub retry_delay_ttl_ms: u32,
 }
 
 impl RetryPolicy {
-    /// Delay in milliseconds before the next attempt. Formula: 1000 * 5^(1 + retry_num).
-    /// retry_num 0 => 4s, 1 => 16s, 2 => 64s.
+    /// Delay before the next attempt: `1000 * base^(1 + retry_num)` where `base = retry_delay_ttl_ms / 1000`.
+    /// e.g. 3000 → 3s, 9s, 27s; 4000 → 4s, 16s, 64s (previous default).
     pub fn retry_delay_ms(&self, retry_num: u32) -> u64 {
-        const BASE_SECS: u64 = 4;
-        1000 * BASE_SECS.pow(1 + retry_num)
+        let base_secs = (self.retry_delay_ttl_ms as u64 / 1000).max(1);
+        1000 * base_secs.pow(1 + retry_num)
     }
 
     /// True if this retry_num has exceeded max_retries (should send to dead letter).
