@@ -3,13 +3,156 @@ use diesel::prelude::*;
 use diesel::sql_query;
 use diesel::sql_types::{BigInt, Text, Timestamptz, Uuid as SqlUuid};
 use diesel::QueryableByName;
+use serde::Serialize;
+use serde_json::{json, Value};
 use uuid::Uuid;
+
+use crate::libs::ids::new_uuid;
 
 pub const MAX_BILLING_PERIOD_DAYS: i64 = 62;
 
 pub const COMPUTE_GB_MS_METRIC: &str = "compute.gb_ms";
 pub const STORAGE_TIER_ACTIVE: &str = "active";
 pub const STORAGE_TIER_RETAINED: &str = "retained";
+
+pub const LLM_KIND: &str = "llm";
+pub const LLM_INPUT_TOKENS_METRIC: &str = "input_tokens";
+pub const LLM_OUTPUT_TOKENS_METRIC: &str = "output_tokens";
+pub const TOKEN_PRICE_UNIT: &str = "token";
+
+#[derive(Debug, Clone)]
+pub struct LlmUsageLogContext {
+    pub model: String,
+    pub provider: String,
+    pub message_id: Uuid,
+    pub chat_session_id: Uuid,
+    pub user_id: Uuid,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LlmTokenMeter {
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cached_tokens: Option<i64>,
+    pub reasoning_tokens: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UsageEntryWire {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub recorded_at: DateTime<Utc>,
+    pub kind: String,
+    pub metric: String,
+    pub quantity: i64,
+    pub price_unit: String,
+    pub details: Value,
+}
+
+impl LlmTokenMeter {
+    pub fn record_openai_usage(
+        &mut self,
+        prompt_tokens: Option<u64>,
+        completion_tokens: Option<u64>,
+    ) {
+        if let Some(n) = prompt_tokens {
+            self.input_tokens = Some(n as i64);
+        }
+        if let Some(n) = completion_tokens {
+            self.output_tokens = Some(n as i64);
+        }
+    }
+
+    pub fn record_claude_input_tokens(&mut self, input_tokens: u64) {
+        if input_tokens > 0 {
+            self.input_tokens = Some(input_tokens as i64);
+        }
+    }
+
+    pub fn record_claude_output_tokens(&mut self, output_tokens: u64) {
+        if output_tokens > 0 {
+            self.output_tokens = Some(output_tokens as i64);
+        }
+    }
+
+    pub fn record_claude_input_tokens_if_present(&mut self, input_tokens: Option<u64>) {
+        if let Some(n) = input_tokens.filter(|&n| n > 0) {
+            self.input_tokens = Some(n as i64);
+        }
+    }
+
+    pub fn record_gemini_usage(
+        &mut self,
+        prompt_tokens: i32,
+        candidates_tokens: i32,
+        thoughts_tokens: Option<i32>,
+        cached_tokens: Option<i32>,
+    ) {
+        self.input_tokens = Some(prompt_tokens as i64);
+        self.output_tokens = Some(candidates_tokens as i64);
+        self.reasoning_tokens = thoughts_tokens.map(|n| n as i64);
+        self.cached_tokens = cached_tokens.map(|n| n as i64);
+    }
+
+    fn has_billable_tokens(&self) -> bool {
+        self.input_tokens.is_some_and(|n| n > 0)
+            || self.output_tokens.is_some_and(|n| n > 0)
+    }
+
+    pub fn log_entries(&self, project_id: Uuid, ctx: &LlmUsageLogContext) {
+        if !self.has_billable_tokens() {
+            return;
+        }
+
+        let recorded_at = Utc::now();
+        let mut details = json!({
+            "model": ctx.model,
+            "provider": ctx.provider,
+            "message_id": ctx.message_id,
+            "chat_session_id": ctx.chat_session_id,
+            "user_id": ctx.user_id,
+            "prompt_tokens": self.input_tokens,
+            "completion_tokens": self.output_tokens,
+        });
+        if let Some(cached) = self.cached_tokens {
+            details["cached_tokens"] = json!(cached);
+        }
+        if let Some(reasoning) = self.reasoning_tokens {
+            details["reasoning_tokens"] = json!(reasoning);
+        }
+
+        let rows = [
+            (LLM_INPUT_TOKENS_METRIC, self.input_tokens.unwrap_or(0)),
+            (LLM_OUTPUT_TOKENS_METRIC, self.output_tokens.unwrap_or(0)),
+        ];
+        for (metric, quantity) in rows {
+            if quantity <= 0 {
+                continue;
+            }
+            let entry = UsageEntryWire {
+                id: new_uuid(),
+                project_id,
+                recorded_at,
+                kind: LLM_KIND.to_string(),
+                metric: metric.to_string(),
+                quantity,
+                price_unit: TOKEN_PRICE_UNIT.to_string(),
+                details: details.clone(),
+            };
+            let entry_json = serde_json::to_string(&entry).unwrap_or_else(|e| {
+                format!(r#"{{"serialize_error":"{}"}}"#, e)
+            });
+            tracing::info!(
+                target: "usage_meter",
+                %project_id,
+                metric = %entry.metric,
+                quantity = entry.quantity,
+                %entry_json,
+                "LLM usage entry (log only, not persisted)"
+            );
+        }
+    }
+}
 
 // TODO: daily balance snapshots / project_usage_daily_totals for faster billing
 

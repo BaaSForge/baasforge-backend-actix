@@ -10,6 +10,7 @@ use crate::routes::ws::events::{
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::services::chat_worker::agent_flow::AgentFlowSession;
+use crate::services::billing::{LlmTokenMeter, LlmUsageLogContext};
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::GenerateOutcome;
 use crate::services::chat_worker::llm::history::{
@@ -235,6 +236,11 @@ enum StreamEvent {
     TextDelta { text: String },
     SignatureDelta { index: usize, signature: String },
     InputJsonDelta { index: usize, partial_json: String },
+    UsageInput { input_tokens: u64 },
+    UsageOutput {
+        output_tokens: u64,
+        input_tokens: Option<u64>,
+    },
     MessageStop,
 }
 
@@ -343,6 +349,43 @@ where
                                 }));
                             }
                             _ => {}
+                        }
+                    }
+                    continue;
+                }
+
+                if event_type == Some("message_start") {
+                    if let Some(message) = v.get("message") {
+                        if let Some(usage) = message.get("usage") {
+                            let input_tokens = usage
+                                .get("input_tokens")
+                                .and_then(|n| n.as_u64())
+                                .unwrap_or(0);
+                            if input_tokens > 0 {
+                                return Ok(Some(StreamEvent::UsageInput { input_tokens }));
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                if event_type == Some("message_delta") {
+                    let usage = v
+                        .get("usage")
+                        .or_else(|| v.get("delta").and_then(|d| d.get("usage")));
+                    if let Some(usage) = usage {
+                        let input_tokens = usage
+                            .get("input_tokens")
+                            .and_then(|n| n.as_u64());
+                        let output_tokens = usage
+                            .get("output_tokens")
+                            .and_then(|n| n.as_u64())
+                            .unwrap_or(0);
+                        if output_tokens > 0 || input_tokens.is_some_and(|n| n > 0) {
+                            return Ok(Some(StreamEvent::UsageOutput {
+                                output_tokens,
+                                input_tokens,
+                            }));
                         }
                     }
                     continue;
@@ -474,6 +517,14 @@ pub async fn call_claude_stream(
     let mut block_kinds: HashMap<usize, BlockKind> = HashMap::new();
     let mut thinking_buffers: HashMap<usize, String> = HashMap::new();
     let mut signature_buffers: HashMap<usize, String> = HashMap::new();
+    let mut token_meter = LlmTokenMeter::default();
+    let usage_ctx = LlmUsageLogContext {
+        model: model.to_string(),
+        provider: "anthropic".to_string(),
+        message_id,
+        chat_session_id: session_id,
+        user_id,
+    };
 
     tracing::info!(
         tool_count,
@@ -588,9 +639,21 @@ pub async fn call_claude_stream(
                     .or_default()
                     .push_str(&partial_json);
             }
+            StreamEvent::UsageInput { input_tokens } => {
+                token_meter.record_claude_input_tokens(input_tokens);
+            }
+            StreamEvent::UsageOutput {
+                output_tokens,
+                input_tokens,
+            } => {
+                token_meter.record_claude_input_tokens_if_present(input_tokens);
+                token_meter.record_claude_output_tokens(output_tokens);
+            }
             StreamEvent::MessageStop => break,
         }
     }
+
+    token_meter.log_entries(project_id, &usage_ctx);
 
     let mut tool_entries: Vec<(usize, String, String, Value)> = block_kinds
         .iter()

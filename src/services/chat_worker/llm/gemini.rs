@@ -12,6 +12,7 @@ use crate::routes::ws::events::{
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::services::chat_worker::agent_flow::AgentFlowSession;
+use crate::services::billing::{LlmTokenMeter, LlmUsageLogContext};
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::GenerateOutcome;
 use crate::services::chat_worker::llm::history::{
@@ -426,12 +427,33 @@ pub async fn call_gemini_stream(
 
     let mut all_function_calls: Vec<(String, Value, Option<String>)> = Vec::new();
     let mut chunk_count: u32 = 0;
+    let mut token_meter = LlmTokenMeter::default();
+    let usage_ctx = LlmUsageLogContext {
+        model: model.to_string(),
+        provider: "gemini".to_string(),
+        message_id,
+        chat_session_id: session_id,
+        user_id,
+    };
 
     while let Some(chunk) = futures::TryStreamExt::try_next(&mut stream)
         .await
         .map_err(|e| format!("Gemini stream: {}", e))?
     {
         chunk_count += 1;
+        if let Some(meta) = chunk.usage_metadata.as_ref() {
+            let prompt = meta.prompt_token_count.unwrap_or(0);
+            let candidates = meta.candidates_token_count.unwrap_or(0);
+            let has_final_totals = meta.total_token_count.is_some_and(|n| n > 0);
+            if has_final_totals && (prompt > 0 || candidates > 0) {
+                token_meter.record_gemini_usage(
+                    prompt,
+                    candidates,
+                    meta.thoughts_token_count,
+                    meta.cached_content_token_count,
+                );
+            }
+        }
         for (fc, thought_sig) in chunk.function_calls_with_thoughts() {
             if fc.name.trim().is_empty() {
                 tracing::warn!(
@@ -520,6 +542,8 @@ pub async fn call_gemini_stream(
             }
         }
     }
+
+    token_meter.log_entries(project_id, &usage_ctx);
 
     let fc_count = all_function_calls.len();
     tracing::info!(

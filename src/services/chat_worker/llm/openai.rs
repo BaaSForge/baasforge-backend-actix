@@ -14,6 +14,7 @@ use crate::routes::ws::events::{
 use crate::routes::ws::{is_message_stopped, publish_event_to_channel};
 use crate::services::chat_worker::agent::system_prompt_for_agent;
 use crate::services::chat_worker::agent_flow::AgentFlowSession;
+use crate::services::billing::{LlmTokenMeter, LlmUsageLogContext};
 use crate::services::chat_worker::ai_message;
 use crate::services::chat_worker::llm::GenerateOutcome;
 use futures::StreamExt;
@@ -37,6 +38,8 @@ struct StreamChunk {
     tool_calls: Option<Vec<(u64, String, String, String)>>, // index, id, name, args
     function_call: Option<(String, String)>,                // legacy: name, args
     finish_reason: Option<String>,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
 }
 
 fn thinking_blocks_from_accumulated_reasoning(reasoning: &str) -> Option<Vec<ThinkingBlock>> {
@@ -166,7 +169,44 @@ fn entries_to_openai_messages(
 
 fn parse_sse_chunk(data: &str) -> Option<StreamChunk> {
     let root: Value = serde_json::from_str(data).ok()?;
-    let choice = root.get("choices")?.as_array()?.first()?;
+    let (prompt_tokens, completion_tokens) = root
+        .get("usage")
+        .map(|usage| {
+            (
+                usage.get("prompt_tokens").and_then(|v| v.as_u64()),
+                usage.get("completion_tokens").and_then(|v| v.as_u64()),
+            )
+        })
+        .unwrap_or((None, None));
+
+    let Some(choices) = root.get("choices").and_then(|v| v.as_array()) else {
+        if prompt_tokens.is_some() || completion_tokens.is_some() {
+            return Some(StreamChunk {
+                content: None,
+                reasoning_content: None,
+                tool_calls: None,
+                function_call: None,
+                finish_reason: None,
+                prompt_tokens,
+                completion_tokens,
+            });
+        }
+        return None;
+    };
+    let Some(choice) = choices.first() else {
+        if prompt_tokens.is_some() || completion_tokens.is_some() {
+            return Some(StreamChunk {
+                content: None,
+                reasoning_content: None,
+                tool_calls: None,
+                function_call: None,
+                finish_reason: None,
+                prompt_tokens,
+                completion_tokens,
+            });
+        }
+        return None;
+    };
     let delta = choice.get("delta")?;
     let content = delta
         .get("content")
@@ -225,6 +265,8 @@ fn parse_sse_chunk(data: &str) -> Option<StreamChunk> {
         && tool_calls.is_none()
         && function_call.is_none()
         && finish_reason.is_none()
+        && prompt_tokens.is_none()
+        && completion_tokens.is_none()
     {
         return None;
     }
@@ -234,6 +276,8 @@ fn parse_sse_chunk(data: &str) -> Option<StreamChunk> {
         tool_calls,
         function_call,
         finish_reason,
+        prompt_tokens,
+        completion_tokens,
     })
 }
 
@@ -257,6 +301,7 @@ async fn stream_openai_tools(
         "model": model,
         "messages": messages,
         "stream": true,
+        "stream_options": { "include_usage": true },
         "tools": tools_json,
         "tool_choice": "auto"
     });
@@ -362,6 +407,14 @@ pub async fn call_gpt_stream(
     let mut is_tool_response = false;
     let mut acc: Vec<(String, String, String)> = Vec::new(); // id, name, args
     let mut last_finish_reason = String::new();
+    let mut token_meter = LlmTokenMeter::default();
+    let usage_ctx = LlmUsageLogContext {
+        model: model.to_string(),
+        provider: "openai".to_string(),
+        message_id,
+        chat_session_id: session_id,
+        user_id,
+    };
 
     tracing::info!(
         tools = functions.len(),
@@ -461,7 +514,12 @@ pub async fn call_gpt_stream(
         if let Some(r) = chunk.finish_reason {
             last_finish_reason = r;
         }
+        if chunk.prompt_tokens.is_some() || chunk.completion_tokens.is_some() {
+            token_meter.record_openai_usage(chunk.prompt_tokens, chunk.completion_tokens);
+        }
     }
+
+    token_meter.log_entries(project_id, &usage_ctx);
 
     let has_tool_calls = !acc.is_empty()
         || last_finish_reason == "tool_calls"
