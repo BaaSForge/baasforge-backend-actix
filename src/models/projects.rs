@@ -154,6 +154,7 @@ pub struct ProjectDetailResponse {
     #[serde(flatten)]
     pub project: ProjectResponse,
     pub runtimes: ProjectRuntimesBaseUrls,
+    pub private_runtimes: ProjectRuntimesBaseUrls,
 }
 
 /// Row mapped 1:1 to `project_units` (Diesel query/returning). Shared as the inner payload of

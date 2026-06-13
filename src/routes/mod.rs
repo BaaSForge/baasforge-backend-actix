@@ -7,6 +7,7 @@ pub mod payment;
 pub mod project;
 pub mod runtime_env_vars;
 pub mod purchase;
+pub mod private_proxy;
 pub mod test;
 pub mod usage;
 pub mod ws;
@@ -274,6 +275,14 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                 web::scope("/api/v1/ws")
                     .wrap(from_fn(auth_closed_guard_middleware))
                     .route("", web::get().to(ws::handle_ws)),
+            )
+            .service(
+                web::scope("/api/v1/private")
+                    .wrap(from_fn(auth_closed_guard_middleware))
+                    .route(
+                        "/{tail:.*}",
+                        web::route().to(private_proxy::handle_private_proxy),
+                    ),
             )
             .service(
                 web::scope("/api/v1/platform")

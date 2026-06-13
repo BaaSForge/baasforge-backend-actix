@@ -151,6 +151,11 @@ pub struct Settings {
     /// Base URL of the runtime, no trailing slash (e.g. `https://runtime.example.com`).
     /// Injected into agent prompts and returned per unit type in `GET .../platform/projects/{id}` (`runtimes`).
     pub base_runtime_endpoint: String,
+    /// API key sent as `x-private-api-key` when proxying to the runtime via `/api/v1/private/*`.
+    pub runtime_private_api_key: String,
+    /// Public URL of this API's private runtime proxy (no trailing slash), e.g. `https://api.example.com/api/v1/private`.
+    /// Returned in `GET .../platform/projects/{id}` (`private_runtimes`).
+    pub base_private_endpoint: String,
     /// Jaeger Query base URL, no trailing slash (e.g. `http://localhost:16686`).
     /// Used by the observability proxy endpoint to fetch traces by traceID.
     pub jaeger_query_base_url: String,
@@ -441,6 +446,22 @@ impl Settings {
             .trim_end_matches('/')
             .to_string();
 
+        let runtime_private_api_key = env::var("RUNTIME_PRIVATE_API_KEY")
+            .expect("RUNTIME_PRIVATE_API_KEY must be set")
+            .trim()
+            .to_string();
+        if runtime_private_api_key.is_empty() {
+            return Err("RUNTIME_PRIVATE_API_KEY must not be empty".into());
+        }
+
+        let base_private_endpoint = env::var("BASE_PRIVATE_ENDPOINT")
+            .expect("BASE_PRIVATE_ENDPOINT must be set")
+            .trim_end_matches('/')
+            .to_string();
+        if base_private_endpoint.is_empty() {
+            return Err("BASE_PRIVATE_ENDPOINT must not be empty".into());
+        }
+
         let jaeger_query_base_url = env::var("JAEGER_QUERY_BASE_URL")
             .expect("JAEGER_QUERY_BASE_URL must be set")
             .trim_end_matches('/')
@@ -517,6 +538,8 @@ impl Settings {
             runtime_nats_operation_timeout_secs,
             unit_reviewer_simulate_failure,
             base_runtime_endpoint,
+            runtime_private_api_key,
+            base_private_endpoint,
             jaeger_query_base_url,
             cors_allowed_origins,
         })

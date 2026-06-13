@@ -359,6 +359,7 @@ pub async fn handle_get_project(
     let payload = ProjectDetailResponse {
         project,
         runtimes: ProjectRuntimesBaseUrls::uniform(&context.settings.base_runtime_endpoint),
+        private_runtimes: ProjectRuntimesBaseUrls::uniform(&context.settings.base_private_endpoint),
     };
 
     HttpResponse::Ok().json(api_success("Project fetched successfully", json!(payload)))
