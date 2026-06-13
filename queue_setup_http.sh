@@ -9,16 +9,11 @@ set -e
 # Requires .env (see load-project-env.sh); missing file fails on source.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/load-project-env.sh"
 
-if [ -z "$RABBITMQ_MANAGEMENT_URL" ] || [ -z "$RETRY_DELAY_EXCHANGE" ] || [ -z "$CHAT_CONSUMER_TIMEOUT_SECS" ]; then
-  echo "Set RABBITMQ_MANAGEMENT_URL, RETRY_DELAY_EXCHANGE, CHAT_CONSUMER_TIMEOUT_SECS in .env (and optionally .env.local)." >&2
+if [ -z "$RABBITMQ_MANAGEMENT_URL" ] || [ -z "$RETRY_DELAY_EXCHANGE" ] || [ -z "$CHAT_CONSUMER_TIMEOUT_SECS" ] || [ -z "$RABBIT_URL" ]; then
+  echo "Set RABBITMQ_MANAGEMENT_URL, RETRY_DELAY_EXCHANGE, CHAT_CONSUMER_TIMEOUT_SECS, RABBIT_URL in .env (and optionally .env.local)." >&2
   exit 1
 fi
 
-# Parse user:pass from RABBIT_URL (amqp://USER:PASS@host/...)
-if [ -z "$RABBIT_URL" ]; then
-  echo "Set RABBIT_URL in .env or .env.local." >&2
-  exit 1
-fi
 USER=$(sed -n 's|.*://\([^:]*\):.*@.*|\1|p' <<< "$RABBIT_URL")
 PASS=$(sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p' <<< "$RABBIT_URL")
 if [ -z "$USER" ] || [ -z "$PASS" ]; then
