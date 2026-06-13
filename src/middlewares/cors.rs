@@ -10,6 +10,7 @@ pub fn cors_middleware(settings: &Settings) -> Cors {
             header::AUTHORIZATION,
             header::ACCEPT,
             header::CONTENT_TYPE,
+            header::HeaderName::from_static("x-share-secret"),
         ])
         .max_age(3600);
 

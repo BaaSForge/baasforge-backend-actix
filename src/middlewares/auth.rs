@@ -117,6 +117,50 @@ where
     Ok(res.map_into_boxed_body())
 }
 
+pub async fn optional_auth_closed_guard_middleware<B>(
+    req: ServiceRequest,
+    next: Next<B>,
+) -> Result<ServiceResponse<BoxBody>, Error>
+where
+    B: actix_web::body::MessageBody + 'static,
+{
+    if let Some(cookie) = req.cookie(ACCESS_TOKEN_COOKIE_KEY) {
+        let token_str = cookie.value().to_string();
+        let app_context = req
+            .app_data::<web::Data<AppContext>>()
+            .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
+
+        if let Ok(claims) = decode_access_token(&token_str, &app_context.settings) {
+            let token_str_db = token_str.clone();
+            let db_token: Option<UserToken> =
+                database::block_on_db(&app_context.pool, move |conn| {
+                    user_tokens::table
+                        .filter(token.eq(&token_str_db))
+                        .filter(token_type.eq(UserTokenType::Access))
+                        .select(UserToken::as_select())
+                        .first::<UserToken>(conn)
+                        .optional()
+                })
+                .await
+                .ok()
+                .flatten();
+
+            if let Some(db_token) = db_token
+                && !db_token.revoked.unwrap_or(false)
+            {
+                req.extensions_mut().insert(AccessPayload {
+                    claims,
+                    user_id: db_token.user_id,
+                    db_token,
+                });
+            }
+        }
+    }
+
+    let res = next.call(req).await?;
+    Ok(res.map_into_boxed_body())
+}
+
 pub async fn auth_closed_refresh_token_guard_middleware<B>(
     req: ServiceRequest,
     next: Next<B>,

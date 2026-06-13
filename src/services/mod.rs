@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod documentation_share;
 pub mod oauth;
 pub mod chat_session_truncate;
 pub mod chat_worker;

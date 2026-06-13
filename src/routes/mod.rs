@@ -17,10 +17,13 @@ use crate::database::{DbPool, establish_pool};
 use crate::middlewares::auth::{
     auth_closed_guard_middleware, auth_closed_refresh_token_guard_middleware,
     auth_opened_guard_middleware, auth_refresh_token_maturity_guard_middleware,
+    optional_auth_closed_guard_middleware,
 };
 use crate::middlewares::cors::cors_middleware;
 use crate::middlewares::payment::paid_features_guard_middleware_factory;
-use crate::middlewares::project::projects_owner_guard_middleware_factory;
+use crate::middlewares::project::{
+    project_release_access_guard_middleware_factory, projects_owner_guard_middleware_factory,
+};
 use crate::middlewares::test::test_closed_stage_guard_middleware;
 use crate::routes::chat::message_queue;
 use crate::services::message_queue as mq_service;
@@ -343,6 +346,27 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         "/projects/{id}",
                         web::get()
                             .to(project::handle_get_project)
+                            .wrap(from_fn(project_release_access_guard_middleware_factory()))
+                            .wrap(from_fn(optional_auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/documentation-share-key",
+                        web::post()
+                            .to(project::handle_generate_documentation_share_key)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/documentation-share-key",
+                        web::get()
+                            .to(project::handle_get_documentation_share_key)
+                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/projects/{id}/documentation-share-key",
+                        web::delete()
+                            .to(project::handle_revoke_documentation_share_key)
                             .wrap(from_fn(projects_owner_guard_middleware_factory()))
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
@@ -441,8 +465,8 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         "/projects/{id}/releases/{release_id}/units/all",
                         web::post()
                             .to(project::handle_list_project_release_units_all)
-                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
-                            .wrap(from_fn(auth_closed_guard_middleware)),
+                            .wrap(from_fn(project_release_access_guard_middleware_factory()))
+                            .wrap(from_fn(optional_auth_closed_guard_middleware)),
                     )
                     .route(
                         "/projects/{id}/releases/{release_id}/unit-previous-by-full-ids",
@@ -455,15 +479,15 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         "/projects/{id}/releases/{release_id}/contexts",
                         web::get()
                             .to(project::handle_list_project_release_contexts)
-                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
-                            .wrap(from_fn(auth_closed_guard_middleware)),
+                            .wrap(from_fn(project_release_access_guard_middleware_factory()))
+                            .wrap(from_fn(optional_auth_closed_guard_middleware)),
                     )
                     .route(
                         "/projects/{id}/releases/{release_id}/modules-by-contexts",
                         web::post()
                             .to(project::handle_list_project_release_modules_by_contexts)
-                            .wrap(from_fn(projects_owner_guard_middleware_factory()))
-                            .wrap(from_fn(auth_closed_guard_middleware)),
+                            .wrap(from_fn(project_release_access_guard_middleware_factory()))
+                            .wrap(from_fn(optional_auth_closed_guard_middleware)),
                     )
                     .route(
                         "/projects/{id}/non-draft-units",

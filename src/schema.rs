@@ -213,6 +213,9 @@ diesel::table! {
         #[max_length = 255]
         slug -> Varchar,
         last_cost_calculated_at -> Nullable<Timestamptz>,
+        #[max_length = 255]
+        documentation_share_key -> Nullable<Varchar>,
+        documentation_share_key_expires_at -> Nullable<Timestamptz>,
     }
 }
 

@@ -5,6 +5,7 @@ use crate::libs::unit_slug::{
 };
 use crate::middlewares::auth::AccessPayload;
 use crate::middlewares::payment::PaymentPayload;
+use crate::middlewares::project::ReleaseAccessAuth;
 use crate::models::projects::{
     LiveReleaseByRevisionApiResponse, PlatformEnvironmentType, ProjectDetailResponse,
     ProjectInsert, ProjectReleaseResponse, ProjectReleaseWithBaseline, ProjectResponse,
@@ -47,10 +48,14 @@ use crate::services::releases::{
     project_release_id_for_revision_lane,
     recompute_user_message_edit_disabled_for_session_live_production,
 };
+use crate::services::documentation_share::{
+    ProjectDocumentationShareRow, generate_documentation_share_key,
+};
 use crate::services::runtime_secrets::insert_runtime_encryption_keys_for_runtimes;
 use crate::services::trace_secrets_masking::{
     load_project_trace_mask_secrets_diesel, mask_trace_json,
 };
+use chrono::{DateTime, Utc};
 use crate::services::stage_release_from_controller::transaction_create_stage_release_from_controller;
 use crate::services::stage_runtime_release::{
     RuntimeDeployDenied, RuntimeDetachDenied, StageRuntimeDeployDenied,
@@ -328,20 +333,23 @@ pub async fn handle_get_project(
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
-    let access_payload = extensions
-        .get::<AccessPayload>()
-        .expect("AccessPayload must exist to get project");
+    let access_auth = *extensions
+        .get::<ReleaseAccessAuth>()
+        .expect("ReleaseAccessAuth must exist to get project");
 
     let project_id = path.into_inner();
-    let user_id = access_payload.user_id;
 
     let project = match database::block_on_db(&context.pool, move |conn| {
-        projects::table
-            .filter(projects::owner_user_id.eq(user_id))
+        let mut query = projects::table
             .filter(projects::id.eq(project_id))
             .select(ProjectResponse::as_select())
-            .first::<ProjectResponse>(conn)
-            .optional()
+            .into_boxed();
+
+        if let ReleaseAccessAuth::Owner { user_id } = access_auth {
+            query = query.filter(projects::owner_user_id.eq(user_id));
+        }
+
+        query.first::<ProjectResponse>(conn).optional()
     })
     .await
     {
@@ -363,6 +371,200 @@ pub async fn handle_get_project(
     };
 
     HttpResponse::Ok().json(api_success("Project fetched successfully", json!(payload)))
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct GenerateDocumentationShareKeyBody {
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize)]
+pub struct DocumentationShareKeyApiResponse {
+    pub documentation_share_key: String,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize)]
+pub struct DocumentationShareKeyRevealResponse {
+    pub documentation_share_key: Option<String>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+pub async fn handle_generate_documentation_share_key(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<Uuid>,
+    body: Option<web::Json<GenerateDocumentationShareKeyBody>>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to generate documentation share key");
+
+    let project_id = path.into_inner();
+    let user_id = access_payload.user_id;
+    let body = body.map(|b| b.into_inner()).unwrap_or_default();
+
+    if let Some(expires_at) = body.expires_at
+        && expires_at <= Utc::now()
+    {
+        return HttpResponse::BadRequest().json(api_error(
+            "expires_at must be in the future",
+            json!({}),
+        ));
+    }
+
+    let share_key = generate_documentation_share_key();
+    let expires_at: Option<DateTime<Utc>> = body.expires_at;
+
+    let updated = match database::block_on_db(&context.pool, {
+        let share_key = share_key.clone();
+        move |conn| {
+            diesel::update(
+                projects::table
+                    .filter(projects::owner_user_id.eq(user_id))
+                    .filter(projects::id.eq(project_id)),
+            )
+            .set((
+                projects::documentation_share_key.eq(Some(share_key)),
+                projects::documentation_share_key_expires_at.eq(expires_at),
+            ))
+            .returning(ProjectDocumentationShareRow::as_select())
+            .get_result::<ProjectDocumentationShareRow>(conn)
+            .optional()
+        }
+    })
+    .await
+    {
+        Ok(row) => row,
+        Err(database::BlockingDbError::Query(e)) => {
+            log::error!(
+                "[handle_generate_documentation_share_key] Failed to update: {:?}",
+                e
+            );
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            log::error!("[handle_generate_documentation_share_key] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    let Some(row) = updated else {
+        return HttpResponse::NotFound().json(api_error("Project not found", json!({})));
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Documentation share key generated successfully",
+        json!(DocumentationShareKeyApiResponse {
+            documentation_share_key: row
+                .documentation_share_key
+                .unwrap_or(share_key),
+            expires_at: row.documentation_share_key_expires_at,
+        }),
+    ))
+}
+
+pub async fn handle_get_documentation_share_key(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<Uuid>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to get documentation share key");
+
+    let project_id = path.into_inner();
+    let user_id = access_payload.user_id;
+
+    let row = match database::block_on_db(&context.pool, move |conn| {
+        projects::table
+            .filter(projects::owner_user_id.eq(user_id))
+            .filter(projects::id.eq(project_id))
+            .select(ProjectDocumentationShareRow::as_select())
+            .first::<ProjectDocumentationShareRow>(conn)
+            .optional()
+    })
+    .await
+    {
+        Ok(row) => row,
+        Err(database::BlockingDbError::Query(e)) => {
+            log::error!("[handle_get_documentation_share_key] Failed to load: {:?}", e);
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            log::error!("[handle_get_documentation_share_key] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    let Some(row) = row else {
+        return HttpResponse::NotFound().json(api_error("Project not found", json!({})));
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Documentation share key fetched successfully",
+        json!(DocumentationShareKeyRevealResponse {
+            documentation_share_key: row.documentation_share_key,
+            expires_at: row.documentation_share_key_expires_at,
+        }),
+    ))
+}
+
+pub async fn handle_revoke_documentation_share_key(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+    path: web::Path<Uuid>,
+) -> HttpResponse {
+    let extensions = req.extensions_mut();
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to revoke documentation share key");
+
+    let project_id = path.into_inner();
+    let user_id = access_payload.user_id;
+
+    let revoked = match database::block_on_db(&context.pool, move |conn| {
+        diesel::update(
+            projects::table
+                .filter(projects::owner_user_id.eq(user_id))
+                .filter(projects::id.eq(project_id)),
+        )
+        .set((
+            projects::documentation_share_key.eq(None::<String>),
+            projects::documentation_share_key_expires_at.eq(None::<DateTime<Utc>>),
+        ))
+        .execute(conn)
+    })
+    .await
+    {
+        Ok(n) => n,
+        Err(database::BlockingDbError::Query(e)) => {
+            log::error!(
+                "[handle_revoke_documentation_share_key] Failed to update: {:?}",
+                e
+            );
+            return HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})));
+        }
+        Err(_) => {
+            log::error!("[handle_revoke_documentation_share_key] DB/block error");
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    if revoked == 0 {
+        return HttpResponse::NotFound().json(api_error("Project not found", json!({})));
+    }
+
+    HttpResponse::Ok().json(api_success(
+        "Documentation share key revoked successfully",
+        json!({}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1397,6 +1599,26 @@ fn filter_sort_paginate_release_units(
     (page_units, total, page, page_size)
 }
 
+fn load_project_release_for_access(
+    conn: &mut diesel::PgConnection,
+    project_id: Uuid,
+    release_id: Uuid,
+    access_auth: ReleaseAccessAuth,
+) -> Result<Option<ProjectReleaseResponse>, diesel::result::Error> {
+    let mut query = project_releases::table
+        .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
+        .filter(project_releases::project_id.eq(project_id))
+        .filter(project_releases::id.eq(release_id))
+        .select(ProjectReleaseResponse::as_select())
+        .into_boxed();
+
+    if let ReleaseAccessAuth::Owner { user_id } = access_auth {
+        query = query.filter(projects::owner_user_id.eq(user_id));
+    }
+
+    query.first(conn).optional()
+}
+
 /// Combined release snapshot (`combinedUnitIDs`). Filters live in the JSON body; if `units_paths` and/or
 /// `units_ids` resolve to at least one value, every matching row is returned (no pagination).
 /// [`ListReleaseUnitsAllBody::context_module_pairs`] sends `context_slug` and `module_slug` per row.
@@ -1408,12 +1630,11 @@ pub async fn handle_list_project_release_units_all(
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
-    let access_payload = extensions
-        .get::<AccessPayload>()
-        .expect("AccessPayload must exist to list project release units (all)");
+    let access_auth = *extensions
+        .get::<ReleaseAccessAuth>()
+        .expect("ReleaseAccessAuth must exist to list project release units (all)");
 
     let (project_id, release_id) = path.into_inner();
-    let user_id = access_payload.user_id;
 
     if body.units_paths.len().saturating_add(body.units_ids.len()) > MAX_RELEASE_UNITS_PATH_ID_FILTER_ITEMS
     {
@@ -1444,20 +1665,16 @@ pub async fn handle_list_project_release_units_all(
 
     let page_req = body.page.max(1);
     let page_size_req = body.page_size.clamp(1, 100);
-    let unit_types = body.unit_types.clone();
     let context_slugs = body.context_slugs.clone();
     let context_module_pairs = body.context_module_pairs.clone();
-    let exclude_deleted = body.exclude_deleted;
+
+    let (unit_types, exclude_deleted) = match access_auth {
+        ReleaseAccessAuth::Owner { .. } => (body.unit_types.clone(), body.exclude_deleted),
+        ReleaseAccessAuth::DocumentationShare => (vec![ProjectUnitType::Api], true),
+    };
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
-        let release: Option<ProjectReleaseResponse> = project_releases::table
-            .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
-            .filter(projects::owner_user_id.eq(user_id))
-            .filter(project_releases::project_id.eq(project_id))
-            .filter(project_releases::id.eq(release_id))
-            .select(ProjectReleaseResponse::as_select())
-            .first(conn)
-            .optional()?;
+        let release = load_project_release_for_access(conn, project_id, release_id, access_auth)?;
 
         let Some(release) = release else {
             return Ok::<_, diesel::result::Error>(None);
@@ -1649,22 +1866,14 @@ pub async fn handle_list_project_release_contexts(
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
-    let access_payload = extensions
-        .get::<AccessPayload>()
-        .expect("AccessPayload must exist to list project release contexts");
+    let access_auth = *extensions
+        .get::<ReleaseAccessAuth>()
+        .expect("ReleaseAccessAuth must exist to list project release contexts");
 
     let (project_id, release_id) = path.into_inner();
-    let user_id = access_payload.user_id;
 
     let outcome = match database::block_on_db(&context.pool, move |conn| {
-        let release: Option<ProjectReleaseResponse> = project_releases::table
-            .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
-            .filter(projects::owner_user_id.eq(user_id))
-            .filter(project_releases::project_id.eq(project_id))
-            .filter(project_releases::id.eq(release_id))
-            .select(ProjectReleaseResponse::as_select())
-            .first(conn)
-            .optional()?;
+        let release = load_project_release_for_access(conn, project_id, release_id, access_auth)?;
 
         let Some(release) = release else {
             return Ok::<_, diesel::result::Error>(None);
@@ -1730,12 +1939,11 @@ pub async fn handle_list_project_release_modules_by_contexts(
 ) -> HttpResponse {
     let extensions = req.extensions_mut();
 
-    let access_payload = extensions
-        .get::<AccessPayload>()
-        .expect("AccessPayload must exist to list modules by contexts");
+    let access_auth = *extensions
+        .get::<ReleaseAccessAuth>()
+        .expect("ReleaseAccessAuth must exist to list modules by contexts");
 
     let (project_id, release_id) = path.into_inner();
-    let user_id = access_payload.user_id;
 
     let has_slugs = body.context_slugs.iter().any(|s| !s.trim().is_empty());
     if !has_slugs {
@@ -1748,14 +1956,7 @@ pub async fn handle_list_project_release_modules_by_contexts(
     let slugs = body.context_slugs.clone();
 
     let by_context = match database::block_on_db(&context.pool, move |conn| {
-        let release: Option<ProjectReleaseResponse> = project_releases::table
-            .inner_join(projects::table.on(project_releases::project_id.eq(projects::id)))
-            .filter(projects::owner_user_id.eq(user_id))
-            .filter(project_releases::project_id.eq(project_id))
-            .filter(project_releases::id.eq(release_id))
-            .select(ProjectReleaseResponse::as_select())
-            .first(conn)
-            .optional()?;
+        let release = load_project_release_for_access(conn, project_id, release_id, access_auth)?;
 
         let Some(release) = release else {
             return Ok::<_, diesel::result::Error>(None);
