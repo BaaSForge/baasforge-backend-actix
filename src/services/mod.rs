@@ -15,4 +15,5 @@ pub mod stage_runtime_release;
 pub mod unit_module_body_checker;
 pub mod unit_technical_reviewer;
 pub mod units;
+pub mod billing;
 pub mod usage;

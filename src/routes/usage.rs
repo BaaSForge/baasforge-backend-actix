@@ -122,6 +122,11 @@ pub async fn handle_get_usage_cost(
         return response;
     }
 
+    let period = UsagePeriodFilter::new(q.period.from, q.period.to);
+    if let Err(msg) = period.validate_for_billing() {
+        return HttpResponse::BadRequest().json(api_error(msg, json!({})));
+    }
+
     let from = q.period.from;
     let to = q.period.to;
 
