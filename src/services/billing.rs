@@ -5,18 +5,16 @@ use diesel::sql_types::{BigInt, Text, Timestamptz, Uuid as SqlUuid};
 use diesel::QueryableByName;
 use uuid::Uuid;
 
+use crate::services::pricing::{self, compute_llm_period_cost, LlmPeriodCost, LlmUsageSlice};
 use crate::services::llm_usage::{log_llm_usage, LlmUsageRecord};
 
 pub const MAX_BILLING_PERIOD_DAYS: i64 = 62;
 
-pub const COMPUTE_GB_MS_METRIC: &str = "compute.gb_ms";
-pub const STORAGE_TIER_ACTIVE: &str = "active";
-pub const STORAGE_TIER_RETAINED: &str = "retained";
-
-pub const LLM_KIND: &str = "llm";
-pub const LLM_INPUT_TOKENS_METRIC: &str = "input_tokens";
-pub const LLM_OUTPUT_TOKENS_METRIC: &str = "output_tokens";
-pub const TOKEN_PRICE_UNIT: &str = "token";
+pub use pricing::{
+    billing_rates_for_package_tier, BillingRates, COMPUTE_GB_MS_METRIC, LLM_INPUT_TOKENS_METRIC,
+    LLM_KIND, LLM_OUTPUT_TOKENS_METRIC, STORAGE_TIER_ACTIVE, STORAGE_TIER_RETAINED,
+    TOKEN_PRICE_UNIT,
+};
 
 #[derive(Debug, Clone)]
 pub struct LlmUsageLogContext {
@@ -108,61 +106,6 @@ impl LlmTokenMeter {
 
 // TODO: daily balance snapshots / project_usage_daily_totals for faster billing
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BillingRates {
-    pub compute_gb_ms: f64,
-    pub storage_active: f64,
-    pub storage_retained: f64,
-    pub llm_input_token: f64,
-    pub llm_output_token: f64,
-}
-
-impl BillingRates {
-    pub fn test_rates() -> Self {
-        Self {
-            compute_gb_ms: 0.001,
-            storage_active: 0.01,
-            storage_retained: 0.001,
-            llm_input_token: 0.001,
-            llm_output_token: 0.002,
-        }
-    }
-}
-
-fn effective_tier(tier: i32) -> i32 {
-    if tier <= 0 {
-        1
-    } else {
-        tier
-    }
-}
-
-pub fn billing_rates_for_package_tier(tier: i32) -> BillingRates {
-    match effective_tier(tier) {
-        1 => BillingRates {
-            compute_gb_ms: 1.0e-9,
-            storage_active: 3.0e-12,
-            storage_retained: 3.0e-13,
-            llm_input_token: 1.0e-6,
-            llm_output_token: 4.0e-6,
-        },
-        2 => BillingRates {
-            compute_gb_ms: 8.0e-10,
-            storage_active: 2.4e-12,
-            storage_retained: 2.4e-13,
-            llm_input_token: 8.0e-7,
-            llm_output_token: 3.2e-6,
-        },
-        _ => BillingRates {
-            compute_gb_ms: 6.0e-10,
-            storage_active: 1.8e-12,
-            storage_retained: 1.8e-13,
-            llm_input_token: 6.0e-7,
-            llm_output_token: 2.4e-6,
-        },
-    }
-}
-
 pub fn validate_billing_period(
     start: DateTime<Utc>,
     end: DateTime<Utc>,
@@ -206,6 +149,8 @@ pub struct ComputeMeterEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LlmMeterEvent {
     pub recorded_at: DateTime<Utc>,
+    pub provider: String,
+    pub model: String,
     pub metric: String,
     pub quantity: i64,
 }
@@ -223,6 +168,25 @@ pub mod LlmBilling {
             })
             .map(|e| e.quantity)
             .sum()
+    }
+
+    pub fn period_cost(
+        events: &[LlmMeterEvent],
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        package_tier: i32,
+    ) -> LlmPeriodCost {
+        let slices: Vec<LlmUsageSlice> = events
+            .iter()
+            .filter(|e| e.recorded_at >= start && e.recorded_at < end)
+            .map(|e| LlmUsageSlice {
+                provider: e.provider.clone(),
+                model: e.model.clone(),
+                metric: e.metric.clone(),
+                quantity: e.quantity,
+            })
+            .collect();
+        compute_llm_period_cost(&slices, package_tier)
     }
 }
 
@@ -325,14 +289,11 @@ impl PeriodBilling {
         sum_gb_ms: i64,
         byte_hours_active: f64,
         byte_hours_retained: f64,
-        sum_input_tokens: i64,
-        sum_output_tokens: i64,
+        llm: LlmPeriodCost,
     ) -> Self {
         let compute_cost = sum_gb_ms as f64 * rates.compute_gb_ms;
         let storage_hot_cost = byte_hours_active * rates.storage_active;
         let storage_cold_cost = byte_hours_retained * rates.storage_retained;
-        let llm_input_cost = sum_input_tokens as f64 * rates.llm_input_token;
-        let llm_output_cost = sum_output_tokens as f64 * rates.llm_output_token;
         Self {
             sum_gb_ms,
             compute_cost,
@@ -340,11 +301,11 @@ impl PeriodBilling {
             byte_hours_retained,
             storage_hot_cost,
             storage_cold_cost,
-            sum_input_tokens,
-            sum_output_tokens,
-            llm_input_cost,
-            llm_output_cost,
-            total: compute_cost + storage_hot_cost + storage_cold_cost + llm_input_cost + llm_output_cost,
+            sum_input_tokens: llm.sum_input_tokens,
+            sum_output_tokens: llm.sum_output_tokens,
+            llm_input_cost: llm.input_cost,
+            llm_output_cost: llm.output_cost,
+            total: compute_cost + storage_hot_cost + storage_cold_cost + llm.total_cost(),
         }
     }
 }
@@ -361,17 +322,21 @@ WHERE pr.owner_user_id = $1
   AND pue.recorded_at < $4
 ";
 
-const LLM_TOKENS_SUM_SQL: &str = "
+const LLM_USAGE_BY_MODEL_SQL: &str = "
 SELECT
-  COALESCE(SUM(pue.quantity) FILTER (WHERE pue.metric = 'input_tokens'), 0)::bigint AS sum_input_tokens,
-  COALESCE(SUM(pue.quantity) FILTER (WHERE pue.metric = 'output_tokens'), 0)::bigint AS sum_output_tokens
+  COALESCE(pue.details->>'provider', '') AS provider,
+  COALESCE(pue.details->>'model', '') AS model,
+  pue.metric AS metric,
+  COALESCE(SUM(pue.quantity), 0)::bigint AS quantity
 FROM project_usage_entries pue
 INNER JOIN projects pr ON pr.id = pue.project_id
 WHERE pr.owner_user_id = $1
   AND ($2::uuid IS NULL OR pue.project_id = $2)
   AND pue.kind = 'llm'
+  AND pue.metric IN ('input_tokens', 'output_tokens')
   AND pue.recorded_at >= $3
   AND pue.recorded_at < $4
+GROUP BY provider, model, metric
 ";
 
 const STORAGE_EVENTS_SQL: &str = "
@@ -396,11 +361,15 @@ struct ComputeSumRow {
 }
 
 #[derive(QueryableByName)]
-struct LlmTokenSumRow {
+struct LlmUsageByModelRow {
+    #[diesel(sql_type = Text)]
+    provider: String,
+    #[diesel(sql_type = Text)]
+    model: String,
+    #[diesel(sql_type = Text)]
+    metric: String,
     #[diesel(sql_type = BigInt)]
-    sum_input_tokens: i64,
-    #[diesel(sql_type = BigInt)]
-    sum_output_tokens: i64,
+    quantity: i64,
 }
 
 #[derive(QueryableByName)]
@@ -424,6 +393,7 @@ pub fn period_total<C>(
     start: DateTime<Utc>,
     end: DateTime<Utc>,
     rates: BillingRates,
+    package_tier: i32,
 ) -> Result<PeriodBilling, diesel::result::Error>
 where
     C: diesel::connection::Connection<Backend = diesel::pg::Pg>
@@ -436,12 +406,23 @@ where
         .bind::<Timestamptz, _>(end)
         .get_result::<ComputeSumRow>(conn)?;
 
-    let llm_row = sql_query(LLM_TOKENS_SUM_SQL)
+    let llm_rows = sql_query(LLM_USAGE_BY_MODEL_SQL)
         .bind::<SqlUuid, _>(user_id)
         .bind::<diesel::sql_types::Nullable<SqlUuid>, _>(project_id)
         .bind::<Timestamptz, _>(start)
         .bind::<Timestamptz, _>(end)
-        .get_result::<LlmTokenSumRow>(conn)?;
+        .load::<LlmUsageByModelRow>(conn)?;
+
+    let llm_slices: Vec<LlmUsageSlice> = llm_rows
+        .into_iter()
+        .map(|row| LlmUsageSlice {
+            provider: row.provider,
+            model: row.model,
+            metric: row.metric,
+            quantity: row.quantity,
+        })
+        .collect();
+    let llm = compute_llm_period_cost(&llm_slices, package_tier);
 
     let storage_rows = sql_query(STORAGE_EVENTS_SQL)
         .bind::<SqlUuid, _>(user_id)
@@ -470,8 +451,7 @@ where
         compute_row.sum_gb_ms,
         byte_hours_active,
         byte_hours_retained,
-        llm_row.sum_input_tokens,
-        llm_row.sum_output_tokens,
+        llm,
     ))
 }
 
@@ -526,9 +506,17 @@ mod tests {
         }
     }
 
-    fn llm(recorded_at: DateTime<Utc>, metric: &str, quantity: i64) -> LlmMeterEvent {
+    fn llm(
+        recorded_at: DateTime<Utc>,
+        provider: &str,
+        model: &str,
+        metric: &str,
+        quantity: i64,
+    ) -> LlmMeterEvent {
         LlmMeterEvent {
             recorded_at,
+            provider: provider.to_string(),
+            model: model.to_string(),
             metric: metric.to_string(),
             quantity,
         }
@@ -593,13 +581,15 @@ mod tests {
             LlmBilling::sum(llm_events, LLM_INPUT_TOKENS_METRIC, start, end);
         let sum_output_tokens =
             LlmBilling::sum(llm_events, LLM_OUTPUT_TOKENS_METRIC, start, end);
+        let llm = LlmBilling::period_cost(llm_events, start, end, 1);
+        assert_eq!(llm.sum_input_tokens, sum_input_tokens);
+        assert_eq!(llm.sum_output_tokens, sum_output_tokens);
         PeriodBilling::from_metered(
             rates,
             sum_gb_ms,
             byte_hours_active,
             byte_hours_retained,
-            sum_input_tokens,
-            sum_output_tokens,
+            llm,
         )
     }
 
@@ -797,8 +787,12 @@ mod tests {
                 0,
                 StorageBilling::byte_hours(events, STORAGE_TIER_ACTIVE, start, end),
                 StorageBilling::byte_hours(events, STORAGE_TIER_RETAINED, start, end),
-                0,
-                0,
+                LlmPeriodCost {
+                    sum_input_tokens: 0,
+                    sum_output_tokens: 0,
+                    input_cost: 0.0,
+                    output_cost: 0.0,
+                },
             )
         };
 
@@ -814,16 +808,28 @@ mod tests {
             &[],
             &[],
             &[
-                llm(at(1, 1, 10), LLM_INPUT_TOKENS_METRIC, 1_000),
-                llm(at(1, 1, 11), LLM_OUTPUT_TOKENS_METRIC, 500),
-                llm(at(1, 1, 12), "other.metric", 9_999),
+                llm(
+                    at(1, 1, 10),
+                    "openai",
+                    "gpt-4o-mini",
+                    LLM_INPUT_TOKENS_METRIC,
+                    1_000_000,
+                ),
+                llm(
+                    at(1, 1, 11),
+                    "openai",
+                    "gpt-4o-mini",
+                    LLM_OUTPUT_TOKENS_METRIC,
+                    500_000,
+                ),
+                llm(at(1, 1, 12), "openai", "gpt-4o-mini", "other.metric", 9_999),
             ],
         );
-        assert_eq!(billing.sum_input_tokens, 1_000);
-        assert_eq!(billing.sum_output_tokens, 500);
-        assert!((billing.llm_input_cost - 1.0).abs() < 1e-9);
-        assert!((billing.llm_output_cost - 1.0).abs() < 1e-9);
-        assert!((billing.total - 2.0).abs() < 1e-6);
+        assert_eq!(billing.sum_input_tokens, 1_000_000);
+        assert_eq!(billing.sum_output_tokens, 500_000);
+        assert!((billing.llm_input_cost - 0.15 * 1.08).abs() < 1e-9);
+        assert!((billing.llm_output_cost - 0.30 * 1.08).abs() < 1e-9);
+        assert!((billing.total - 0.486).abs() < 1e-6);
     }
 
     #[test]

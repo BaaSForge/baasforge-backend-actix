@@ -1,8 +1,7 @@
 use crate::models::project_usage_entries::ProjectUsageEntryResponse;
 use crate::schema::{project_usage_entries, projects};
-use crate::services::billing::{
-    billing_rates_for_package_tier, period_total, validate_billing_period, PeriodBilling,
-};
+use crate::services::billing::{period_total, validate_billing_period, PeriodBilling};
+use crate::services::pricing::billing_rates_for_package_tier;
 use crate::services::payment::get_user_active_paid_packages;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
@@ -185,7 +184,7 @@ where
 
     let (_, largest_tier) = get_user_active_paid_packages(conn, user_id)?;
     let rates = billing_rates_for_package_tier(largest_tier);
-    let billing = period_total(conn, user_id, project_id, from, to, rates)?;
+    let billing = period_total(conn, user_id, project_id, from, to, rates, largest_tier)?;
 
     Ok(UsageCostSummary::from_billing(
         if largest_tier <= 0 {
