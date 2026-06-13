@@ -131,6 +131,10 @@ pub struct UsageCostSummary {
     pub byte_hours_retained: f64,
     pub storage_hot_cost: f64,
     pub storage_cold_cost: f64,
+    pub sum_input_tokens: i64,
+    pub sum_output_tokens: i64,
+    pub llm_input_cost: f64,
+    pub llm_output_cost: f64,
     pub total_cost: f64,
 }
 
@@ -150,6 +154,10 @@ impl UsageCostSummary {
             byte_hours_retained: billing.byte_hours_retained,
             storage_hot_cost: billing.storage_hot_cost,
             storage_cold_cost: billing.storage_cold_cost,
+            sum_input_tokens: billing.sum_input_tokens,
+            sum_output_tokens: billing.sum_output_tokens,
+            llm_input_cost: billing.llm_input_cost,
+            llm_output_cost: billing.llm_output_cost,
             total_cost: billing.total,
         }
     }

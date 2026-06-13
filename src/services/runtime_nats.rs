@@ -84,6 +84,21 @@ fn parse_runtime_nats_url(url: &str) -> Result<(async_nats::ServerAddr, String, 
     Ok((server_addr, user, pass))
 }
 
+pub async fn connect_nats(url: &str) -> Result<async_nats::Client, async_nats::Error> {
+    let (server_addr, user, pass) = parse_runtime_nats_url(url)?;
+    let options = runtime_nats_connect_options(user, pass);
+    options.connect(server_addr).await.map_err(Into::into)
+}
+
+pub async fn publish_jetstream(
+    js: &async_nats::jetstream::Context,
+    subject: String,
+    payload: bytes::Bytes,
+) -> Result<(), async_nats::Error> {
+    js.publish(subject, payload).await?;
+    Ok(())
+}
+
 /// JetStream context on a shared [`async_nats::Client`]. Release events must use JetStream publish
 /// so messages land in the stream (core publish does not unless the server mirrors it).
 ///
@@ -99,12 +114,9 @@ impl RuntimeNatsPublisher {
         url: &str,
         operation_timeout: Duration,
     ) -> Result<Self, async_nats::Error> {
-        let (server_addr, user, pass) = parse_runtime_nats_url(url)?;
-        let options = runtime_nats_connect_options(user, pass);
-        let client = options.connect(server_addr).await?;
-        let jetstream = async_nats::jetstream::new(client);
+        let client = connect_nats(url).await?;
         Ok(Self {
-            jetstream,
+            jetstream: async_nats::jetstream::new(client),
             operation_timeout,
         })
     }

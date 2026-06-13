@@ -119,6 +119,11 @@ pub struct Settings {
     /// `ANTHROPIC_THINKING_BUDGET_TOKENS` is > 0. Passed to the Messages API as `thinking.budget_tokens`.
     pub anthropic_thinking_budget_tokens: Option<u32>,
     pub llm_provider: LlmProvider,
+    pub usage_publish_batch_size: usize,
+    pub usage_publish_flush_ms: u64,
+    pub usage_publish_channel_capacity: usize,
+    pub nats_jetstream_stream_usage: Option<String>,
+    pub nats_subject_usage_batch: Option<String>,
     /// When set, the API connects to NATS on startup and publishes release events.
     pub runtime_nats_url: Option<String>,
     /// Subject for JetStream release publishes (must match the stream’s subject list).
@@ -290,6 +295,27 @@ impl Settings {
         let llm_provider_str = env::var("LLM_PROVIDER").expect("LLM_PROVIDER must be set");
         let llm_provider = LlmProvider::try_from(llm_provider_str)?;
 
+        let usage_publish_batch_size: usize = env::var("USAGE_PUBLISH_BATCH_SIZE")
+            .expect("USAGE_PUBLISH_BATCH_SIZE must be set")
+            .parse()
+            .expect("USAGE_PUBLISH_BATCH_SIZE must be a valid usize");
+        let usage_publish_flush_ms: u64 = env::var("USAGE_PUBLISH_FLUSH_MS")
+            .expect("USAGE_PUBLISH_FLUSH_MS must be set")
+            .parse()
+            .expect("USAGE_PUBLISH_FLUSH_MS must be a valid u64");
+        let usage_publish_channel_capacity: usize = env::var("USAGE_PUBLISH_CHANNEL_CAPACITY")
+            .expect("USAGE_PUBLISH_CHANNEL_CAPACITY must be set")
+            .parse()
+            .expect("USAGE_PUBLISH_CHANNEL_CAPACITY must be a valid usize");
+        let nats_jetstream_stream_usage = env::var("NATS_JETSTREAM_STREAM_USAGE")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let nats_subject_usage_batch = env::var("NATS_SUBJECT_USAGE_BATCH")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
         let runtime_nats_url = env::var("RUNTIME_NATS_URL").ok().and_then(|s| {
             let t = s.trim();
             if t.is_empty() {
@@ -454,6 +480,11 @@ impl Settings {
             anthropic_model,
             anthropic_thinking_budget_tokens,
             llm_provider,
+            usage_publish_batch_size,
+            usage_publish_flush_ms,
+            usage_publish_channel_capacity,
+            nats_jetstream_stream_usage,
+            nats_subject_usage_batch,
             runtime_nats_url,
             runtime_nats_subject_release,
             runtime_nats_jetstream_stream_release,
@@ -468,6 +499,31 @@ impl Settings {
             cors_allowed_origins,
         })
     }
+}
+
+pub fn start_usage_publisher_if_enabled(settings: &Settings) {
+    let Some(runtime_nats_url) = settings.runtime_nats_url.clone() else {
+        tracing::warn!("[usage_publisher] RUNTIME_NATS_URL not set; publisher disabled");
+        return;
+    };
+    let (Some(stream_name), Some(subject)) = (
+        settings.nats_jetstream_stream_usage.clone(),
+        settings.nats_subject_usage_batch.clone(),
+    ) else {
+        tracing::warn!("[usage_publisher] usage JetStream config incomplete; publisher disabled");
+        return;
+    };
+    crate::services::usage_publisher::start_usage_publisher(
+        crate::services::usage_publisher::UsagePublisherConfig {
+            runtime_nats_url,
+            stream_name,
+            subject,
+            batch_size: settings.usage_publish_batch_size,
+            flush_ms: settings.usage_publish_flush_ms,
+            channel_capacity: settings.usage_publish_channel_capacity,
+        },
+    );
+    tracing::info!("[usage_publisher] background flusher started");
 }
 
 /// Parses typical env truthy/falsey strings (e.g. `true`, `1`, `on`, `false`, `0`, `off`).

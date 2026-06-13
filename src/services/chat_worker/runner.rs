@@ -75,6 +75,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let settings = Settings::new()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+    crate::configs::start_usage_publisher_if_enabled(&settings);
     info!(
         timeout_secs = settings.chat_consumer_timeout_secs,
         "CHAT_CONSUMER_TIMEOUT_SECS from env — `x-consumer-timeout` must cover one queue message (one LLM pass); see docs/chat-queue.md. Re-run queue_setup_http.sh after changing."

@@ -3,11 +3,9 @@ use diesel::prelude::*;
 use diesel::sql_query;
 use diesel::sql_types::{BigInt, Text, Timestamptz, Uuid as SqlUuid};
 use diesel::QueryableByName;
-use serde::Serialize;
-use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::libs::ids::new_uuid;
+use crate::services::llm_usage::{log_llm_usage, LlmUsageRecord};
 
 pub const MAX_BILLING_PERIOD_DAYS: i64 = 62;
 
@@ -35,18 +33,6 @@ pub struct LlmTokenMeter {
     pub output_tokens: Option<i64>,
     pub cached_tokens: Option<i64>,
     pub reasoning_tokens: Option<i64>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct UsageEntryWire {
-    pub id: Uuid,
-    pub project_id: Uuid,
-    pub recorded_at: DateTime<Utc>,
-    pub kind: String,
-    pub metric: String,
-    pub quantity: i64,
-    pub price_unit: String,
-    pub details: Value,
 }
 
 impl LlmTokenMeter {
@@ -104,53 +90,19 @@ impl LlmTokenMeter {
             return;
         }
 
-        let recorded_at = Utc::now();
-        let mut details = json!({
-            "model": ctx.model,
-            "provider": ctx.provider,
-            "message_id": ctx.message_id,
-            "chat_session_id": ctx.chat_session_id,
-            "user_id": ctx.user_id,
-            "prompt_tokens": self.input_tokens,
-            "completion_tokens": self.output_tokens,
+        log_llm_usage(LlmUsageRecord {
+            project_id,
+            model: ctx.model.clone(),
+            provider: ctx.provider.clone(),
+            input_tokens: self.input_tokens.unwrap_or(0).max(0) as u64,
+            output_tokens: self.output_tokens.unwrap_or(0).max(0) as u64,
+            request_id: Some(ctx.message_id.to_string()),
+            chat_session_id: Some(ctx.chat_session_id),
+            message_id: Some(ctx.message_id),
+            user_id: Some(ctx.user_id),
+            cached_tokens: self.cached_tokens,
+            reasoning_tokens: self.reasoning_tokens,
         });
-        if let Some(cached) = self.cached_tokens {
-            details["cached_tokens"] = json!(cached);
-        }
-        if let Some(reasoning) = self.reasoning_tokens {
-            details["reasoning_tokens"] = json!(reasoning);
-        }
-
-        let rows = [
-            (LLM_INPUT_TOKENS_METRIC, self.input_tokens.unwrap_or(0)),
-            (LLM_OUTPUT_TOKENS_METRIC, self.output_tokens.unwrap_or(0)),
-        ];
-        for (metric, quantity) in rows {
-            if quantity <= 0 {
-                continue;
-            }
-            let entry = UsageEntryWire {
-                id: new_uuid(),
-                project_id,
-                recorded_at,
-                kind: LLM_KIND.to_string(),
-                metric: metric.to_string(),
-                quantity,
-                price_unit: TOKEN_PRICE_UNIT.to_string(),
-                details: details.clone(),
-            };
-            let entry_json = serde_json::to_string(&entry).unwrap_or_else(|e| {
-                format!(r#"{{"serialize_error":"{}"}}"#, e)
-            });
-            tracing::info!(
-                target: "usage_meter",
-                %project_id,
-                metric = %entry.metric,
-                quantity = entry.quantity,
-                %entry_json,
-                "LLM usage entry (log only, not persisted)"
-            );
-        }
     }
 }
 
@@ -161,6 +113,8 @@ pub struct BillingRates {
     pub compute_gb_ms: f64,
     pub storage_active: f64,
     pub storage_retained: f64,
+    pub llm_input_token: f64,
+    pub llm_output_token: f64,
 }
 
 impl BillingRates {
@@ -169,6 +123,8 @@ impl BillingRates {
             compute_gb_ms: 0.001,
             storage_active: 0.01,
             storage_retained: 0.001,
+            llm_input_token: 0.001,
+            llm_output_token: 0.002,
         }
     }
 }
@@ -187,16 +143,22 @@ pub fn billing_rates_for_package_tier(tier: i32) -> BillingRates {
             compute_gb_ms: 1.0e-9,
             storage_active: 3.0e-12,
             storage_retained: 3.0e-13,
+            llm_input_token: 1.0e-6,
+            llm_output_token: 4.0e-6,
         },
         2 => BillingRates {
             compute_gb_ms: 8.0e-10,
             storage_active: 2.4e-12,
             storage_retained: 2.4e-13,
+            llm_input_token: 8.0e-7,
+            llm_output_token: 3.2e-6,
         },
         _ => BillingRates {
             compute_gb_ms: 6.0e-10,
             storage_active: 1.8e-12,
             storage_retained: 1.8e-13,
+            llm_input_token: 6.0e-7,
+            llm_output_token: 2.4e-6,
         },
     }
 }
@@ -239,6 +201,29 @@ pub struct ComputeMeterEvent {
     pub recorded_at: DateTime<Utc>,
     pub metric: String,
     pub quantity: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmMeterEvent {
+    pub recorded_at: DateTime<Utc>,
+    pub metric: String,
+    pub quantity: i64,
+}
+
+pub mod LlmBilling {
+    use super::*;
+
+    pub fn sum(events: &[LlmMeterEvent], metric: &str, start: DateTime<Utc>, end: DateTime<Utc>) -> i64 {
+        events
+            .iter()
+            .filter(|e| {
+                e.recorded_at >= start
+                    && e.recorded_at < end
+                    && e.metric == metric
+            })
+            .map(|e| e.quantity)
+            .sum()
+    }
 }
 
 pub mod ComputeBilling {
@@ -327,6 +312,10 @@ pub struct PeriodBilling {
     pub byte_hours_retained: f64,
     pub storage_hot_cost: f64,
     pub storage_cold_cost: f64,
+    pub sum_input_tokens: i64,
+    pub sum_output_tokens: i64,
+    pub llm_input_cost: f64,
+    pub llm_output_cost: f64,
     pub total: f64,
 }
 
@@ -336,10 +325,14 @@ impl PeriodBilling {
         sum_gb_ms: i64,
         byte_hours_active: f64,
         byte_hours_retained: f64,
+        sum_input_tokens: i64,
+        sum_output_tokens: i64,
     ) -> Self {
         let compute_cost = sum_gb_ms as f64 * rates.compute_gb_ms;
         let storage_hot_cost = byte_hours_active * rates.storage_active;
         let storage_cold_cost = byte_hours_retained * rates.storage_retained;
+        let llm_input_cost = sum_input_tokens as f64 * rates.llm_input_token;
+        let llm_output_cost = sum_output_tokens as f64 * rates.llm_output_token;
         Self {
             sum_gb_ms,
             compute_cost,
@@ -347,7 +340,11 @@ impl PeriodBilling {
             byte_hours_retained,
             storage_hot_cost,
             storage_cold_cost,
-            total: compute_cost + storage_hot_cost + storage_cold_cost,
+            sum_input_tokens,
+            sum_output_tokens,
+            llm_input_cost,
+            llm_output_cost,
+            total: compute_cost + storage_hot_cost + storage_cold_cost + llm_input_cost + llm_output_cost,
         }
     }
 }
@@ -360,6 +357,19 @@ WHERE pr.owner_user_id = $1
   AND ($2::uuid IS NULL OR pue.project_id = $2)
   AND pue.kind = 'compute'
   AND pue.metric = 'compute.gb_ms'
+  AND pue.recorded_at >= $3
+  AND pue.recorded_at < $4
+";
+
+const LLM_TOKENS_SUM_SQL: &str = "
+SELECT
+  COALESCE(SUM(pue.quantity) FILTER (WHERE pue.metric = 'input_tokens'), 0)::bigint AS sum_input_tokens,
+  COALESCE(SUM(pue.quantity) FILTER (WHERE pue.metric = 'output_tokens'), 0)::bigint AS sum_output_tokens
+FROM project_usage_entries pue
+INNER JOIN projects pr ON pr.id = pue.project_id
+WHERE pr.owner_user_id = $1
+  AND ($2::uuid IS NULL OR pue.project_id = $2)
+  AND pue.kind = 'llm'
   AND pue.recorded_at >= $3
   AND pue.recorded_at < $4
 ";
@@ -383,6 +393,14 @@ ORDER BY pue.recorded_at, pue.id
 struct ComputeSumRow {
     #[diesel(sql_type = BigInt)]
     sum_gb_ms: i64,
+}
+
+#[derive(QueryableByName)]
+struct LlmTokenSumRow {
+    #[diesel(sql_type = BigInt)]
+    sum_input_tokens: i64,
+    #[diesel(sql_type = BigInt)]
+    sum_output_tokens: i64,
 }
 
 #[derive(QueryableByName)]
@@ -418,6 +436,13 @@ where
         .bind::<Timestamptz, _>(end)
         .get_result::<ComputeSumRow>(conn)?;
 
+    let llm_row = sql_query(LLM_TOKENS_SUM_SQL)
+        .bind::<SqlUuid, _>(user_id)
+        .bind::<diesel::sql_types::Nullable<SqlUuid>, _>(project_id)
+        .bind::<Timestamptz, _>(start)
+        .bind::<Timestamptz, _>(end)
+        .get_result::<LlmTokenSumRow>(conn)?;
+
     let storage_rows = sql_query(STORAGE_EVENTS_SQL)
         .bind::<SqlUuid, _>(user_id)
         .bind::<diesel::sql_types::Nullable<SqlUuid>, _>(project_id)
@@ -445,6 +470,8 @@ where
         compute_row.sum_gb_ms,
         byte_hours_active,
         byte_hours_retained,
+        llm_row.sum_input_tokens,
+        llm_row.sum_output_tokens,
     ))
 }
 
@@ -499,6 +526,14 @@ mod tests {
         }
     }
 
+    fn llm(recorded_at: DateTime<Utc>, metric: &str, quantity: i64) -> LlmMeterEvent {
+        LlmMeterEvent {
+            recorded_at,
+            metric: metric.to_string(),
+            quantity,
+        }
+    }
+
     fn tier_balance(events: &[StorageMeterEvent], tier: &str, before: DateTime<Utc>) -> i64 {
         events
             .iter()
@@ -534,12 +569,17 @@ mod tests {
             (billing.storage_cold_cost - storage_cold_cost).abs() < 1e-6,
             "storage_cold_cost"
         );
+        assert_eq!(billing.sum_input_tokens, 0, "sum_input_tokens");
+        assert_eq!(billing.sum_output_tokens, 0, "sum_output_tokens");
+        assert!((billing.llm_input_cost).abs() < 1e-9, "llm_input_cost");
+        assert!((billing.llm_output_cost).abs() < 1e-9, "llm_output_cost");
         assert!((billing.total - total).abs() < 1e-6, "total");
     }
 
     fn bill(
         compute_events: &[ComputeMeterEvent],
         storage_events: &[StorageMeterEvent],
+        llm_events: &[LlmMeterEvent],
     ) -> PeriodBilling {
         let start = period_start();
         let end = period_end();
@@ -549,7 +589,18 @@ mod tests {
             StorageBilling::byte_hours(storage_events, STORAGE_TIER_ACTIVE, start, end);
         let byte_hours_retained =
             StorageBilling::byte_hours(storage_events, STORAGE_TIER_RETAINED, start, end);
-        PeriodBilling::from_metered(rates, sum_gb_ms, byte_hours_active, byte_hours_retained)
+        let sum_input_tokens =
+            LlmBilling::sum(llm_events, LLM_INPUT_TOKENS_METRIC, start, end);
+        let sum_output_tokens =
+            LlmBilling::sum(llm_events, LLM_OUTPUT_TOKENS_METRIC, start, end);
+        PeriodBilling::from_metered(
+            rates,
+            sum_gb_ms,
+            byte_hours_active,
+            byte_hours_retained,
+            sum_input_tokens,
+            sum_output_tokens,
+        )
     }
 
     #[test]
@@ -560,6 +611,7 @@ mod tests {
                 compute(at(1, 1, 15), 500),
                 compute_metric(at(1, 1, 11), "compute.actions", 999),
             ],
+            &[],
             &[],
         );
         assert_period(&billing, 1500, 1.5, 0.0, 0.0, 0.0, 0.0, 1.5);
@@ -580,7 +632,7 @@ mod tests {
             1_000_000,
             "opening_hot"
         );
-        let billing = bill(&[], &events);
+        let billing = bill(&[], &events, &[]);
         let byte_hours = 1_000_000.0 * 24.0;
         assert_period(
             &billing,
@@ -599,6 +651,7 @@ mod tests {
         let billing = bill(
             &[],
             &[storage(1, at(1, 1, 12), STORAGE_TIER_ACTIVE, "incr", 2_000_000)],
+            &[],
         );
         let byte_hours = 2_000_000.0 * 12.0;
         assert_period(
@@ -621,6 +674,7 @@ mod tests {
                 storage(1, at_2024(12, 31, 0), STORAGE_TIER_ACTIVE, "incr", 3_000_000),
                 storage(2, at(1, 1, 12), STORAGE_TIER_ACTIVE, "decr", 3_000_000),
             ],
+            &[],
         );
         let byte_hours = 3_000_000.0 * 12.0;
         assert_period(
@@ -642,7 +696,7 @@ mod tests {
             storage(2, at(1, 1, 12), STORAGE_TIER_ACTIVE, "decr", 5_000),
             storage(3, at(1, 1, 12), STORAGE_TIER_RETAINED, "incr", 5_000),
         ];
-        let billing = bill(&[], &events);
+        let billing = bill(&[], &events, &[]);
         assert_period(&billing, 0, 0.0, 60_000.0, 60_000.0, 600.0, 60.0, 660.0);
         let end = period_end();
         assert_eq!(
@@ -668,7 +722,7 @@ mod tests {
             1_000_000,
             "opening at period start"
         );
-        let billing = bill(&[], &events);
+        let billing = bill(&[], &events, &[]);
         let byte_hours = 1_000_000.0 * 6.0 + 1_500_000.0 * 18.0;
         assert_eq!(byte_hours, 33_000_000.0, "byte_hours_active");
         assert_period(
@@ -691,14 +745,14 @@ mod tests {
             0,
             "opening"
         );
-        let billing = bill(&[], &events);
+        let billing = bill(&[], &events, &[]);
         assert_eq!(billing.byte_hours_active, 0.0, "byte_hours_active");
         assert_period(&billing, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
     }
 
     #[test]
     fn t8_empty_period() {
-        let billing = bill(&[], &[]);
+        let billing = bill(&[], &[], &[]);
         assert_period(&billing, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
     }
 
@@ -714,6 +768,7 @@ mod tests {
                 storage(2, at(1, 1, 12), STORAGE_TIER_ACTIVE, "decr", 5_000),
                 storage(3, at(1, 1, 12), STORAGE_TIER_RETAINED, "incr", 5_000),
             ],
+            &[],
         );
         assert_period(&billing, 1500, 1.5, 60_000.0, 60_000.0, 600.0, 60.0, 661.5);
     }
@@ -742,6 +797,8 @@ mod tests {
                 0,
                 StorageBilling::byte_hours(events, STORAGE_TIER_ACTIVE, start, end),
                 StorageBilling::byte_hours(events, STORAGE_TIER_RETAINED, start, end),
+                0,
+                0,
             )
         };
 
@@ -749,6 +806,24 @@ mod tests {
         let incr_first = bill_storage(&incr_retained_first);
         assert_period(&decr_first, 0, 0.0, 60_000.0, 60_000.0, 600.0, 60.0, 660.0);
         assert_eq!(decr_first, incr_first, "same-timestamp row order must not change totals");
+    }
+
+    #[test]
+    fn t11_llm_tokens_only() {
+        let billing = bill(
+            &[],
+            &[],
+            &[
+                llm(at(1, 1, 10), LLM_INPUT_TOKENS_METRIC, 1_000),
+                llm(at(1, 1, 11), LLM_OUTPUT_TOKENS_METRIC, 500),
+                llm(at(1, 1, 12), "other.metric", 9_999),
+            ],
+        );
+        assert_eq!(billing.sum_input_tokens, 1_000);
+        assert_eq!(billing.sum_output_tokens, 500);
+        assert!((billing.llm_input_cost - 1.0).abs() < 1e-9);
+        assert!((billing.llm_output_cost - 1.0).abs() < 1e-9);
+        assert!((billing.total - 2.0).abs() < 1e-6);
     }
 
     #[test]
