@@ -2,6 +2,7 @@ use crate::models::project_usage_entries::ProjectUsageEntryResponse;
 use crate::schema::{project_usage_entries, projects};
 use crate::services::billing::{period_total, validate_billing_period, PeriodBilling};
 use crate::services::pricing::billing_rates_for_package_tier;
+use crate::services::pricing::SUBSCRIPTION_METRIC;
 use crate::services::payment::get_user_active_paid_packages;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
@@ -54,7 +55,9 @@ where
         .into_boxed();
 
     if let Some(project_id) = project_id {
-        count_query = count_query.filter(project_usage_entries::project_id.eq(project_id));
+        count_query = count_query
+            .filter(project_usage_entries::project_id.eq(project_id))
+            .filter(project_usage_entries::metric.ne(SUBSCRIPTION_METRIC));
     }
     if let Some(from) = from {
         count_query = count_query.filter(project_usage_entries::recorded_at.ge(from));
@@ -71,7 +74,9 @@ where
         .into_boxed();
 
     if let Some(project_id) = project_id {
-        list_query = list_query.filter(project_usage_entries::project_id.eq(project_id));
+        list_query = list_query
+            .filter(project_usage_entries::project_id.eq(project_id))
+            .filter(project_usage_entries::metric.ne(SUBSCRIPTION_METRIC));
     }
     if let Some(from) = from {
         list_query = list_query.filter(project_usage_entries::recorded_at.ge(from));

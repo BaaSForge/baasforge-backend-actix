@@ -422,16 +422,33 @@ INNER JOIN projects pr ON pr.id = pue.project_id
 WHERE pr.owner_user_id = $1
   AND ($2::uuid IS NULL OR pue.project_id = $2)
   AND pue.kind = 'platform'
-  AND pue.metric IN ('subscription', 'project', 'unit', 'stage_runtime')
+  AND pue.metric IN ('project', 'unit', 'stage_runtime')
   AND pue.recorded_at >= $3
   AND pue.recorded_at < $4
 GROUP BY pue.metric
+";
+
+const PLATFORM_SUBSCRIPTION_USER_SUM_SQL: &str = "
+SELECT COALESCE(SUM(pue.quantity), 0)::bigint AS quantity
+FROM project_usage_entries pue
+INNER JOIN projects pr ON pr.id = pue.project_id
+WHERE pr.owner_user_id = $1
+  AND pue.kind = 'platform'
+  AND pue.metric = 'subscription'
+  AND pue.recorded_at >= $2
+  AND pue.recorded_at < $3
 ";
 
 #[derive(QueryableByName)]
 struct PlatformSumRow {
     #[diesel(sql_type = Text)]
     metric: String,
+    #[diesel(sql_type = BigInt)]
+    quantity: i64,
+}
+
+#[derive(QueryableByName)]
+struct PlatformSubscriptionSumRow {
     #[diesel(sql_type = BigInt)]
     quantity: i64,
 }
@@ -534,10 +551,25 @@ where
         .bind::<Timestamptz, _>(start)
         .bind::<Timestamptz, _>(end)
         .load::<PlatformSumRow>(conn)?;
-    let platform_sums: Vec<(String, i64)> = platform_rows
+    let mut platform_sums: Vec<(String, i64)> = platform_rows
         .into_iter()
         .map(|row| (row.metric, row.quantity))
         .collect();
+
+    if project_id.is_none() {
+        let subscription_entity_seconds = sql_query(PLATFORM_SUBSCRIPTION_USER_SUM_SQL)
+            .bind::<SqlUuid, _>(user_id)
+            .bind::<Timestamptz, _>(start)
+            .bind::<Timestamptz, _>(end)
+            .get_result::<PlatformSubscriptionSumRow>(conn)?
+            .quantity;
+        if subscription_entity_seconds > 0 {
+            platform_sums.push((
+                SUBSCRIPTION_METRIC.to_string(),
+                subscription_entity_seconds,
+            ));
+        }
+    }
     let platform_rates = platform_rates_for_package_tier(package_tier);
     let platform = PlatformPeriodBilling::from_entity_seconds(platform_rates, &platform_sums);
 

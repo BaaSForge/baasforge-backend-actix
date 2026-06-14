@@ -147,6 +147,15 @@ where
     Ok(if largest_tier <= 0 { 1 } else { largest_tier })
 }
 
+pub fn subscription_cost_window_unclaimed(
+    last_subscription_cost_calculated_at: Option<DateTime<Utc>>,
+    period_start: DateTime<Utc>,
+) -> bool {
+    last_subscription_cost_calculated_at
+        .map(|last| last <= period_start)
+        .unwrap_or(true)
+}
+
 pub fn try_claim_subscription_cost_window<C>(
     conn: &mut C,
     user_id: Uuid,
@@ -163,10 +172,41 @@ where
             .filter(
                 users::last_subscription_cost_calculated_at
                     .is_null()
-                    .or(users::last_subscription_cost_calculated_at.lt(period_start)),
+                    .or(users::last_subscription_cost_calculated_at.le(period_start)),
             ),
     )
     .set(users::last_subscription_cost_calculated_at.eq(period_end))
     .execute(conn)?;
     Ok(updated > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn ts(hour: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 6, 14, hour, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn subscription_window_claimable_when_never_charged() {
+        assert!(subscription_cost_window_unclaimed(None, ts(3)));
+    }
+
+    #[test]
+    fn subscription_window_claimable_for_next_consecutive_window() {
+        assert!(subscription_cost_window_unclaimed(Some(ts(3)), ts(3)));
+    }
+
+    #[test]
+    fn subscription_window_not_claimable_twice_for_same_user_window() {
+        assert!(!subscription_cost_window_unclaimed(Some(ts(6)), ts(0)));
+        assert!(!subscription_cost_window_unclaimed(Some(ts(6)), ts(3)));
+    }
+
+    #[test]
+    fn subscription_window_not_claimable_when_period_starts_before_last_charge() {
+        assert!(!subscription_cost_window_unclaimed(Some(ts(6)), ts(5)));
+    }
 }
