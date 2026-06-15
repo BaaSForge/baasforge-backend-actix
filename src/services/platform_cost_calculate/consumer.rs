@@ -210,17 +210,19 @@ async fn process_message(pool: &DbPool, message: PlatformCostCalculateMessage) -
     let period_start = message.period_start;
     let period_end = message.period_end;
 
-    let (unit_count, stage_runtime_count, package_tier, has_subscription) =
+    let (unit_count, stage_runtime_count, package_tier, has_subscription, is_annual) =
         block_on_db_tokio(pool, move |conn| {
             let unit_count = db::count_live_units(conn, project_id)?;
             let stage_runtime_count = db::count_stage_runtimes(conn, project_id)?;
             let package_tier = db::user_package_tier(conn, owner_user_id)?;
-            let has_subscription = db::user_has_paid_subscription(conn, owner_user_id)?;
+            let (has_subscription, is_annual) =
+                db::user_has_paid_subscription(conn, owner_user_id)?;
             Ok::<_, diesel::result::Error>((
                 unit_count,
                 stage_runtime_count,
                 package_tier,
                 has_subscription,
+                is_annual,
             ))
         })
         .await
@@ -251,6 +253,7 @@ async fn process_message(pool: &DbPool, message: PlatformCostCalculateMessage) -
                     recorded_at,
                     owner_user_id,
                     package_tier,
+                    is_annual,
                 );
             }
         }

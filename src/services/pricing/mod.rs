@@ -1,7 +1,8 @@
 //! Central configuration for usage billing rates (compute, storage, LLM, platform resources).
 //!
-//! Edit files in this folder to change prices — billing logic lives in `services::billing`.
+//! Edit `config.rs` to change any price — all other files in this folder reference it.
 
+pub mod config;
 pub mod compute_storage;
 pub mod llm;
 pub mod metrics;

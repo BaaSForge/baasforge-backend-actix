@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::libs::ids::new_uuid;
 use crate::services::pricing::{
-    ENTITY_SECOND_PRICE_UNIT, PLATFORM_KIND, PROJECT_METRIC, STAGE_RUNTIME_METRIC,
-    SUBSCRIPTION_METRIC, UNIT_METRIC,
+    config::ANNUAL_BILLING_DISCOUNT, ENTITY_SECOND_PRICE_UNIT, PLATFORM_KIND, PROJECT_METRIC,
+    STAGE_RUNTIME_METRIC, SUBSCRIPTION_METRIC, UNIT_METRIC,
 };
 use crate::services::usage_publisher::{self, UsageEntry};
 
@@ -81,13 +81,25 @@ pub fn enqueue_subscription_meter(
     recorded_at: DateTime<Utc>,
     user_id: Uuid,
     package_tier: i32,
+    is_annual: bool,
 ) {
+    let effective_seconds = if is_annual {
+        ((seconds as f64) * (1.0 - ANNUAL_BILLING_DISCOUNT)) as i64
+    } else {
+        seconds
+    };
+    let billing_period = if is_annual { "annual" } else { "monthly" };
     enqueue_platform_usage(
         project_id,
         SUBSCRIPTION_METRIC,
-        entity_seconds(1, seconds),
+        entity_seconds(1, effective_seconds),
         recorded_at,
-        json!({ "entity_count": 1, "user_id": user_id, "package_tier": package_tier }),
+        json!({
+            "entity_count": 1,
+            "user_id": user_id,
+            "package_tier": package_tier,
+            "billing_period": billing_period,
+        }),
     );
 }
 

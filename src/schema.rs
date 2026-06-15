@@ -2,6 +2,10 @@
 
 pub mod sql_types {
     #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "billing_period_type"))]
+    pub struct BillingPeriodType;
+
+    #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "chat_agent_type"))]
     pub struct ChatAgentType;
 
@@ -92,6 +96,9 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::BillingPeriodType;
+
     payments (id) {
         id -> Uuid,
         user_id -> Uuid,
@@ -108,6 +115,7 @@ diesel::table! {
         gateway_metadata -> Nullable<Jsonb>,
         expires_at -> Nullable<Timestamptz>,
         package_is_tiral -> Bool,
+        billing_period -> BillingPeriodType,
     }
 }
 

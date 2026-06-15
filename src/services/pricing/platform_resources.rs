@@ -1,4 +1,14 @@
-use super::tiers::{effective_tier};
+use super::config::{
+    TIER1_PROJECT_PER_HOUR, TIER1_STAGE_RUNTIME_PER_HOUR, TIER1_SUBSCRIPTION_MONTHLY_USD,
+    TIER1_UNIT_PER_HOUR, TIER2_PROJECT_PER_HOUR, TIER2_STAGE_RUNTIME_PER_HOUR,
+    TIER2_SUBSCRIPTION_MONTHLY_USD, TIER2_UNIT_PER_HOUR, TIER3_PROJECT_PER_HOUR,
+    TIER3_STAGE_RUNTIME_PER_HOUR, TIER3_SUBSCRIPTION_MONTHLY_USD, TIER3_UNIT_PER_HOUR,
+    TIER4_PROJECT_PER_HOUR, TIER4_STAGE_RUNTIME_PER_HOUR, TIER4_SUBSCRIPTION_MONTHLY_USD,
+    TIER4_UNIT_PER_HOUR,
+};
+use super::tiers::effective_tier;
+
+const HOURS_PER_MONTH: f64 = 30.0 * 24.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlatformResourceRates {
@@ -43,22 +53,28 @@ impl PlatformResourceRates {
 pub fn platform_rates_for_package_tier(tier: i32) -> PlatformResourceRates {
     match effective_tier(tier) {
         1 => PlatformResourceRates {
-            subscription_per_hour: 0.0,
-            project_per_hour: 0.002,
-            unit_per_hour: 0.0002,
-            stage_runtime_per_hour: 0.01,
+            subscription_per_hour: TIER1_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH,
+            project_per_hour: TIER1_PROJECT_PER_HOUR,
+            unit_per_hour: TIER1_UNIT_PER_HOUR,
+            stage_runtime_per_hour: TIER1_STAGE_RUNTIME_PER_HOUR,
         },
         2 => PlatformResourceRates {
-            subscription_per_hour: 10.0 / (30.0 * 24.0),
-            project_per_hour: 0.0016,
-            unit_per_hour: 0.00016,
-            stage_runtime_per_hour: 0.008,
+            subscription_per_hour: TIER2_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH,
+            project_per_hour: TIER2_PROJECT_PER_HOUR,
+            unit_per_hour: TIER2_UNIT_PER_HOUR,
+            stage_runtime_per_hour: TIER2_STAGE_RUNTIME_PER_HOUR,
+        },
+        3 => PlatformResourceRates {
+            subscription_per_hour: TIER3_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH,
+            project_per_hour: TIER3_PROJECT_PER_HOUR,
+            unit_per_hour: TIER3_UNIT_PER_HOUR,
+            stage_runtime_per_hour: TIER3_STAGE_RUNTIME_PER_HOUR,
         },
         _ => PlatformResourceRates {
-            subscription_per_hour: 30.0 / (30.0 * 24.0),
-            project_per_hour: 0.0012,
-            unit_per_hour: 0.00012,
-            stage_runtime_per_hour: 0.006,
+            subscription_per_hour: TIER4_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH,
+            project_per_hour: TIER4_PROJECT_PER_HOUR,
+            unit_per_hour: TIER4_UNIT_PER_HOUR,
+            stage_runtime_per_hour: TIER4_STAGE_RUNTIME_PER_HOUR,
         },
     }
 }

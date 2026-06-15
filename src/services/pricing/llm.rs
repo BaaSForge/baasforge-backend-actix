@@ -1,15 +1,35 @@
-//! Provider list prices (USD per 1M tokens) and customer rates for LLM billing.
-//!
-//! Margin model: platforms like OpenRouter pass through provider token rates and charge
-//! ~5.5% on credit purchase; inference gateways often add ~5–10% on usage. We apply a
-//! single configurable markup on provider list price, then package-tier volume discount.
-
+use super::config::{
+    ANTHROPIC_CLAUDE_HAIKU_4_5_INPUT_PER_M, ANTHROPIC_CLAUDE_HAIKU_4_5_OUTPUT_PER_M,
+    ANTHROPIC_CLAUDE_OPUS_4_6_INPUT_PER_M, ANTHROPIC_CLAUDE_OPUS_4_6_OUTPUT_PER_M,
+    ANTHROPIC_CLAUDE_OPUS_4_7_INPUT_PER_M, ANTHROPIC_CLAUDE_OPUS_4_7_OUTPUT_PER_M,
+    ANTHROPIC_CLAUDE_OPUS_4_8_INPUT_PER_M, ANTHROPIC_CLAUDE_OPUS_4_8_OUTPUT_PER_M,
+    ANTHROPIC_CLAUDE_SONNET_4_5_INPUT_PER_M, ANTHROPIC_CLAUDE_SONNET_4_5_OUTPUT_PER_M,
+    ANTHROPIC_CLAUDE_SONNET_4_6_INPUT_PER_M, ANTHROPIC_CLAUDE_SONNET_4_6_OUTPUT_PER_M,
+    FALLBACK_ANTHROPIC_INPUT_PER_M, FALLBACK_ANTHROPIC_OUTPUT_PER_M,
+    FALLBACK_GEMINI_INPUT_PER_M, FALLBACK_GEMINI_OUTPUT_PER_M, FALLBACK_OPENAI_INPUT_PER_M,
+    FALLBACK_OPENAI_OUTPUT_PER_M, FALLBACK_UNKNOWN_PROVIDER_INPUT_PER_M,
+    FALLBACK_UNKNOWN_PROVIDER_OUTPUT_PER_M, GEMINI_2_5_FLASH_INPUT_PER_M,
+    GEMINI_2_5_FLASH_LITE_INPUT_PER_M, GEMINI_2_5_FLASH_LITE_OUTPUT_PER_M,
+    GEMINI_2_5_FLASH_OUTPUT_PER_M, GEMINI_2_5_PRO_INPUT_PER_M, GEMINI_2_5_PRO_OUTPUT_PER_M,
+    GEMINI_3_1_FLASH_LITE_INPUT_PER_M, GEMINI_3_1_FLASH_LITE_OUTPUT_PER_M,
+    GEMINI_3_1_PRO_INPUT_PER_M, GEMINI_3_1_PRO_OUTPUT_PER_M, GEMINI_3_5_FLASH_INPUT_PER_M,
+    GEMINI_3_5_FLASH_OUTPUT_PER_M, GEMINI_3_FLASH_INPUT_PER_M, GEMINI_3_FLASH_OUTPUT_PER_M,
+    GEMINI_3_PRO_INPUT_PER_M, GEMINI_3_PRO_OUTPUT_PER_M, LLM_PLATFORM_MARGIN,
+    OPENAI_GPT_4_1_INPUT_PER_M, OPENAI_GPT_4_1_MINI_INPUT_PER_M,
+    OPENAI_GPT_4_1_MINI_OUTPUT_PER_M, OPENAI_GPT_4_1_NANO_INPUT_PER_M,
+    OPENAI_GPT_4_1_NANO_OUTPUT_PER_M, OPENAI_GPT_4_1_OUTPUT_PER_M,
+    OPENAI_GPT_4O_INPUT_PER_M, OPENAI_GPT_4O_MINI_INPUT_PER_M, OPENAI_GPT_4O_MINI_OUTPUT_PER_M,
+    OPENAI_GPT_4O_OUTPUT_PER_M, OPENAI_GPT_5_4_INPUT_PER_M, OPENAI_GPT_5_4_MINI_INPUT_PER_M,
+    OPENAI_GPT_5_4_MINI_OUTPUT_PER_M, OPENAI_GPT_5_4_NANO_INPUT_PER_M,
+    OPENAI_GPT_5_4_NANO_OUTPUT_PER_M, OPENAI_GPT_5_4_OUTPUT_PER_M, OPENAI_GPT_5_5_INPUT_PER_M,
+    OPENAI_GPT_5_5_OUTPUT_PER_M, OPENAI_O3_INPUT_PER_M, OPENAI_O3_MINI_INPUT_PER_M,
+    OPENAI_O3_MINI_OUTPUT_PER_M, OPENAI_O3_OUTPUT_PER_M, OPENAI_O4_MINI_INPUT_PER_M,
+    OPENAI_O4_MINI_OUTPUT_PER_M,
+};
 use super::metrics::{LLM_INPUT_TOKENS_METRIC, LLM_OUTPUT_TOKENS_METRIC};
 use super::tiers::tier_volume_discount;
 
-/// Markup on provider list price (not env). 0.08 = 8% — between OpenRouter credit fee (~5.5%)
-/// and typical B2B gateway inference markup (~10%).
-pub const LLM_PLATFORM_MARGIN_FRACTION: f64 = 0.08;
+pub use super::config::LLM_PLATFORM_MARGIN as LLM_PLATFORM_MARGIN_FRACTION;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProviderModelRates {
@@ -65,9 +85,7 @@ pub fn customer_rate_per_token(
         LLM_OUTPUT_TOKENS_METRIC => list.output_per_million,
         _ => 0.0,
     };
-    per_million / 1_000_000.0
-        * (1.0 + LLM_PLATFORM_MARGIN_FRACTION)
-        * tier_volume_discount(package_tier)
+    per_million / 1_000_000.0 * (1.0 + LLM_PLATFORM_MARGIN) * tier_volume_discount(package_tier)
 }
 
 pub fn compute_llm_period_cost(slices: &[LlmUsageSlice], package_tier: i32) -> LlmPeriodCost {
@@ -80,7 +98,8 @@ pub fn compute_llm_period_cost(slices: &[LlmUsageSlice], package_tier: i32) -> L
         if slice.quantity <= 0 {
             continue;
         }
-        let rate = customer_rate_per_token(&slice.provider, &slice.model, &slice.metric, package_tier);
+        let rate =
+            customer_rate_per_token(&slice.provider, &slice.model, &slice.metric, package_tier);
         let cost = slice.quantity as f64 * rate;
         match slice.metric.as_str() {
             LLM_INPUT_TOKENS_METRIC => {
@@ -95,48 +114,40 @@ pub fn compute_llm_period_cost(slices: &[LlmUsageSlice], package_tier: i32) -> L
         }
     }
 
-    LlmPeriodCost {
-        sum_input_tokens,
-        sum_output_tokens,
-        input_cost,
-        output_cost,
-    }
+    LlmPeriodCost { sum_input_tokens, sum_output_tokens, input_cost, output_cost }
 }
 
 fn provider_model_rates(provider: &str, model: &str) -> Option<ProviderModelRates> {
     Some(match (provider, model) {
-        // OpenAI — https://openai.com/api/pricing/
-        ("openai", "gpt-4o-mini") => rates(0.15, 0.60),
-        ("openai", "gpt-4o") => rates(2.50, 10.00),
-        ("openai", "gpt-4.1") => rates(2.00, 8.00),
-        ("openai", "gpt-4.1-mini") => rates(0.40, 1.60),
-        ("openai", "gpt-4.1-nano") => rates(0.10, 0.40),
-        ("openai", "o3-mini") => rates(1.10, 4.40),
-        ("openai", "o3") => rates(2.00, 8.00),
-        ("openai", "o4-mini") => rates(1.10, 4.40),
-        ("openai", "gpt-5.4-nano") => rates(0.20, 1.25),
-        ("openai", "gpt-5.4-mini") => rates(0.75, 4.50),
-        ("openai", "gpt-5.4") => rates(2.50, 15.00),
-        ("openai", "gpt-5.5") => rates(5.00, 30.00),
+        ("openai", "gpt-4o-mini") => rates(OPENAI_GPT_4O_MINI_INPUT_PER_M, OPENAI_GPT_4O_MINI_OUTPUT_PER_M),
+        ("openai", "gpt-4o") => rates(OPENAI_GPT_4O_INPUT_PER_M, OPENAI_GPT_4O_OUTPUT_PER_M),
+        ("openai", "gpt-4.1") => rates(OPENAI_GPT_4_1_INPUT_PER_M, OPENAI_GPT_4_1_OUTPUT_PER_M),
+        ("openai", "gpt-4.1-mini") => rates(OPENAI_GPT_4_1_MINI_INPUT_PER_M, OPENAI_GPT_4_1_MINI_OUTPUT_PER_M),
+        ("openai", "gpt-4.1-nano") => rates(OPENAI_GPT_4_1_NANO_INPUT_PER_M, OPENAI_GPT_4_1_NANO_OUTPUT_PER_M),
+        ("openai", "o3-mini") => rates(OPENAI_O3_MINI_INPUT_PER_M, OPENAI_O3_MINI_OUTPUT_PER_M),
+        ("openai", "o3") => rates(OPENAI_O3_INPUT_PER_M, OPENAI_O3_OUTPUT_PER_M),
+        ("openai", "o4-mini") => rates(OPENAI_O4_MINI_INPUT_PER_M, OPENAI_O4_MINI_OUTPUT_PER_M),
+        ("openai", "gpt-5.4-nano") => rates(OPENAI_GPT_5_4_NANO_INPUT_PER_M, OPENAI_GPT_5_4_NANO_OUTPUT_PER_M),
+        ("openai", "gpt-5.4-mini") => rates(OPENAI_GPT_5_4_MINI_INPUT_PER_M, OPENAI_GPT_5_4_MINI_OUTPUT_PER_M),
+        ("openai", "gpt-5.4") => rates(OPENAI_GPT_5_4_INPUT_PER_M, OPENAI_GPT_5_4_OUTPUT_PER_M),
+        ("openai", "gpt-5.5") => rates(OPENAI_GPT_5_5_INPUT_PER_M, OPENAI_GPT_5_5_OUTPUT_PER_M),
 
-        // Anthropic — https://platform.claude.com/docs/en/about-claude/models/overview
-        ("anthropic", "claude-haiku-4-5") => rates(1.00, 5.00),
-        ("anthropic", "claude-haiku-4-5-20251001") => rates(1.00, 5.00),
-        ("anthropic", "claude-sonnet-4-6") => rates(3.00, 15.00),
-        ("anthropic", "claude-sonnet-4-5") => rates(3.00, 15.00),
-        ("anthropic", "claude-opus-4-6") => rates(5.00, 25.00),
-        ("anthropic", "claude-opus-4-7") => rates(5.00, 25.00),
-        ("anthropic", "claude-opus-4-8") => rates(5.00, 25.00),
+        ("anthropic", "claude-haiku-4-5") => rates(ANTHROPIC_CLAUDE_HAIKU_4_5_INPUT_PER_M, ANTHROPIC_CLAUDE_HAIKU_4_5_OUTPUT_PER_M),
+        ("anthropic", "claude-haiku-4-5-20251001") => rates(ANTHROPIC_CLAUDE_HAIKU_4_5_INPUT_PER_M, ANTHROPIC_CLAUDE_HAIKU_4_5_OUTPUT_PER_M),
+        ("anthropic", "claude-sonnet-4-6") => rates(ANTHROPIC_CLAUDE_SONNET_4_6_INPUT_PER_M, ANTHROPIC_CLAUDE_SONNET_4_6_OUTPUT_PER_M),
+        ("anthropic", "claude-sonnet-4-5") => rates(ANTHROPIC_CLAUDE_SONNET_4_5_INPUT_PER_M, ANTHROPIC_CLAUDE_SONNET_4_5_OUTPUT_PER_M),
+        ("anthropic", "claude-opus-4-6") => rates(ANTHROPIC_CLAUDE_OPUS_4_6_INPUT_PER_M, ANTHROPIC_CLAUDE_OPUS_4_6_OUTPUT_PER_M),
+        ("anthropic", "claude-opus-4-7") => rates(ANTHROPIC_CLAUDE_OPUS_4_7_INPUT_PER_M, ANTHROPIC_CLAUDE_OPUS_4_7_OUTPUT_PER_M),
+        ("anthropic", "claude-opus-4-8") => rates(ANTHROPIC_CLAUDE_OPUS_4_8_INPUT_PER_M, ANTHROPIC_CLAUDE_OPUS_4_8_OUTPUT_PER_M),
 
-        // Google Gemini — https://ai.google.dev/gemini-api/docs/pricing (≤200K context tier)
-        ("gemini", "gemini-2.5-flash-lite") => rates(0.10, 0.40),
-        ("gemini", "gemini-2.5-flash") => rates(0.30, 2.50),
-        ("gemini", "gemini-2.5-pro") => rates(1.25, 10.00),
-        ("gemini", "gemini-3-flash") => rates(0.50, 3.00),
-        ("gemini", "gemini-3.5-flash") => rates(1.50, 9.00),
-        ("gemini", "gemini-3.1-flash-lite-preview") => rates(0.25, 1.50),
-        ("gemini", "gemini-3-pro-preview") => rates(2.00, 12.00),
-        ("gemini", "gemini-3.1-pro-preview") => rates(2.00, 12.00),
+        ("gemini", "gemini-2.5-flash-lite") => rates(GEMINI_2_5_FLASH_LITE_INPUT_PER_M, GEMINI_2_5_FLASH_LITE_OUTPUT_PER_M),
+        ("gemini", "gemini-2.5-flash") => rates(GEMINI_2_5_FLASH_INPUT_PER_M, GEMINI_2_5_FLASH_OUTPUT_PER_M),
+        ("gemini", "gemini-2.5-pro") => rates(GEMINI_2_5_PRO_INPUT_PER_M, GEMINI_2_5_PRO_OUTPUT_PER_M),
+        ("gemini", "gemini-3-flash") => rates(GEMINI_3_FLASH_INPUT_PER_M, GEMINI_3_FLASH_OUTPUT_PER_M),
+        ("gemini", "gemini-3.5-flash") => rates(GEMINI_3_5_FLASH_INPUT_PER_M, GEMINI_3_5_FLASH_OUTPUT_PER_M),
+        ("gemini", "gemini-3.1-flash-lite-preview") => rates(GEMINI_3_1_FLASH_LITE_INPUT_PER_M, GEMINI_3_1_FLASH_LITE_OUTPUT_PER_M),
+        ("gemini", "gemini-3-pro-preview") => rates(GEMINI_3_PRO_INPUT_PER_M, GEMINI_3_PRO_OUTPUT_PER_M),
+        ("gemini", "gemini-3.1-pro-preview") => rates(GEMINI_3_1_PRO_INPUT_PER_M, GEMINI_3_1_PRO_OUTPUT_PER_M),
 
         _ => return None,
     })
@@ -144,18 +155,15 @@ fn provider_model_rates(provider: &str, model: &str) -> Option<ProviderModelRate
 
 fn provider_default_rates(provider: &str) -> ProviderModelRates {
     match provider {
-        "openai" => rates(2.50, 10.00),
-        "anthropic" => rates(3.00, 15.00),
-        "gemini" => rates(0.30, 2.50),
-        _ => rates(3.00, 15.00),
+        "openai" => rates(FALLBACK_OPENAI_INPUT_PER_M, FALLBACK_OPENAI_OUTPUT_PER_M),
+        "anthropic" => rates(FALLBACK_ANTHROPIC_INPUT_PER_M, FALLBACK_ANTHROPIC_OUTPUT_PER_M),
+        "gemini" => rates(FALLBACK_GEMINI_INPUT_PER_M, FALLBACK_GEMINI_OUTPUT_PER_M),
+        _ => rates(FALLBACK_UNKNOWN_PROVIDER_INPUT_PER_M, FALLBACK_UNKNOWN_PROVIDER_OUTPUT_PER_M),
     }
 }
 
 const fn rates(input_per_million: f64, output_per_million: f64) -> ProviderModelRates {
-    ProviderModelRates {
-        input_per_million,
-        output_per_million,
-    }
+    ProviderModelRates { input_per_million, output_per_million }
 }
 
 #[cfg(test)]
@@ -165,7 +173,7 @@ mod tests {
     #[test]
     fn gpt_4o_mini_tier1_with_margin() {
         let rate = customer_rate_per_token("openai", "gpt-4o-mini", LLM_INPUT_TOKENS_METRIC, 1);
-        let expected = 0.15 / 1_000_000.0 * 1.08;
+        let expected = OPENAI_GPT_4O_MINI_INPUT_PER_M / 1_000_000.0 * (1.0 + LLM_PLATFORM_MARGIN);
         assert!((rate - expected).abs() < 1e-15);
     }
 
@@ -173,7 +181,7 @@ mod tests {
     fn tier_discount_reduces_rate() {
         let t1 = customer_rate_per_token("anthropic", "claude-sonnet-4-6", LLM_OUTPUT_TOKENS_METRIC, 1);
         let t3 = customer_rate_per_token("anthropic", "claude-sonnet-4-6", LLM_OUTPUT_TOKENS_METRIC, 3);
-        assert!((t3 / t1 - 0.6).abs() < 1e-9);
+        assert!((t3 / t1 - super::super::config::TIER3_VOLUME_DISCOUNT).abs() < 1e-9);
     }
 
     #[test]
@@ -204,8 +212,9 @@ mod tests {
         );
         assert_eq!(cost.sum_input_tokens, 1_000_000);
         assert_eq!(cost.sum_output_tokens, 500_000);
-        assert!((cost.input_cost - 0.15 * 1.08).abs() < 1e-9);
-        assert!((cost.output_cost - 0.30 * 1.08).abs() < 1e-9);
+        let margin = 1.0 + LLM_PLATFORM_MARGIN;
+        assert!((cost.input_cost - OPENAI_GPT_4O_MINI_INPUT_PER_M * margin).abs() < 1e-9);
+        assert!((cost.output_cost - OPENAI_GPT_4O_MINI_OUTPUT_PER_M * 0.5 * margin).abs() < 1e-9);
     }
 
     #[test]

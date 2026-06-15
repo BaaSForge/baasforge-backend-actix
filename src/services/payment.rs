@@ -43,7 +43,7 @@ where
     Ok((payments_with_packages, largest_tier))
 }
 
-pub const PACKAGE_PAID_FEATURES: [(&str, &[PaidFeature]); 3] = [
+pub const PACKAGE_PAID_FEATURES: [(&str, &[PaidFeature]); 4] = [
     ("free-trial", &[]),
     ("basic", &[PaidFeature::LotsOfProjects]),
     (
@@ -51,6 +51,14 @@ pub const PACKAGE_PAID_FEATURES: [(&str, &[PaidFeature]); 3] = [
         &[
             PaidFeature::LotsOfProjects,
             PaidFeature::MonitoringDashboard,
+        ],
+    ),
+    (
+        "ultra",
+        &[
+            PaidFeature::LotsOfProjects,
+            PaidFeature::MonitoringDashboard,
+            PaidFeature::TeamCollaboration,
         ],
     ),
 ];
@@ -63,6 +71,7 @@ fn package_order() -> Vec<&'static str> {
 pub enum PaidFeature {
     LotsOfProjects,
     MonitoringDashboard,
+    TeamCollaboration,
 }
 
 #[derive(Debug, Clone, Serialize)]

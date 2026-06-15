@@ -129,13 +129,33 @@ where
 pub fn user_has_paid_subscription<C>(
     conn: &mut C,
     user_id: Uuid,
-) -> Result<bool, diesel::result::Error>
+) -> Result<(bool, bool), diesel::result::Error>
 where
     C: diesel::connection::Connection<Backend = diesel::pg::Pg>
         + diesel::connection::LoadConnection,
 {
+    use crate::schema::payments;
+    use chrono::Utc;
+
     let (_, largest_tier) = crate::services::payment::get_user_active_paid_packages(conn, user_id)?;
-    Ok(largest_tier > 1)
+    if largest_tier <= 1 {
+        return Ok((false, false));
+    }
+    let now = Utc::now();
+    let is_annual: bool = payments::table
+        .filter(payments::user_id.eq(user_id))
+        .filter(payments::is_success.eq(true))
+        .filter(
+            payments::expires_at
+                .is_null()
+                .or(payments::expires_at.gt(now)),
+        )
+        .filter(payments::package_tier.eq(largest_tier))
+        .select(payments::billing_period)
+        .first::<crate::models::payments::BillingPeriod>(conn)
+        .map(|period| period == crate::models::payments::BillingPeriod::Annual)
+        .unwrap_or(false);
+    Ok((true, is_annual))
 }
 
 pub fn user_package_tier<C>(conn: &mut C, user_id: Uuid) -> Result<i32, diesel::result::Error>

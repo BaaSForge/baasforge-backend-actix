@@ -10,5 +10,5 @@ BEGIN
     END IF;
 
     DELETE FROM packages
-    WHERE slug IN ('free-trial', 'basic', 'pro');
+    WHERE slug IN ('free-trial', 'basic', 'pro', 'ultra');
 END $$;

@@ -13,5 +13,6 @@ BEGIN
     VALUES
         ('Free Trial', 'free-trial', 1, E'- feature first here\n- feature second also here\n- feature third', 0, 100, TRUE, TRUE),
         ('Basic', 'basic', 2, E'- feature first here\n- feature second also here\n- feature third', 10, 10, FALSE, TRUE),
-        ('Pro', 'pro', 3, E'- feature first here\n- feature second also here\n- feature third', 30, 20, FALSE, TRUE);
+        ('Pro', 'pro', 3, E'- feature first here\n- feature second also here\n- feature third', 30, 20, FALSE, TRUE),
+        ('Ultra', 'ultra', 4, E'- Everything in Pro\n- Team collaboration\n- Priority support\n- Maximum resource limits', 70, 0, FALSE, TRUE);
 END $$;

@@ -1,9 +1,10 @@
 use crate::database;
 use crate::middlewares::auth::AccessPayload;
 use crate::models::packages::Package;
-use crate::models::payments::PaymentInsert;
+use crate::models::payments::{BillingPeriod, PaymentInsert};
 use crate::schema::{packages, payments};
 use crate::services::payment::get_user_active_paid_packages;
+use crate::services::pricing::config::ANNUAL_BILLING_DISCOUNT;
 use crate::{
     libs::api_response::{api_error, api_success},
     routes::AppContext,
@@ -18,6 +19,8 @@ use uuid::Uuid;
 #[derive(Deserialize)]
 pub struct InitiatePaymentRequest {
     package_id: Uuid,
+    #[serde(default)]
+    billing_period: Option<BillingPeriod>,
 }
 
 pub async fn handle_initiate_purchase(
@@ -33,6 +36,8 @@ pub async fn handle_initiate_purchase(
 
     let user_id = access_payload.user_id;
     let package_id = body.package_id;
+    let billing_period = body.billing_period.unwrap_or_default();
+    let is_annual = billing_period == BillingPeriod::Annual;
 
     enum PurchaseOut {
         PackageNotFound,
@@ -40,6 +45,7 @@ pub async fn handle_initiate_purchase(
         Ok {
             package: Package,
             new_expires_at: chrono::DateTime<Utc>,
+            amount: f64,
         },
         #[allow(dead_code)]
         DbErr(diesel::result::Error),
@@ -60,7 +66,12 @@ pub async fn handle_initiate_purchase(
             return Ok(PurchaseOut::TierNotLarger);
         }
         let now = Utc::now();
-        let new_expires_at = now + Duration::days(30);
+        let (new_expires_at, amount) = if is_annual {
+            let annual_amount = package.price * 12.0 * (1.0 - ANNUAL_BILLING_DISCOUNT);
+            (now + Duration::days(365), annual_amount)
+        } else {
+            (now + Duration::days(30), package.price)
+        };
         if !paid_packages.is_empty() {
             // TODO: refund remaining price for the previous active package(s) before upgrading
             let not_expired = payments::expires_at
@@ -77,7 +88,7 @@ pub async fn handle_initiate_purchase(
         }
         let payment = PaymentInsert {
             user_id,
-            amount: package.price,
+            amount,
             package_id: package.id,
             package_title: Some(package.title.clone()),
             package_slug: Some(package.slug.clone()),
@@ -88,14 +99,12 @@ pub async fn handle_initiate_purchase(
             is_success: true,
             gateway_metadata: None,
             expires_at: Some(new_expires_at),
+            billing_period,
         };
         diesel::insert_into(payments::table)
             .values(&payment)
             .execute(conn)?;
-        Ok(PurchaseOut::Ok {
-            package,
-            new_expires_at,
-        })
+        Ok(PurchaseOut::Ok { package, new_expires_at, amount })
     })
     .await;
 
@@ -108,13 +117,17 @@ pub async fn handle_initiate_purchase(
             "Target package tier must be larger than your current largest tier",
             json!({}),
         )),
-        Ok(PurchaseOut::Ok {
-            package,
-            new_expires_at,
-        }) => HttpResponse::Created().json(api_success(
-            "Purchase initiated successfully",
-            json!({ "package_id": package.id, "expires_at": new_expires_at }),
-        )),
+        Ok(PurchaseOut::Ok { package, new_expires_at, amount }) => {
+            HttpResponse::Created().json(api_success(
+                "Purchase initiated successfully",
+                json!({
+                    "package_id": package.id,
+                    "expires_at": new_expires_at,
+                    "amount": amount,
+                    "billing_period": billing_period,
+                }),
+            ))
+        }
         Ok(PurchaseOut::DbErr(e)) => {
             HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})))
         }
