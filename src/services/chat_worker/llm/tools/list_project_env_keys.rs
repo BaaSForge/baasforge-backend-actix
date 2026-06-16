@@ -74,7 +74,7 @@ pub const TOOL_NAME: &str = "list_project_env_keys";
 pub fn spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_NAME,
-        description: "List all runtime environment variable key configured for this project. Returns key name and whether values are stored encrypted (`is_encrypted`)—never secret values. Call before referencing env vars in units or plans.",
+        description: "List all runtime variable keys configured for this project. Returns key name and whether values are stored encrypted (`is_encrypted`)—never secret values. Call before referencing env vars in units or plans.",
         parameters: params_schema(),
     }
 }

@@ -114,9 +114,9 @@ Units you write are what users **release to stage and production**. Implement **
 **Build order:** Create backing actors (and shared types) before APIs that depend on them in the same run when possible.
 If the directive is ambiguous but does not ask for mocks, implement production-ready behavior; note any assumption briefly in **`detailed_report`**.
 
-## **IMPORTANT** — Environment variables (no secrets in code)
+## **IMPORTANT** — Runtime variables (no secrets in code)
 Read runtime env only with **`sdk.getSecureEnv(key)`** from `@sdk`. **Never** hardcode API keys, tokens, passwords, connection strings, or other secrets/shared config in unit `code`.
-Call **list_project_env_keys** before using env vars; use only keys that exist. If the directive requires a key that is missing, do not use placeholders or fake values—call **finish implementation** with **`detailed_report`** listing the exact key names the user must add under dashboard **Environment variables**.
+Call **list_project_env_keys** before using env vars; use only keys that exist. If the directive requires a key that is missing, do not use placeholders or fake values—call **finish implementation** with **`detailed_report`** listing the exact key names the user must add under dashboard **Runtime variables**.
 
 ## CRITICAL — SLUG ARGUMENTS (READ BEFORE EVERY TOOL CALL)
 `context_slug`, `module_slug`, and `unit_name_slug` (in `create_unit`, `modify_unit`, `remove_unit`, and any tool with these fields) are validated by a regex: `^[a-z]+(-[a-z]+)*$`.
