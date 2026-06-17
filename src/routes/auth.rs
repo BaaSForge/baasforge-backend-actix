@@ -2,7 +2,7 @@ use crate::database;
 use crate::libs::api_response::{api_error, api_success};
 use crate::middlewares::auth::{AccessPayload, RefreshPayload};
 use crate::models::user_tokens::{UserTokenResponse, UserTokenType};
-use crate::models::users::{PlatformType, User};
+use crate::models::users::{CurrentUserResponse, PlatformType, User};
 use crate::routes::AppContext;
 use crate::schema::{user_tokens, users};
 use crate::services::auth::{
@@ -532,6 +532,7 @@ pub async fn handle_get_current_user(
         .expect("AccessPayload must exist to retrieve current user");
 
     let user_id = access_payload.user_id;
+    let token = UserTokenResponse::from(&access_payload.db_token);
 
     let user = match database::block_on_db(&context.pool, move |conn| {
         users::table.find(user_id).first::<User>(conn).optional()
@@ -547,9 +548,10 @@ pub async fn handle_get_current_user(
     };
 
     match user {
-        Some(u) => {
-            HttpResponse::Ok().json(api_success("Current user fetched successfully", json!(u)))
-        }
+        Some(u) => HttpResponse::Ok().json(api_success(
+            "Current user fetched successfully",
+            CurrentUserResponse { user: u, token },
+        )),
         None => HttpResponse::NotFound().json(api_error("User not found", json!({}))),
     }
 }

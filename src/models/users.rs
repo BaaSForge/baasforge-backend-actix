@@ -1,3 +1,4 @@
+use crate::models::user_tokens::UserTokenResponse;
 use chrono::{DateTime, Utc};
 use diesel::Insertable;
 use diesel::Queryable;
@@ -26,6 +27,13 @@ pub struct User {
     pub email_in_platform: Option<String>,
     #[allow(dead_code)]
     pub last_subscription_cost_calculated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize)]
+pub struct CurrentUserResponse {
+    #[serde(flatten)]
+    pub user: User,
+    pub token: UserTokenResponse,
 }
 
 #[derive(Debug, Insertable)]

@@ -56,3 +56,17 @@ pub struct UserTokenResponse {
     pub is_signup_token: bool,
     pub refresh_token_id: Option<Uuid>,
 }
+
+impl From<&UserToken> for UserTokenResponse {
+    fn from(token: &UserToken) -> Self {
+        Self {
+            id: token.id,
+            token_type: token.token_type.clone(),
+            expires_at: token.expires_at,
+            created_at: token.created_at,
+            revoked: token.revoked,
+            is_signup_token: token.is_signup_token,
+            refresh_token_id: token.refresh_token_id,
+        }
+    }
+}
