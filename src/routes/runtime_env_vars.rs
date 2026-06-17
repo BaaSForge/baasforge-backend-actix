@@ -70,6 +70,8 @@ async fn notify_runtime_env_cache_invalidate(
 #[derive(Clone, Deserialize)]
 pub struct UpsertRuntimeEnvVarItem {
     pub key: String,
+    #[serde(default, rename = "previousKey")]
+    pub previous_key: Option<String>,
     #[serde(default, rename = "isEncrypted")]
     pub is_encrypted: Option<bool>,
     #[serde(flatten)]
@@ -161,6 +163,7 @@ fn validate_runtime_ids_subset(
 
 struct ParsedEnvVarItem {
     key: String,
+    previous_key: Option<String>,
     is_encrypted: bool,
     runtime_values: HashMap<Uuid, String>,
 }
@@ -183,10 +186,24 @@ fn parse_upsert_items(
         }
 
         let runtime_values = parse_runtime_values(item.runtime_values)?;
-        validate_runtime_ids_subset(allowed_runtime_ids, &runtime_values)?;
+
+        let previous_key = item
+            .previous_key
+            .as_deref()
+            .map(normalize_env_key)
+            .transpose()?
+            .filter(|previous| previous != &key);
+
+        if runtime_values.is_empty() && previous_key.is_none() {
+            return Err("no_runtime_values");
+        }
+        if !runtime_values.is_empty() {
+            validate_runtime_ids_subset(allowed_runtime_ids, &runtime_values)?;
+        }
 
         parsed.push(ParsedEnvVarItem {
             key,
+            previous_key,
             is_encrypted: item.is_encrypted.unwrap_or(true),
             runtime_values,
         });
@@ -224,6 +241,111 @@ fn group_env_var_rows(
     let mut grouped: Vec<_> = by_key.into_values().collect();
     grouped.sort_by(|a, b| a.key.cmp(&b.key));
     grouped
+}
+
+fn push_env_invalidation(
+    invalidations: &mut Vec<(Uuid, String)>,
+    runtime_id: Uuid,
+    key: &str,
+) {
+    invalidations.push((runtime_id, key.to_string()));
+}
+
+fn prepare_runtime_stored_value(
+    conn: &mut diesel::PgConnection,
+    runtime_id: Uuid,
+    plaintext: &str,
+    is_encrypted: bool,
+) -> Result<String, diesel::result::Error> {
+    let key_row = ensure_runtime_encryption_key(conn, runtime_id).map_err(|e| {
+        diesel::result::Error::QueryBuilderError(Box::new(e))
+    })?;
+    let runtime_key = runtime_key_from_row(&key_row)
+        .map_err(|e| diesel::result::Error::QueryBuilderError(Box::new(e)))?;
+    prepare_stored_value(&runtime_key, plaintext, is_encrypted).map_err(|e: RuntimeSecretsError| {
+        diesel::result::Error::QueryBuilderError(Box::new(e))
+    })
+}
+
+fn upsert_runtime_env_var_row(
+    conn: &mut diesel::PgConnection,
+    project_id: Uuid,
+    runtime_id: Uuid,
+    key: &str,
+    stored_value: String,
+    is_encrypted: bool,
+) -> Result<(), diesel::result::Error> {
+    diesel::insert_into(project_runtime_env_vars::table)
+        .values(&ProjectRuntimeEnvVarInsert {
+            project_id,
+            runtime_id,
+            key: key.to_string(),
+            stored_value,
+            is_encrypted,
+        })
+        .on_conflict((
+            project_runtime_env_vars::runtime_id,
+            project_runtime_env_vars::key,
+        ))
+        .do_update()
+        .set((
+            project_runtime_env_vars::stored_value
+                .eq(excluded(project_runtime_env_vars::stored_value)),
+            project_runtime_env_vars::is_encrypted.eq(excluded(project_runtime_env_vars::is_encrypted)),
+            project_runtime_env_vars::updated_at.eq(now),
+        ))
+        .execute(conn)?;
+    Ok(())
+}
+
+fn upsert_runtime_env_var_item(
+    conn: &mut diesel::PgConnection,
+    project_id: Uuid,
+    item: &ParsedEnvVarItem,
+    invalidations: &mut Vec<(Uuid, String)>,
+) -> Result<(), diesel::result::Error> {
+    if let Some(ref previous_key) = item.previous_key {
+        let runtime_ids_to_rename: Vec<Uuid> = project_runtime_env_vars::table
+            .filter(project_runtime_env_vars::project_id.eq(project_id))
+            .filter(project_runtime_env_vars::key.eq(previous_key))
+            .select(project_runtime_env_vars::runtime_id)
+            .load(conn)?;
+
+        if !runtime_ids_to_rename.is_empty() {
+            for runtime_id in &runtime_ids_to_rename {
+                push_env_invalidation(invalidations, *runtime_id, previous_key);
+                push_env_invalidation(invalidations, *runtime_id, &item.key);
+            }
+
+            diesel::update(
+                project_runtime_env_vars::table
+                    .filter(project_runtime_env_vars::project_id.eq(project_id))
+                    .filter(project_runtime_env_vars::key.eq(previous_key)),
+            )
+            .set((
+                project_runtime_env_vars::key.eq(&item.key),
+                project_runtime_env_vars::updated_at.eq(now),
+            ))
+            .execute(conn)?;
+        }
+    }
+
+    for (runtime_id, plaintext) in &item.runtime_values {
+        push_env_invalidation(invalidations, *runtime_id, &item.key);
+
+        let stored_value =
+            prepare_runtime_stored_value(conn, *runtime_id, plaintext, item.is_encrypted)?;
+        upsert_runtime_env_var_row(
+            conn,
+            project_id,
+            *runtime_id,
+            &item.key,
+            stored_value,
+            item.is_encrypted,
+        )?;
+    }
+
+    Ok(())
 }
 
 pub async fn handle_list_project_runtime_env_vars(
@@ -306,48 +428,19 @@ pub async fn handle_upsert_project_runtime_env_vars(
         conn.transaction(|conn| {
             let mut invalidations = Vec::new();
             for item in &items {
-                for (runtime_id, plaintext) in &item.runtime_values {
-                    invalidations.push((*runtime_id, item.key.clone()));
-
-                    let key_row = ensure_runtime_encryption_key(conn, *runtime_id).map_err(|e| {
-                        diesel::result::Error::QueryBuilderError(Box::new(e))
-                    })?;
-                    let runtime_key = runtime_key_from_row(&key_row).map_err(|e| {
-                        diesel::result::Error::QueryBuilderError(Box::new(e))
-                    })?;
-                    let stored_value =
-                        prepare_stored_value(&runtime_key, plaintext, item.is_encrypted).map_err(
-                            |e: RuntimeSecretsError| diesel::result::Error::QueryBuilderError(Box::new(e)),
-                        )?;
-
-                    diesel::insert_into(project_runtime_env_vars::table)
-                        .values(&ProjectRuntimeEnvVarInsert {
-                            project_id,
-                            runtime_id: *runtime_id,
-                            key: item.key.clone(),
-                            stored_value,
-                            is_encrypted: item.is_encrypted,
-                        })
-                        .on_conflict((
-                            project_runtime_env_vars::runtime_id,
-                            project_runtime_env_vars::key,
-                        ))
-                        .do_update()
-                        .set((
-                            project_runtime_env_vars::stored_value
-                                .eq(excluded(project_runtime_env_vars::stored_value)),
-                            project_runtime_env_vars::is_encrypted
-                                .eq(excluded(project_runtime_env_vars::is_encrypted)),
-                            project_runtime_env_vars::updated_at.eq(now),
-                        ))
-                        .execute(conn)?;
-                }
+                upsert_runtime_env_var_item(conn, project_id, item, &mut invalidations)?;
             }
             Ok((
                 invalidations,
                 items
                     .iter()
-                    .map(|i| json!({ "key": i.key, "isEncrypted": i.is_encrypted }))
+                    .map(|i| {
+                        let mut entry = json!({ "key": i.key, "isEncrypted": i.is_encrypted });
+                        if let Some(previous_key) = &i.previous_key {
+                            entry["previousKey"] = json!(previous_key);
+                        }
+                        entry
+                    })
                     .collect::<Vec<_>>(),
             ))
         })
@@ -373,6 +466,13 @@ pub async fn handle_upsert_project_runtime_env_vars(
         }
         Err(BlockingDbError::Query(diesel::result::Error::NotFound)) => HttpResponse::NotFound()
             .json(api_error("Project not found", json!({}))),
+        Err(BlockingDbError::Query(diesel::result::Error::DatabaseError(
+            diesel::result::DatabaseErrorKind::UniqueViolation,
+            _,
+        ))) => HttpResponse::Conflict().json(api_error(
+            "Runtime environment variable key already exists for this runtime",
+            json!({ "code": "key_already_exists" }),
+        )),
         Err(BlockingDbError::Query(diesel::result::Error::QueryBuilderError(e)))
             if e.downcast_ref::<RuntimeSecretsError>().is_some() =>
         {
