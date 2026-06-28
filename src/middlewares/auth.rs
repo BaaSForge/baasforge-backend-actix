@@ -21,6 +21,30 @@ use diesel::prelude::*;
 use serde_json::json;
 use uuid::Uuid;
 
+fn has_refresh_token_cookie(req: &ServiceRequest) -> bool {
+    req.cookie(REFRESH_TOKEN_COOKIE_KEY).is_some()
+}
+
+fn unauthorized_with_refresh_check(req: ServiceRequest, reason: &str) -> ServiceResponse<BoxBody> {
+    log::warn!(
+        "[auth] Unauthorized: path={} reason={}",
+        req.path(),
+        reason
+    );
+    
+    if has_refresh_token_cookie(&req) {
+        let body = api_error(
+            "You need to refresh the access token",
+            json!({"needs_refresh_token": true}),
+        );
+        req.into_response(HttpResponse::Unauthorized().json(body))
+            .map_into_boxed_body()
+    } else {
+        req.into_response(HttpResponse::Unauthorized().finish())
+            .map_into_boxed_body()
+    }
+}
+
 pub struct AccessPayload {
     #[allow(unused)]
     pub claims: AccessClaims,
@@ -71,14 +95,17 @@ where
         .app_data::<web::Data<AppContext>>()
         .ok_or_else(|| actix_web::error::ErrorInternalServerError("Missing AppContext"))?;
 
-    let claims = decode_access_token(&token_str, &app_context.settings).map_err(|e| {
-        log::warn!(
-            "[auth] Unauthorized: path={} reason=invalid_token decode_err={:?}",
-            req.path(),
-            e
-        );
-        actix_web::error::ErrorUnauthorized("Invalid token")
-    })?;
+    let claims = match decode_access_token(&token_str, &app_context.settings) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!(
+                "[auth] Unauthorized: path={} reason=invalid_token decode_err={:?}",
+                req.path(),
+                e
+            );
+            return Ok(unauthorized_with_refresh_check(req, "invalid_token"));
+        }
+    };
 
     let token_str = token_str.clone();
     let db_token: Option<UserToken> = database::block_on_db(&app_context.pool, move |conn| {
@@ -98,11 +125,7 @@ where
     let db_token = match db_token {
         Some(t) if !t.revoked.unwrap_or(false) => t,
         _ => {
-            log::warn!(
-                "[auth] Unauthorized: path={} reason=token_not_found_or_revoked",
-                req.path()
-            );
-            return Ok(req.into_response(HttpResponse::Unauthorized().finish()));
+            return Ok(unauthorized_with_refresh_check(req, "token_not_found_or_revoked"));
         }
     };
 

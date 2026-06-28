@@ -3,6 +3,7 @@ use crate::libs::api_response::api_error;
 use crate::middlewares::auth::AccessPayload;
 use crate::routes::AppContext;
 use crate::schema::projects::dsl::*;
+use crate::services::auth::REFRESH_TOKEN_COOKIE_KEY;
 use crate::services::documentation_share::{
     DOCUMENTATION_SHARE_SECRET_HEADER, is_documentation_share_key_valid,
 };
@@ -12,6 +13,7 @@ use actix_web::dev::ServiceResponse;
 use actix_web::web;
 use actix_web::{HttpMessage, HttpResponse, dev::ServiceRequest, middleware::Next};
 use diesel::prelude::*;
+use serde_json::json;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug)]
@@ -24,6 +26,10 @@ fn extract_project_id_from_request(req: &ServiceRequest) -> Option<Uuid> {
     req.match_info()
         .get("id")
         .and_then(|s| Uuid::parse_str(s).ok())
+}
+
+fn has_refresh_token_cookie(req: &ServiceRequest) -> bool {
+    req.cookie(REFRESH_TOKEN_COOKIE_KEY).is_some()
 }
 
 pub fn projects_owner_guard_middleware_factory() -> impl Fn(
@@ -176,11 +182,19 @@ pub fn project_release_access_guard_middleware_factory() -> impl Fn(
                 .map(str::to_string);
 
             let Some(share_secret) = share_secret else {
-                return Ok(req
-                    .into_response(HttpResponse::Unauthorized().json(api_error(
+                let body = if has_refresh_token_cookie(&req) {
+                    api_error(
                         "Authentication required: log in as project owner or provide a valid documentation share secret",
-                        serde_json::json!({}),
-                    )))
+                        json!({"needs_refresh_token": true}),
+                    )
+                } else {
+                    api_error(
+                        "Authentication required: log in as project owner or provide a valid documentation share secret",
+                        json!({}),
+                    )
+                };
+                return Ok(req
+                    .into_response(HttpResponse::Unauthorized().json(body))
                     .map_into_boxed_body());
             };
 
