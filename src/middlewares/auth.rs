@@ -1,7 +1,7 @@
 use crate::database;
 use crate::schema::user_tokens::{token, token_type};
 use crate::services::auth::{
-    AccessClaims, RefreshClaims, decode_refresh_token, is_token_mature_enuogh,
+    AccessClaims, RefreshClaims, decode_refresh_token, is_token_mature_enough,
 };
 use crate::{
     libs::api_response::api_error,
@@ -259,21 +259,18 @@ pub async fn auth_refresh_token_maturity_guard_middleware<B>(
 where
     B: actix_web::body::MessageBody + 'static,
 {
-    let is_mature_enuogh = {
+    let maturity_check = {
         let extensions = req.extensions();
 
         let refresh_payload = extensions
             .get::<RefreshPayload>()
             .expect("RefreshPayload must exist");
 
-        is_token_mature_enuogh(&refresh_payload.db_token)
+        is_token_mature_enough(&refresh_payload.claims)
     };
 
-    if !is_mature_enuogh {
-        let body = api_error(
-            "Your session has just been created. You must wait several days to perform critical actions.",
-            json!({}),
-        );
+    if let Err(error_message) = maturity_check {
+        let body = api_error(&error_message, json!({}));
         return Ok(req
             .into_response(HttpResponse::Forbidden().json(body))
             .map_into_boxed_body());

@@ -1,6 +1,6 @@
-use crate::{configs::Settings, models::user_tokens::UserToken};
+use crate::configs::Settings;
 use actix_web::cookie::{Cookie, SameSite};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{
     Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode,
     errors::{Error, ErrorKind},
@@ -20,6 +20,10 @@ pub struct AccessClaims {
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct RefreshClaims {
     pub exp: usize,
+    pub account_created_at: i64,
+    pub token_ordinal: i32,
+    pub token_created_at: i64,
+    pub is_signup_token: bool,
 }
 
 pub fn create_access_token(settings: &Settings) -> Result<String, jsonwebtoken::errors::Error> {
@@ -36,12 +40,22 @@ pub fn create_access_token(settings: &Settings) -> Result<String, jsonwebtoken::
     )
 }
 
-pub fn create_refresh_token(settings: &Settings) -> Result<String, jsonwebtoken::errors::Error> {
+pub fn create_refresh_token(
+    settings: &Settings,
+    account_created_at: DateTime<Utc>,
+    token_ordinal: i32,
+    token_created_at: DateTime<Utc>,
+    is_signup_token: bool,
+) -> Result<String, jsonwebtoken::errors::Error> {
     let refresh_expiration = (Utc::now()
         + Duration::minutes(REFRESH_TOKEN_EXPIRY_MINUTES.try_into().unwrap()))
     .timestamp() as usize;
     let refresh_claims = RefreshClaims {
         exp: refresh_expiration,
+        account_created_at: account_created_at.timestamp(),
+        token_ordinal,
+        token_created_at: token_created_at.timestamp(),
+        is_signup_token,
     };
     encode(
         &Header::new(Algorithm::HS256),
@@ -118,7 +132,56 @@ pub fn decode_refresh_token(token_str: &str, settings: &Settings) -> Result<Refr
     Ok(token_data.claims)
 }
 
-pub fn is_token_mature_enuogh(db_token: &UserToken) -> bool {
-    let age = Utc::now() - db_token.created_at;
-    db_token.is_signup_token || age >= Duration::days(7)
+pub fn is_token_mature_enough(claims: &RefreshClaims) -> Result<(), String> {
+    let now = Utc::now();
+    let account_created_at = DateTime::<Utc>::from_timestamp(claims.account_created_at, 0)
+        .ok_or("Invalid account_created_at timestamp")?;
+    let token_created_at = DateTime::<Utc>::from_timestamp(claims.token_created_at, 0)
+        .ok_or("Invalid token_created_at timestamp")?;
+    
+    let account_age = now - account_created_at;
+    let token_age = now - token_created_at;
+    
+    if account_age < Duration::days(7) {
+        return Ok(());
+    }
+    
+    if claims.is_signup_token {
+        return Ok(());
+    }
+    
+    if claims.token_ordinal == 2 || claims.token_ordinal == 3 {
+        return Ok(());
+    }
+    
+    if token_age >= Duration::days(2) {
+        return Ok(());
+    }
+    
+    let wait_time = Duration::days(2) - token_age;
+    let hours = wait_time.num_hours();
+    let minutes = wait_time.num_minutes() % 60;
+    
+    let wait_message = if hours > 24 {
+        let days = hours / 24;
+        let remaining_hours = hours % 24;
+        if remaining_hours > 0 {
+            format!("{} days and {} hours", days, remaining_hours)
+        } else {
+            format!("{} days", days)
+        }
+    } else if hours > 0 {
+        if minutes > 0 {
+            format!("{} hours and {} minutes", hours, minutes)
+        } else {
+            format!("{} hours", hours)
+        }
+    } else {
+        format!("{} minutes", minutes)
+    };
+    
+    Err(format!(
+        "This token is beyond your 2nd and 3rd tokens and your account is older than 7 days. This token needs to mature for {} before performing critical actions.",
+        wait_message
+    ))
 }

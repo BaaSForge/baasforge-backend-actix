@@ -9,7 +9,7 @@ use crate::services::auth::{
     create_access_token, create_refresh_cookie, create_refresh_token,
 };
 use actix_web::cookie::Cookie;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
 use uuid::Uuid;
 
@@ -26,14 +26,14 @@ pub async fn complete_oauth_login(
     profile: OAuthUserProfile,
 ) -> Result<(Cookie<'static>, Cookie<'static>), ()> {
     let access_token = create_access_token(settings).map_err(|_| ())?;
-    let refresh_token = create_refresh_token(settings).map_err(|_| ())?;
 
     let now = Utc::now();
     let access_exp = now + Duration::minutes(ACCESS_TOKEN_EXPIRY_MINUTES as i64);
     let refresh_exp = now + Duration::minutes(REFRESH_TOKEN_EXPIRY_MINUTES as i64);
 
     let access_token_for_cookie = access_token.clone();
-    let refresh_token_for_cookie = refresh_token.clone();
+
+    let settings_clone = settings.clone();
 
     let (access, refresh) = database::block_on_db(pool, move |conn| {
         let existing_user = users::table
@@ -62,10 +62,36 @@ pub async fn complete_oauth_login(
             (new_user, true)
         };
 
+        let account_created_at: DateTime<Utc> = user_tokens::table
+            .filter(user_tokens::user_id.eq(user.id))
+            .filter(user_tokens::token_type.eq(UserTokenType::Refresh))
+            .select(user_tokens::created_at)
+            .order(user_tokens::created_at.asc())
+            .first::<DateTime<Utc>>(conn)
+            .optional()?
+            .unwrap_or(now);
+
+        let token_count: i64 = user_tokens::table
+            .filter(user_tokens::user_id.eq(user.id))
+            .filter(user_tokens::token_type.eq(UserTokenType::Refresh))
+            .count()
+            .get_result(conn)?;
+
+        let token_ordinal = (token_count + 1) as i32;
+
+        let refresh_token = create_refresh_token(
+            &settings_clone,
+            account_created_at,
+            token_ordinal,
+            now,
+            is_just_signed_up,
+        )
+        .map_err(|_| diesel::result::Error::RollbackTransaction)?;
+
         let refresh_token_row = UserTokenInternal {
             user_id: user.id,
             token_type: UserTokenType::Refresh,
-            token: refresh_token,
+            token: refresh_token.clone(),
             expires_at: refresh_exp,
             revoked: Some(false),
             is_signup_token: is_just_signed_up,
@@ -89,7 +115,7 @@ pub async fn complete_oauth_login(
             .values(&access_token_row)
             .execute(conn)?;
 
-        Ok::<_, diesel::result::Error>((access_token_for_cookie, refresh_token_for_cookie))
+        Ok::<_, diesel::result::Error>((access_token_for_cookie, refresh_token))
     })
     .await
     .map_err(|_| ())?;
