@@ -26,8 +26,11 @@ use crate::routes::ws::{publish_event_to_channel, user_channel};
 use crate::schema::chat_messages;
 use crate::schema::chat_sessions;
 use crate::schema::project_releases;
+use crate::schema::project_runtime_encryption_keys;
+use crate::schema::project_runtime_env_vars;
 use crate::schema::project_runtimes;
 use crate::schema::project_units;
+use crate::schema::project_usage_entries;
 use crate::schema::projects;
 use crate::services::chat_worker::db::{
     list_distinct_context_slugs_from_units, load_project_units_by_keys,
@@ -680,6 +683,24 @@ pub async fn handle_delete_project(
             diesel::delete(chat_sessions::table.filter(chat_sessions::project_id.eq(project_id)))
                 .execute(conn)?;
 
+            let runtime_ids: Vec<Uuid> = project_runtimes::table
+                .filter(project_runtimes::project_id.eq(project_id))
+                .select(project_runtimes::id)
+                .load(conn)?;
+            if !runtime_ids.is_empty() {
+                diesel::delete(
+                    project_runtime_encryption_keys::table
+                        .filter(project_runtime_encryption_keys::runtime_id.eq_any(&runtime_ids)),
+                )
+                .execute(conn)?;
+
+                diesel::delete(
+                    project_runtime_env_vars::table
+                        .filter(project_runtime_env_vars::runtime_id.eq_any(&runtime_ids)),
+                )
+                .execute(conn)?;
+            }
+
             diesel::delete(
                 project_runtimes::table.filter(project_runtimes::project_id.eq(project_id)),
             )
@@ -687,6 +708,11 @@ pub async fn handle_delete_project(
 
             diesel::delete(
                 project_releases::table.filter(project_releases::project_id.eq(project_id)),
+            )
+            .execute(conn)?;
+
+            diesel::delete(
+                project_usage_entries::table.filter(project_usage_entries::project_id.eq(project_id)),
             )
             .execute(conn)?;
 
@@ -727,7 +753,7 @@ pub async fn handle_delete_project(
                 }
             }
             HttpResponse::Ok().json(api_success(
-                "Project and its runtimes, units, releases, chat sessions and messages have been deleted successfully",
+                "Project and all related resources have been deleted successfully",
                 json!({ "project_id": project_id }),
             ))
         }
@@ -736,7 +762,7 @@ pub async fn handle_delete_project(
         }
         Err(e) => {
             log::error!("[handle_delete_project] DB transaction error: {:?}", e);
-            HttpResponse::InternalServerError().finish()
+            HttpResponse::InternalServerError().json(api_error("Failed to delete project", json!({})))
         }
     }
 }
