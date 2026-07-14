@@ -461,7 +461,7 @@ pub async fn handle_revoke_tokens(
         }
     }
 
-    HttpResponse::Ok().finish()
+    HttpResponse::Ok().json(api_success("Tokens revoked successfully", json!({})))
 }
 
 #[derive(Debug, Deserialize)]

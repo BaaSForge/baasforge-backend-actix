@@ -1,9 +1,11 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 use crate::configs::Settings;
+use crate::libs::api_response::api_error;
 use crate::routes::AppContext;
 use actix_web::http::header::{self};
 use actix_web::{HttpRequest, HttpResponse, web};
+use serde_json::json;
 use actix_ws::Message as ClientWsMessage;
 use futures::{SinkExt, StreamExt as FuturesStreamExt};
 use reqwest::header::HeaderValue as ReqwestHeaderValue;
@@ -113,7 +115,7 @@ fn http_url_to_ws_url(http_url: &str) -> String {
 fn private_api_key_header_value(api_key: &str) -> Result<ReqwestHeaderValue, HttpResponse> {
     ReqwestHeaderValue::from_str(api_key).map_err(|e| {
         log::error!("[private_proxy] invalid RUNTIME_PRIVATE_API_KEY: {e}");
-        HttpResponse::InternalServerError().finish()
+        HttpResponse::InternalServerError().json(api_error("Internal server error", json!({})))
     })
 }
 
@@ -139,10 +141,10 @@ async fn read_payload(mut payload: web::Payload) -> Result<Vec<u8>, HttpResponse
     while let Some(chunk) = payload.next().await {
         let chunk = chunk.map_err(|e| {
             log::error!("[private_proxy] failed to read request body: {e}");
-            HttpResponse::BadRequest().finish()
+            HttpResponse::BadRequest().json(api_error("Failed to read request body", json!({})))
         })?;
         if body.len() + chunk.len() > MAX_PROXY_BODY_BYTES {
-            return Err(HttpResponse::PayloadTooLarge().finish());
+            return Err(HttpResponse::PayloadTooLarge().json(api_error("Request payload too large", json!({ "max_bytes": MAX_PROXY_BODY_BYTES }))));
         }
         body.extend_from_slice(&chunk);
     }
@@ -161,7 +163,7 @@ async fn proxy_http(
         Ok(m) => m,
         Err(e) => {
             log::error!("[private_proxy] unsupported HTTP method: {e}");
-            return HttpResponse::BadRequest().finish();
+            return HttpResponse::BadRequest().json(api_error("Unsupported HTTP method", json!({})));
         }
     };
     let mut forward = client.request(method, &target_url);
@@ -193,7 +195,7 @@ async fn proxy_http(
             log::error!(
                 "[private_proxy] upstream request failed url={target_url}: {e:#}"
             );
-            return HttpResponse::BadGateway().finish();
+            return HttpResponse::BadGateway().json(api_error("Failed to reach upstream service", json!({})));
         }
     };
 
