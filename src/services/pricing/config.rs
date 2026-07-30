@@ -14,6 +14,13 @@ pub const TIER2_VOLUME_FACTOR: f64 = 1.0;
 pub const TIER3_VOLUME_FACTOR: f64 = 0.85;
 pub const TIER4_VOLUME_FACTOR: f64 = 0.70;
 
+// ── Tier platform cost factors (multipliers on platform resource rates) ───────
+
+pub const TIER1_PLATFORM_COSTS_FACTOR: f64 = 1.0;
+pub const TIER2_PLATFORM_COSTS_FACTOR: f64 = 1.0;
+pub const TIER3_PLATFORM_COSTS_FACTOR: f64 = 1.0;
+pub const TIER4_PLATFORM_COSTS_FACTOR: f64 = 1.0;
+
 // ── Compute & storage base rates (multiplied by tier volume factor) ───────────
 
 /// USD per GB·ms of function execution time (base, before volume factor).
@@ -25,31 +32,19 @@ pub const BASE_STORAGE_ACTIVE_PER_GB_MS: f64 = 269.0e-11;
 /// USD per GB·ms of retained (cold) storage (base, before volume factor).
 pub const BASE_STORAGE_RETAINED_PER_GB_MS: f64 = 3.8e-11;
 
-// ── Platform resource rates ───────────────────────────────────────────────────
+// ── Platform resource base rates (multiplied by tier platform costs factor) ───
 
 /// Monthly subscription fee (USD). Converted to per-hour internally.
-pub const TIER1_SUBSCRIPTION_MONTHLY_USD: f64 = 0.0;
-pub const TIER2_SUBSCRIPTION_MONTHLY_USD: f64 = 0.0;
-pub const TIER3_SUBSCRIPTION_MONTHLY_USD: f64 = 0.0;
-pub const TIER4_SUBSCRIPTION_MONTHLY_USD: f64 = 0.0;
+pub const BASE_SUBSCRIPTION_MONTHLY_USD: f64 = 0.0;
 
 /// USD per project per hour.
-pub const TIER1_PROJECT_PER_HOUR: f64 = 0.0;
-pub const TIER2_PROJECT_PER_HOUR: f64 = 0.0;
-pub const TIER3_PROJECT_PER_HOUR: f64 = 0.0;
-pub const TIER4_PROJECT_PER_HOUR: f64 = 0.0;
+pub const BASE_PROJECT_PER_HOUR: f64 = 0.0;
 
 /// USD per deployed unit (entity) per hour.
-pub const TIER1_UNIT_PER_HOUR: f64 = 0.0;
-pub const TIER2_UNIT_PER_HOUR: f64 = 0.0;
-pub const TIER3_UNIT_PER_HOUR: f64 = 0.0;
-pub const TIER4_UNIT_PER_HOUR: f64 = 0.0;
+pub const BASE_UNIT_PER_HOUR: f64 = 0.0;
 
 /// USD per stage runtime per hour.
-pub const TIER1_STAGE_RUNTIME_PER_HOUR: f64 = 0.0;
-pub const TIER2_STAGE_RUNTIME_PER_HOUR: f64 = 0.0;
-pub const TIER3_STAGE_RUNTIME_PER_HOUR: f64 = 0.0;
-pub const TIER4_STAGE_RUNTIME_PER_HOUR: f64 = 0.0;
+pub const BASE_STAGE_RUNTIME_PER_HOUR: f64 = 0.0;
 
 // TODO: bring these to the game!
 pub const TIER1_PROJECTS_COUNT_LIMIT: u32 = 2;

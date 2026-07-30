@@ -1,12 +1,8 @@
 use super::config::{
-    TIER1_PROJECT_PER_HOUR, TIER1_STAGE_RUNTIME_PER_HOUR, TIER1_SUBSCRIPTION_MONTHLY_USD,
-    TIER1_UNIT_PER_HOUR, TIER2_PROJECT_PER_HOUR, TIER2_STAGE_RUNTIME_PER_HOUR,
-    TIER2_SUBSCRIPTION_MONTHLY_USD, TIER2_UNIT_PER_HOUR, TIER3_PROJECT_PER_HOUR,
-    TIER3_STAGE_RUNTIME_PER_HOUR, TIER3_SUBSCRIPTION_MONTHLY_USD, TIER3_UNIT_PER_HOUR,
-    TIER4_PROJECT_PER_HOUR, TIER4_STAGE_RUNTIME_PER_HOUR, TIER4_SUBSCRIPTION_MONTHLY_USD,
-    TIER4_UNIT_PER_HOUR,
+    BASE_PROJECT_PER_HOUR, BASE_STAGE_RUNTIME_PER_HOUR, BASE_SUBSCRIPTION_MONTHLY_USD,
+    BASE_UNIT_PER_HOUR,
 };
-use super::tiers::effective_tier;
+use super::tiers::tier_platform_costs_factor;
 
 pub const HOURS_PER_MONTH: f64 = 30.0 * 24.0;
 
@@ -51,30 +47,60 @@ impl PlatformResourceRates {
 }
 
 pub fn platform_rates_for_package_tier(tier: i32) -> PlatformResourceRates {
-    match effective_tier(tier) {
-        1 => PlatformResourceRates {
-            subscription_per_hour: TIER1_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH,
-            project_per_hour: TIER1_PROJECT_PER_HOUR,
-            unit_per_hour: TIER1_UNIT_PER_HOUR,
-            stage_runtime_per_hour: TIER1_STAGE_RUNTIME_PER_HOUR,
-        },
-        2 => PlatformResourceRates {
-            subscription_per_hour: TIER2_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH,
-            project_per_hour: TIER2_PROJECT_PER_HOUR,
-            unit_per_hour: TIER2_UNIT_PER_HOUR,
-            stage_runtime_per_hour: TIER2_STAGE_RUNTIME_PER_HOUR,
-        },
-        3 => PlatformResourceRates {
-            subscription_per_hour: TIER3_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH,
-            project_per_hour: TIER3_PROJECT_PER_HOUR,
-            unit_per_hour: TIER3_UNIT_PER_HOUR,
-            stage_runtime_per_hour: TIER3_STAGE_RUNTIME_PER_HOUR,
-        },
-        _ => PlatformResourceRates {
-            subscription_per_hour: TIER4_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH,
-            project_per_hour: TIER4_PROJECT_PER_HOUR,
-            unit_per_hour: TIER4_UNIT_PER_HOUR,
-            stage_runtime_per_hour: TIER4_STAGE_RUNTIME_PER_HOUR,
-        },
+    let factor = tier_platform_costs_factor(tier);
+    PlatformResourceRates {
+        subscription_per_hour: BASE_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH * factor,
+        project_per_hour: BASE_PROJECT_PER_HOUR * factor,
+        unit_per_hour: BASE_UNIT_PER_HOUR * factor,
+        stage_runtime_per_hour: BASE_STAGE_RUNTIME_PER_HOUR * factor,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::config::{
+        TIER1_PLATFORM_COSTS_FACTOR, TIER3_PLATFORM_COSTS_FACTOR, TIER4_PLATFORM_COSTS_FACTOR,
+    };
+
+    #[test]
+    fn tier1_uses_base_rates() {
+        let rates = platform_rates_for_package_tier(1);
+        assert_eq!(
+            rates.subscription_per_hour,
+            BASE_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH * TIER1_PLATFORM_COSTS_FACTOR
+        );
+        assert_eq!(rates.project_per_hour, BASE_PROJECT_PER_HOUR * TIER1_PLATFORM_COSTS_FACTOR);
+        assert_eq!(rates.unit_per_hour, BASE_UNIT_PER_HOUR * TIER1_PLATFORM_COSTS_FACTOR);
+        assert_eq!(
+            rates.stage_runtime_per_hour,
+            BASE_STAGE_RUNTIME_PER_HOUR * TIER1_PLATFORM_COSTS_FACTOR
+        );
+    }
+
+    #[test]
+    fn platform_costs_factor_scales_rates() {
+        let t3 = platform_rates_for_package_tier(3);
+        let t4 = platform_rates_for_package_tier(4);
+        assert_eq!(
+            t3.subscription_per_hour,
+            BASE_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH * TIER3_PLATFORM_COSTS_FACTOR
+        );
+        assert_eq!(t3.project_per_hour, BASE_PROJECT_PER_HOUR * TIER3_PLATFORM_COSTS_FACTOR);
+        assert_eq!(t3.unit_per_hour, BASE_UNIT_PER_HOUR * TIER3_PLATFORM_COSTS_FACTOR);
+        assert_eq!(
+            t3.stage_runtime_per_hour,
+            BASE_STAGE_RUNTIME_PER_HOUR * TIER3_PLATFORM_COSTS_FACTOR
+        );
+        assert_eq!(
+            t4.subscription_per_hour,
+            BASE_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH * TIER4_PLATFORM_COSTS_FACTOR
+        );
+        assert_eq!(t4.project_per_hour, BASE_PROJECT_PER_HOUR * TIER4_PLATFORM_COSTS_FACTOR);
+        assert_eq!(t4.unit_per_hour, BASE_UNIT_PER_HOUR * TIER4_PLATFORM_COSTS_FACTOR);
+        assert_eq!(
+            t4.stage_runtime_per_hour,
+            BASE_STAGE_RUNTIME_PER_HOUR * TIER4_PLATFORM_COSTS_FACTOR
+        );
     }
 }

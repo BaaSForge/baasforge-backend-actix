@@ -588,11 +588,9 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use crate::services::pricing::config::{
-        LLM_PLATFORM_MARGIN, TIER1_PROJECT_PER_HOUR, TIER1_STAGE_RUNTIME_PER_HOUR,
-        TIER1_SUBSCRIPTION_MONTHLY_USD, TIER1_UNIT_PER_HOUR, TIER2_PROJECT_PER_HOUR,
-        TIER2_STAGE_RUNTIME_PER_HOUR, TIER2_SUBSCRIPTION_MONTHLY_USD, TIER2_UNIT_PER_HOUR,
-        TIER3_PROJECT_PER_HOUR, TIER3_STAGE_RUNTIME_PER_HOUR, TIER3_SUBSCRIPTION_MONTHLY_USD,
-        TIER3_UNIT_PER_HOUR,
+        BASE_PROJECT_PER_HOUR, BASE_STAGE_RUNTIME_PER_HOUR, BASE_SUBSCRIPTION_MONTHLY_USD,
+        BASE_UNIT_PER_HOUR, LLM_PLATFORM_MARGIN, TIER1_PLATFORM_COSTS_FACTOR,
+        TIER2_PLATFORM_COSTS_FACTOR, TIER3_PLATFORM_COSTS_FACTOR,
     };
     use crate::services::pricing::llm_prices::{
         OPENAI_GPT_4O_MINI_INPUT_PER_M, OPENAI_GPT_4O_MINI_OUTPUT_PER_M,
@@ -1158,11 +1156,14 @@ mod tests {
         let rates = platform_rates_for_package_tier(1);
         assert_eq!(
             rates.subscription_per_hour,
-            TIER1_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH
+            BASE_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH * TIER1_PLATFORM_COSTS_FACTOR
         );
-        assert_eq!(rates.project_per_hour, TIER1_PROJECT_PER_HOUR);
-        assert_eq!(rates.unit_per_hour, TIER1_UNIT_PER_HOUR);
-        assert_eq!(rates.stage_runtime_per_hour, TIER1_STAGE_RUNTIME_PER_HOUR);
+        assert_eq!(rates.project_per_hour, BASE_PROJECT_PER_HOUR * TIER1_PLATFORM_COSTS_FACTOR);
+        assert_eq!(rates.unit_per_hour, BASE_UNIT_PER_HOUR * TIER1_PLATFORM_COSTS_FACTOR);
+        assert_eq!(
+            rates.stage_runtime_per_hour,
+            BASE_STAGE_RUNTIME_PER_HOUR * TIER1_PLATFORM_COSTS_FACTOR
+        );
     }
 
     #[test]
@@ -1170,11 +1171,14 @@ mod tests {
         let rates = platform_rates_for_package_tier(2);
         assert_eq!(
             rates.subscription_per_hour,
-            TIER2_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH
+            BASE_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH * TIER2_PLATFORM_COSTS_FACTOR
         );
-        assert_eq!(rates.project_per_hour, TIER2_PROJECT_PER_HOUR);
-        assert_eq!(rates.unit_per_hour, TIER2_UNIT_PER_HOUR);
-        assert_eq!(rates.stage_runtime_per_hour, TIER2_STAGE_RUNTIME_PER_HOUR);
+        assert_eq!(rates.project_per_hour, BASE_PROJECT_PER_HOUR * TIER2_PLATFORM_COSTS_FACTOR);
+        assert_eq!(rates.unit_per_hour, BASE_UNIT_PER_HOUR * TIER2_PLATFORM_COSTS_FACTOR);
+        assert_eq!(
+            rates.stage_runtime_per_hour,
+            BASE_STAGE_RUNTIME_PER_HOUR * TIER2_PLATFORM_COSTS_FACTOR
+        );
     }
 
     #[test]
@@ -1182,11 +1186,14 @@ mod tests {
         let rates = platform_rates_for_package_tier(3);
         assert_eq!(
             rates.subscription_per_hour,
-            TIER3_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH
+            BASE_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH * TIER3_PLATFORM_COSTS_FACTOR
         );
-        assert_eq!(rates.project_per_hour, TIER3_PROJECT_PER_HOUR);
-        assert_eq!(rates.unit_per_hour, TIER3_UNIT_PER_HOUR);
-        assert_eq!(rates.stage_runtime_per_hour, TIER3_STAGE_RUNTIME_PER_HOUR);
+        assert_eq!(rates.project_per_hour, BASE_PROJECT_PER_HOUR * TIER3_PLATFORM_COSTS_FACTOR);
+        assert_eq!(rates.unit_per_hour, BASE_UNIT_PER_HOUR * TIER3_PLATFORM_COSTS_FACTOR);
+        assert_eq!(
+            rates.stage_runtime_per_hour,
+            BASE_STAGE_RUNTIME_PER_HOUR * TIER3_PLATFORM_COSTS_FACTOR
+        );
 
         assert_eq!(
             platform_rates_for_package_tier(5),
