@@ -10,7 +10,7 @@ pub mod metrics;
 pub mod platform_resources;
 pub mod tiers;
 
-pub use compute_storage::{billing_rates_for_package_tier, BillingRates};
+pub use compute_storage::{billing_rates_for_package_tier, byte_hours_to_gb_ms, BillingRates};
 pub use llm::{
     compute_llm_period_cost, customer_rate_per_token, provider_list_rates, LlmPeriodCost,
     LlmUsageSlice, ProviderModelRates, LLM_PLATFORM_MARGIN_FRACTION,

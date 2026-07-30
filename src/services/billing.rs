@@ -347,8 +347,8 @@ impl PeriodBilling {
         platform: PlatformPeriodBilling,
     ) -> Self {
         let compute_cost = sum_gb_ms as f64 * rates.compute_gb_ms;
-        let storage_hot_cost = byte_hours_active * rates.storage_active;
-        let storage_cold_cost = byte_hours_retained * rates.storage_retained;
+        let storage_hot_cost = rates.storage_active_cost(byte_hours_active);
+        let storage_cold_cost = rates.storage_retained_cost(byte_hours_retained);
         let platform_total = platform.total_cost();
         Self {
             sum_gb_ms,
@@ -627,6 +627,14 @@ mod tests {
         }
     }
 
+    fn hot_cost(byte_hours: f64) -> f64 {
+        BillingRates::test_rates().storage_active_cost(byte_hours)
+    }
+
+    fn cold_cost(byte_hours: f64) -> f64 {
+        BillingRates::test_rates().storage_retained_cost(byte_hours)
+    }
+
     fn compute(recorded_at: DateTime<Utc>, quantity: i64) -> ComputeMeterEvent {
         ComputeMeterEvent {
             recorded_at,
@@ -777,9 +785,9 @@ mod tests {
             0.0,
             byte_hours,
             0.0,
-            byte_hours * 0.01,
+            hot_cost(byte_hours),
             0.0,
-            byte_hours * 0.01,
+            hot_cost(byte_hours),
         );
     }
 
@@ -797,9 +805,9 @@ mod tests {
             0.0,
             byte_hours,
             0.0,
-            byte_hours * 0.01,
+            hot_cost(byte_hours),
             0.0,
-            byte_hours * 0.01,
+            hot_cost(byte_hours),
         );
     }
 
@@ -820,9 +828,9 @@ mod tests {
             0.0,
             byte_hours,
             0.0,
-            byte_hours * 0.01,
+            hot_cost(byte_hours),
             0.0,
-            byte_hours * 0.01,
+            hot_cost(byte_hours),
         );
     }
 
@@ -834,7 +842,17 @@ mod tests {
             storage(3, at(1, 1, 12), STORAGE_TIER_RETAINED, "incr", 5_000),
         ];
         let billing = bill(&[], &events, &[]);
-        assert_period(&billing, 0, 0.0, 60_000.0, 60_000.0, 600.0, 60.0, 660.0);
+        let bh = 60_000.0;
+        assert_period(
+            &billing,
+            0,
+            0.0,
+            bh,
+            bh,
+            hot_cost(bh),
+            cold_cost(bh),
+            hot_cost(bh) + cold_cost(bh),
+        );
         let end = period_end();
         assert_eq!(
             tier_balance(&events, STORAGE_TIER_ACTIVE, end),
@@ -868,9 +886,9 @@ mod tests {
             0.0,
             byte_hours,
             0.0,
-            byte_hours * 0.01,
+            hot_cost(byte_hours),
             0.0,
-            byte_hours * 0.01,
+            hot_cost(byte_hours),
         );
     }
 
@@ -907,7 +925,17 @@ mod tests {
             ],
             &[],
         );
-        assert_period(&billing, 1500, 1.5, 60_000.0, 60_000.0, 600.0, 60.0, 661.5);
+        let bh = 60_000.0;
+        assert_period(
+            &billing,
+            1500,
+            1.5,
+            bh,
+            bh,
+            hot_cost(bh),
+            cold_cost(bh),
+            1.5 + hot_cost(bh) + cold_cost(bh),
+        );
     }
 
     #[test]
@@ -946,7 +974,17 @@ mod tests {
 
         let decr_first = bill_storage(&decr_active_first);
         let incr_first = bill_storage(&incr_retained_first);
-        assert_period(&decr_first, 0, 0.0, 60_000.0, 60_000.0, 600.0, 60.0, 660.0);
+        let bh = 60_000.0;
+        assert_period(
+            &decr_first,
+            0,
+            0.0,
+            bh,
+            bh,
+            hot_cost(bh),
+            cold_cost(bh),
+            hot_cost(bh) + cold_cost(bh),
+        );
         assert_eq!(decr_first, incr_first, "same-timestamp row order must not change totals");
     }
 
@@ -1310,7 +1348,7 @@ mod tests {
         let platform_rates = test_platform_rates();
         let byte_hours = 1_000_000.0 * 24.0;
         let compute_cost = 1000.0 * compute_rates.compute_gb_ms;
-        let storage_cost = byte_hours * compute_rates.storage_active;
+        let storage_cost = compute_rates.storage_active_cost(byte_hours);
         let llm_input_cost = OPENAI_GPT_4O_MINI_INPUT_PER_M * (1.0 + LLM_PLATFORM_MARGIN);
         let subscription_cost = platform_rates.subscription_per_hour;
         let project_cost = platform_rates.project_per_hour;

@@ -3,6 +3,9 @@ use super::config::{
 };
 use super::tiers::tier_volume_factor;
 
+const BYTES_PER_GB: f64 = 1024.0 * 1024.0 * 1024.0;
+const MS_PER_HOUR: f64 = 3_600_000.0;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BillingRates {
     pub compute_gb_ms: f64,
@@ -18,6 +21,18 @@ impl BillingRates {
             storage_retained: 0.001,
         }
     }
+
+    pub fn storage_active_cost(self, byte_hours: f64) -> f64 {
+        byte_hours_to_gb_ms(byte_hours) * self.storage_active
+    }
+
+    pub fn storage_retained_cost(self, byte_hours: f64) -> f64 {
+        byte_hours_to_gb_ms(byte_hours) * self.storage_retained
+    }
+}
+
+pub fn byte_hours_to_gb_ms(byte_hours: f64) -> f64 {
+    byte_hours * MS_PER_HOUR / BYTES_PER_GB
 }
 
 pub fn billing_rates_for_package_tier(tier: i32) -> BillingRates {
@@ -52,5 +67,13 @@ mod tests {
         assert_eq!(t4.compute_gb_ms, BASE_COMPUTE_PER_GB_MS * TIER4_VOLUME_FACTOR);
         assert_eq!(t4.storage_active, BASE_STORAGE_ACTIVE_PER_GB_MS * TIER4_VOLUME_FACTOR);
         assert_eq!(t4.storage_retained, BASE_STORAGE_RETAINED_PER_GB_MS * TIER4_VOLUME_FACTOR);
+    }
+
+    #[test]
+    fn one_gib_one_hour_is_3_6m_gb_ms() {
+        let byte_hours = BYTES_PER_GB * 1.0;
+        assert!((byte_hours_to_gb_ms(byte_hours) - MS_PER_HOUR).abs() < 1e-6);
+        let rates = billing_rates_for_package_tier(1);
+        assert!((rates.storage_active_cost(byte_hours) - MS_PER_HOUR * BASE_STORAGE_ACTIVE_PER_GB_MS).abs() < 1e-15);
     }
 }
