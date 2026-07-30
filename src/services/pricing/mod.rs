@@ -1,10 +1,11 @@
 //! Central configuration for usage billing rates (compute, storage, LLM, platform resources).
 //!
-//! Edit `config.rs` to change any price — all other files in this folder reference it.
+//! Edit `config.rs` / `llm_prices.rs` to change prices — other files in this folder reference them.
 
 pub mod config;
 pub mod compute_storage;
 pub mod llm;
+pub mod llm_prices;
 pub mod metrics;
 pub mod platform_resources;
 pub mod tiers;
