@@ -36,8 +36,9 @@ use crate::services::chat_worker::db::{
     list_distinct_context_slugs_from_units, load_project_units_by_keys,
     load_units_from_latest_production_metadata, modules_by_context_slugs_from_units,
 };
-use crate::services::payment::{
-    PaidFeature, most_complete_needed_package, user_missing_paid_features,
+use crate::services::payment::PACKAGE_PAID_FEATURES;
+use crate::services::pricing::{
+    effective_tier, tier_projects_count_limit, tier_stage_count_limit,
 };
 use crate::services::observability::{
     fetch_jaeger_trace_by_id, JaegerQueryError, RELEASE_ID_TAG_KEY, RUNTIME_ID_TAG_KEY,
@@ -208,6 +209,21 @@ async fn notify_runtime_release(
     }
 }
 
+fn package_slug_for_tier(tier: i32) -> Option<&'static str> {
+    let idx = (effective_tier(tier) as usize).saturating_sub(1);
+    PACKAGE_PAID_FEATURES.get(idx).map(|(slug, _)| *slug)
+}
+
+fn least_package_for_projects_count(needed: u32) -> Option<&'static str> {
+    (1..=4i32).find_map(|tier| {
+        if tier_projects_count_limit(tier) >= needed {
+            package_slug_for_tier(tier)
+        } else {
+            None
+        }
+    })
+}
+
 pub async fn handle_create_project(
     context: web::Data<AppContext>,
     req: HttpRequest,
@@ -225,6 +241,16 @@ pub async fn handle_create_project(
     let user_id = access_payload.user_id;
     let body = body.into_inner();
 
+    let package_tier = payments_payload
+        .active_payments
+        .iter()
+        .map(|p| p.package_tier)
+        .max()
+        .map(effective_tier)
+        .unwrap_or(1);
+    let projects_limit = tier_projects_count_limit(package_tier);
+    let stage_limit = tier_stage_count_limit(package_tier);
+
     let projects: Vec<ProjectResponse> = match database::block_on_db(&context.pool, move |conn| {
         projects::table
             .filter(projects::owner_user_id.eq(user_id))
@@ -241,27 +267,25 @@ pub async fn handle_create_project(
         }
     };
 
-    if projects.len() >= 3 {
-        let missing_features = user_missing_paid_features(
-            &payments_payload.active_payments,
-            &[PaidFeature::LotsOfProjects],
-        );
-
-        let most_complete_needed_package =
-            most_complete_needed_package(&missing_features).unwrap_or("unknown");
-
-        if !missing_features.is_empty() {
-            return HttpResponse::Forbidden().json(api_success(
-                &format!(
-                    "You don't have enough purchased package to have more than 3 projects, you need at least package {} to do this action",
-                    most_complete_needed_package
+    if projects.len() as u32 >= projects_limit {
+        let needed = projects.len() as u32 + 1;
+        let most_complete_needed_package = least_package_for_projects_count(needed);
+        return HttpResponse::Forbidden().json(api_success(
+            &match most_complete_needed_package {
+                Some(pkg) => format!(
+                    "You don't have enough purchased package to have more than {} projects, you need at least package {} to do this action",
+                    projects_limit, pkg
                 ),
-                json!({
-                    "missing_features": missing_features,
-                    "most_complete_needed_package": most_complete_needed_package,
-                }),
-            ));
-        }
+                None => format!(
+                    "You have reached the maximum of {} projects for your package",
+                    projects_limit
+                ),
+            },
+            json!({
+                "projects_limit": projects_limit,
+                "most_complete_needed_package": most_complete_needed_package,
+            }),
+        ));
     }
 
     if projects
@@ -285,27 +309,23 @@ pub async fn handle_create_project(
                 .returning(ProjectResponse::as_select())
                 .get_result(conn)?;
 
+            let mut runtime_inserts: Vec<ProjectRuntimeInsert> = (1..=stage_limit)
+                .map(|i| ProjectRuntimeInsert {
+                    project_id: project.id,
+                    environment: PlatformEnvironmentType::Stage,
+                    name: Some(format!("Stage {}", i)),
+                    slug: Some(format!("stage-{}", i)),
+                })
+                .collect();
+            runtime_inserts.push(ProjectRuntimeInsert {
+                project_id: project.id,
+                environment: PlatformEnvironmentType::Prod,
+                name: Some("Production".to_string()),
+                slug: Some("prod".to_string()),
+            });
+
             let runtimes: Vec<ProjectRuntimeResponse> = diesel::insert_into(project_runtimes::table)
-                .values(&[
-                    ProjectRuntimeInsert {
-                        project_id: project.id,
-                        environment: PlatformEnvironmentType::Stage,
-                        name: Some("Stage 1".to_string()),
-                        slug: Some("stage-1".to_string()),
-                    },
-                    ProjectRuntimeInsert {
-                        project_id: project.id,
-                        environment: PlatformEnvironmentType::Stage,
-                        name: Some("Stage 2".to_string()),
-                        slug: Some("stage-2".to_string()),
-                    },
-                    ProjectRuntimeInsert {
-                        project_id: project.id,
-                        environment: PlatformEnvironmentType::Prod,
-                        name: Some("Production".to_string()),
-                        slug: Some("prod".to_string()),
-                    },
-                ])
+                .values(&runtime_inserts)
                 .returning(ProjectRuntimeResponse::as_returning())
                 .get_results(conn)?;
 

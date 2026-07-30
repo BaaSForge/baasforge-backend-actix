@@ -1,5 +1,5 @@
 /// Markup applied on top of every provider list price.
-pub const LLM_PLATFORM_MARGIN: f64 = 2.0;
+pub const LLM_PLATFORM_MARGIN: f64 = 0.25;
 
 // ── Billing period discount ───────────────────────────────────────────────────
 
@@ -46,13 +46,11 @@ pub const BASE_UNIT_PER_HOUR: f64 = 0.0;
 /// USD per stage runtime per hour.
 pub const BASE_STAGE_RUNTIME_PER_HOUR: f64 = 0.0;
 
-// TODO: bring these to the game!
 pub const TIER1_PROJECTS_COUNT_LIMIT: u32 = 2;
 pub const TIER2_PROJECTS_COUNT_LIMIT: u32 = 3;
 pub const TIER3_PROJECTS_COUNT_LIMIT: u32 = 10;
 pub const TIER4_PROJECTS_COUNT_LIMIT: u32 = 40;
 
-// TODO: bring these to the game!
 pub const TIER1_STAGE_COUNT_LIMIT: u32 = 1;
 pub const TIER2_STAGE_COUNT_LIMIT: u32 = 1;
 pub const TIER3_STAGE_COUNT_LIMIT: u32 = 2;
