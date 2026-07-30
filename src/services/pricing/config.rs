@@ -26,11 +26,11 @@ pub const TIER4_PLATFORM_COSTS_FACTOR: f64 = 1.0;
 /// USD per GB·ms of function execution time (base, before volume factor).
 pub const BASE_COMPUTE_PER_GB_MS: f64 = 8.0e-9;
 
-/// USD per GB·ms of actively-used (hot) storage (base, before volume factor).
-pub const BASE_STORAGE_ACTIVE_PER_GB_MS: f64 = 269.0e-11;
+/// USD per GB·ms of actively-used (hot) RAM (base, before volume factor).
+pub const BASE_STORAGE_ACTIVE_PER_GB_MS: f64 = 150.0e-11;
 
-/// USD per GB·ms of retained (cold) storage (base, before volume factor).
-pub const BASE_STORAGE_RETAINED_PER_GB_MS: f64 = 3.8e-11;
+/// USD per GB·ms of retained (cold) disk (base, before volume factor).
+pub const BASE_STORAGE_RETAINED_PER_GB_MS: f64 = 2.5e-11;
 
 // ── Platform resource base rates (multiplied by tier platform costs factor) ───
 
