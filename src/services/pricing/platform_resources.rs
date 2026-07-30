@@ -8,7 +8,7 @@ use super::config::{
 };
 use super::tiers::effective_tier;
 
-const HOURS_PER_MONTH: f64 = 30.0 * 24.0;
+pub const HOURS_PER_MONTH: f64 = 30.0 * 24.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlatformResourceRates {

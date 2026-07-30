@@ -587,6 +587,17 @@ where
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use crate::services::pricing::config::{
+        LLM_PLATFORM_MARGIN, TIER1_PROJECT_PER_HOUR, TIER1_STAGE_RUNTIME_PER_HOUR,
+        TIER1_SUBSCRIPTION_MONTHLY_USD, TIER1_UNIT_PER_HOUR, TIER2_PROJECT_PER_HOUR,
+        TIER2_STAGE_RUNTIME_PER_HOUR, TIER2_SUBSCRIPTION_MONTHLY_USD, TIER2_UNIT_PER_HOUR,
+        TIER3_PROJECT_PER_HOUR, TIER3_STAGE_RUNTIME_PER_HOUR, TIER3_SUBSCRIPTION_MONTHLY_USD,
+        TIER3_UNIT_PER_HOUR,
+    };
+    use crate::services::pricing::llm_prices::{
+        OPENAI_GPT_4O_MINI_INPUT_PER_M, OPENAI_GPT_4O_MINI_OUTPUT_PER_M,
+    };
+    use crate::services::pricing::platform_resources::HOURS_PER_MONTH;
 
     fn period_start() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap()
@@ -943,6 +954,8 @@ mod tests {
 
     #[test]
     fn t11_llm_tokens_only() {
+        let input_tokens = 1_000_000_i64;
+        let output_tokens = 500_000_i64;
         let billing = bill(
             &[],
             &[],
@@ -952,23 +965,28 @@ mod tests {
                     "openai",
                     "gpt-4o-mini",
                     LLM_INPUT_TOKENS_METRIC,
-                    1_000_000,
+                    input_tokens,
                 ),
                 llm(
                     at(1, 1, 11),
                     "openai",
                     "gpt-4o-mini",
                     LLM_OUTPUT_TOKENS_METRIC,
-                    500_000,
+                    output_tokens,
                 ),
                 llm(at(1, 1, 12), "openai", "gpt-4o-mini", "other.metric", 9_999),
             ],
         );
-        assert_eq!(billing.sum_input_tokens, 1_000_000);
-        assert_eq!(billing.sum_output_tokens, 500_000);
-        assert!((billing.llm_input_cost - 0.15 * 1.08).abs() < 1e-9);
-        assert!((billing.llm_output_cost - 0.30 * 1.08).abs() < 1e-9);
-        assert!((billing.total - 0.486).abs() < 1e-6);
+        let margin = 1.0 + LLM_PLATFORM_MARGIN;
+        let expected_input =
+            input_tokens as f64 * OPENAI_GPT_4O_MINI_INPUT_PER_M / 1_000_000.0 * margin;
+        let expected_output =
+            output_tokens as f64 * OPENAI_GPT_4O_MINI_OUTPUT_PER_M / 1_000_000.0 * margin;
+        assert_eq!(billing.sum_input_tokens, input_tokens);
+        assert_eq!(billing.sum_output_tokens, output_tokens);
+        assert_eq!(billing.llm_input_cost, expected_input);
+        assert_eq!(billing.llm_output_cost, expected_output);
+        assert_eq!(billing.total, expected_input + expected_output);
     }
 
     #[test]
@@ -1138,31 +1156,42 @@ mod tests {
     #[test]
     fn platform_rates_for_package_tier_tier1() {
         let rates = platform_rates_for_package_tier(1);
-        assert_eq!(rates.subscription_per_hour, 0.0);
-        assert_eq!(rates.project_per_hour, 0.002);
-        assert_eq!(rates.unit_per_hour, 0.0002);
-        assert_eq!(rates.stage_runtime_per_hour, 0.01);
+        assert_eq!(
+            rates.subscription_per_hour,
+            TIER1_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH
+        );
+        assert_eq!(rates.project_per_hour, TIER1_PROJECT_PER_HOUR);
+        assert_eq!(rates.unit_per_hour, TIER1_UNIT_PER_HOUR);
+        assert_eq!(rates.stage_runtime_per_hour, TIER1_STAGE_RUNTIME_PER_HOUR);
     }
 
     #[test]
     fn platform_rates_for_package_tier_tier2() {
         let rates = platform_rates_for_package_tier(2);
-        assert!((rates.subscription_per_hour - 10.0 / (30.0 * 24.0)).abs() < 1e-12);
-        assert_eq!(rates.project_per_hour, 0.0016);
-        assert_eq!(rates.unit_per_hour, 0.00016);
-        assert_eq!(rates.stage_runtime_per_hour, 0.008);
+        assert_eq!(
+            rates.subscription_per_hour,
+            TIER2_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH
+        );
+        assert_eq!(rates.project_per_hour, TIER2_PROJECT_PER_HOUR);
+        assert_eq!(rates.unit_per_hour, TIER2_UNIT_PER_HOUR);
+        assert_eq!(rates.stage_runtime_per_hour, TIER2_STAGE_RUNTIME_PER_HOUR);
     }
 
     #[test]
     fn platform_rates_for_package_tier_tier3_plus() {
         let rates = platform_rates_for_package_tier(3);
-        assert!((rates.subscription_per_hour - 30.0 / (30.0 * 24.0)).abs() < 1e-12);
-        assert_eq!(rates.project_per_hour, 0.0012);
-        assert_eq!(rates.unit_per_hour, 0.00012);
-        assert_eq!(rates.stage_runtime_per_hour, 0.006);
+        assert_eq!(
+            rates.subscription_per_hour,
+            TIER3_SUBSCRIPTION_MONTHLY_USD / HOURS_PER_MONTH
+        );
+        assert_eq!(rates.project_per_hour, TIER3_PROJECT_PER_HOUR);
+        assert_eq!(rates.unit_per_hour, TIER3_UNIT_PER_HOUR);
+        assert_eq!(rates.stage_runtime_per_hour, TIER3_STAGE_RUNTIME_PER_HOUR);
 
-        let tier5 = platform_rates_for_package_tier(5);
-        assert_eq!(tier5, rates);
+        assert_eq!(
+            platform_rates_for_package_tier(5),
+            platform_rates_for_package_tier(4)
+        );
     }
 
     #[test]
@@ -1180,11 +1209,16 @@ mod tests {
     #[test]
     fn platform_tier2_subscription_cost_from_entity_seconds() {
         let rates = platform_rates_for_package_tier(2);
-        let billing =
-            PlatformPeriodBilling::from_entity_seconds(rates, &[(SUBSCRIPTION_METRIC.to_string(), 3_600)]);
-        let expected = 10.0 / (30.0 * 24.0);
-        assert!((billing.subscription_cost - expected).abs() < 1e-12);
-        assert_eq!(billing.subscription_entity_seconds, 3_600);
+        let entity_seconds = 3_600;
+        let billing = PlatformPeriodBilling::from_entity_seconds(
+            rates,
+            &[(SUBSCRIPTION_METRIC.to_string(), entity_seconds)],
+        );
+        assert_eq!(
+            billing.subscription_cost,
+            rates.cost_for_entity_seconds(SUBSCRIPTION_METRIC, entity_seconds)
+        );
+        assert_eq!(billing.subscription_entity_seconds, entity_seconds);
     }
 
     #[test]
@@ -1265,29 +1299,37 @@ mod tests {
             platform,
         );
 
+        let compute_rates = BillingRates::test_rates();
+        let platform_rates = test_platform_rates();
         let byte_hours = 1_000_000.0 * 24.0;
-        let storage_cost = byte_hours * 0.01;
-        let platform_total = 1.0 + 0.01 + 0.002 + 0.1;
-        let expected_total = 1.0 + storage_cost + 0.15 * 1.08 + platform_total;
+        let compute_cost = 1000.0 * compute_rates.compute_gb_ms;
+        let storage_cost = byte_hours * compute_rates.storage_active;
+        let llm_input_cost = OPENAI_GPT_4O_MINI_INPUT_PER_M * (1.0 + LLM_PLATFORM_MARGIN);
+        let subscription_cost = platform_rates.subscription_per_hour;
+        let project_cost = platform_rates.project_per_hour;
+        let unit_cost = 2.0 * platform_rates.unit_per_hour;
+        let stage_runtime_cost = platform_rates.stage_runtime_per_hour;
+        let platform_total = subscription_cost + project_cost + unit_cost + stage_runtime_cost;
+        let expected_total = compute_cost + storage_cost + llm_input_cost + platform_total;
 
         assert_eq!(billing.sum_gb_ms, 1000);
-        assert!((billing.compute_cost - 1.0).abs() < 1e-9);
-        assert!((billing.byte_hours_active - byte_hours).abs() < 1e-6);
-        assert!((billing.storage_hot_cost - storage_cost).abs() < 1e-6);
+        assert_eq!(billing.compute_cost, compute_cost);
+        assert_eq!(billing.byte_hours_active, byte_hours);
+        assert_eq!(billing.storage_hot_cost, storage_cost);
         assert_eq!(billing.sum_input_tokens, 1_000_000);
-        assert!((billing.llm_input_cost - 0.15 * 1.08).abs() < 1e-9);
+        assert_eq!(billing.llm_input_cost, llm_input_cost);
         assert_platform(
             &billing.platform,
             3_600,
             3_600,
             7_200,
             3_600,
-            1.0,
-            0.01,
-            0.002,
-            0.1,
+            subscription_cost,
+            project_cost,
+            unit_cost,
+            stage_runtime_cost,
         );
-        assert!((billing.total - expected_total).abs() < 1e-6, "total");
+        assert_eq!(billing.total, expected_total);
     }
 
     #[test]

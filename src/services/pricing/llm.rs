@@ -27,7 +27,7 @@ use super::llm_prices::{
     OPENAI_O3_OUTPUT_PER_M, OPENAI_O4_MINI_INPUT_PER_M, OPENAI_O4_MINI_OUTPUT_PER_M,
 };
 use super::metrics::{LLM_INPUT_TOKENS_METRIC, LLM_OUTPUT_TOKENS_METRIC};
-use super::tiers::tier_volume_discount;
+use super::tiers::tier_volume_factor;
 
 pub use super::config::LLM_PLATFORM_MARGIN as LLM_PLATFORM_MARGIN_FRACTION;
 
@@ -85,7 +85,7 @@ pub fn customer_rate_per_token(
         LLM_OUTPUT_TOKENS_METRIC => list.output_per_million,
         _ => 0.0,
     };
-    per_million / 1_000_000.0 * (1.0 + LLM_PLATFORM_MARGIN) * tier_volume_discount(package_tier)
+    per_million / 1_000_000.0 * (1.0 + LLM_PLATFORM_MARGIN) * tier_volume_factor(package_tier)
 }
 
 pub fn compute_llm_period_cost(slices: &[LlmUsageSlice], package_tier: i32) -> LlmPeriodCost {
@@ -174,14 +174,16 @@ mod tests {
     fn gpt_4o_mini_tier1_with_margin() {
         let rate = customer_rate_per_token("openai", "gpt-4o-mini", LLM_INPUT_TOKENS_METRIC, 1);
         let expected = OPENAI_GPT_4O_MINI_INPUT_PER_M / 1_000_000.0 * (1.0 + LLM_PLATFORM_MARGIN);
-        assert!((rate - expected).abs() < 1e-15);
+        assert_eq!(rate, expected);
     }
 
     #[test]
-    fn tier_discount_reduces_rate() {
-        let t1 = customer_rate_per_token("anthropic", "claude-sonnet-4-6", LLM_OUTPUT_TOKENS_METRIC, 1);
+    fn volume_factor_scales_rate() {
         let t3 = customer_rate_per_token("anthropic", "claude-sonnet-4-6", LLM_OUTPUT_TOKENS_METRIC, 3);
-        assert!((t3 / t1 - super::super::config::TIER3_VOLUME_DISCOUNT).abs() < 1e-9);
+        let expected = ANTHROPIC_CLAUDE_SONNET_4_6_OUTPUT_PER_M / 1_000_000.0
+            * (1.0 + LLM_PLATFORM_MARGIN)
+            * super::super::config::TIER3_VOLUME_FACTOR;
+        assert_eq!(t3, expected);
     }
 
     #[test]
@@ -213,8 +215,8 @@ mod tests {
         assert_eq!(cost.sum_input_tokens, 1_000_000);
         assert_eq!(cost.sum_output_tokens, 500_000);
         let margin = 1.0 + LLM_PLATFORM_MARGIN;
-        assert!((cost.input_cost - OPENAI_GPT_4O_MINI_INPUT_PER_M * margin).abs() < 1e-9);
-        assert!((cost.output_cost - OPENAI_GPT_4O_MINI_OUTPUT_PER_M * 0.5 * margin).abs() < 1e-9);
+        assert_eq!(cost.input_cost, OPENAI_GPT_4O_MINI_INPUT_PER_M * margin);
+        assert_eq!(cost.output_cost, OPENAI_GPT_4O_MINI_OUTPUT_PER_M * 0.5 * margin);
     }
 
     #[test]

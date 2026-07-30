@@ -21,4 +21,4 @@ pub use metrics::{
     STORAGE_TIER_ACTIVE, STORAGE_TIER_RETAINED, SUBSCRIPTION_METRIC, TOKEN_PRICE_UNIT, UNIT_METRIC,
 };
 pub use platform_resources::{platform_rates_for_package_tier, PlatformResourceRates};
-pub use tiers::{effective_tier, tier_volume_discount};
+pub use tiers::{effective_tier, tier_volume_factor};

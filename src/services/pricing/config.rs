@@ -1,5 +1,3 @@
-// ── LLM ──────────────────────────────────────────────────────────────────────
-
 /// Markup applied on top of every provider list price.
 pub const LLM_PLATFORM_MARGIN: f64 = 2.0;
 
@@ -9,33 +7,23 @@ pub const LLM_PLATFORM_MARGIN: f64 = 2.0;
 /// Matches the standard used by GitHub, Vercel, Railway, and Linear.
 pub const ANNUAL_BILLING_DISCOUNT: f64 = 0.20;
 
-// ── Tier volume discounts (applied to compute, storage, and LLM) ─────────────
+// ── Tier volume factors (multipliers on compute, storage, and LLM rates) ──────
 
-// TODO: double check the prices with the factors and make sure they are multiplied by VOLUME_DISCOUNT
-pub const TIER1_VOLUME_DISCOUNT: f64 = 1.0;
-pub const TIER2_VOLUME_DISCOUNT: f64 = 1.0;
-pub const TIER3_VOLUME_DISCOUNT: f64 = 0.85;
-pub const TIER4_VOLUME_DISCOUNT: f64 = 0.70;
+pub const TIER1_VOLUME_FACTOR: f64 = 1.0;
+pub const TIER2_VOLUME_FACTOR: f64 = 1.0;
+pub const TIER3_VOLUME_FACTOR: f64 = 0.85;
+pub const TIER4_VOLUME_FACTOR: f64 = 0.70;
 
-// ── Compute & storage billing rates ──────────────────────────────────────────
+// ── Compute & storage base rates (multiplied by tier volume factor) ───────────
 
-/// USD per GB·ms of function execution time.
-pub const TIER1_COMPUTE_PER_GB_MS: f64 = 8.0e-9;
-pub const TIER2_COMPUTE_PER_GB_MS: f64 = 8.0e-9;
-pub const TIER3_COMPUTE_PER_GB_MS: f64 = 8.0e-9;
-pub const TIER4_COMPUTE_PER_GB_MS: f64 = 8.0e-9;
+/// USD per GB·ms of function execution time (base, before volume factor).
+pub const BASE_COMPUTE_PER_GB_MS: f64 = 8.0e-9;
 
-/// USD per GB·ms of actively-used (hot) storage.
-pub const TIER1_STORAGE_ACTIVE_PER_GB_MS: f64 = 269.0e-11;
-pub const TIER2_STORAGE_ACTIVE_PER_GB_MS: f64 = 269.0e-11;
-pub const TIER3_STORAGE_ACTIVE_PER_GB_MS: f64 = 269.0e-11;
-pub const TIER4_STORAGE_ACTIVE_PER_GB_MS: f64 = 269.0e-11;
+/// USD per GB·ms of actively-used (hot) storage (base, before volume factor).
+pub const BASE_STORAGE_ACTIVE_PER_GB_MS: f64 = 269.0e-11;
 
-/// USD per GB·ms of retained (cold) storage.
-pub const TIER1_STORAGE_RETAINED_PER_GB_MS: f64 = 3.8e-11;
-pub const TIER2_STORAGE_RETAINED_PER_GB_MS: f64 = 3.8e-11;
-pub const TIER3_STORAGE_RETAINED_PER_GB_MS: f64 = 3.8e-11;
-pub const TIER4_STORAGE_RETAINED_PER_GB_MS: f64 = 3.8e-11;
+/// USD per GB·ms of retained (cold) storage (base, before volume factor).
+pub const BASE_STORAGE_RETAINED_PER_GB_MS: f64 = 3.8e-11;
 
 // ── Platform resource rates ───────────────────────────────────────────────────
 
