@@ -105,7 +105,7 @@ impl LlmTokenMeter {
     }
 }
 
-// TODO: daily balance snapshots / project_usage_daily_totals for faster billing
+// TODO: usage/cost daily snapshots for faster billing — part of balance snapshotting in services/balance.rs
 
 pub fn validate_billing_period(
     start: DateTime<Utc>,

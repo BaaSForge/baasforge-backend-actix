@@ -272,6 +272,36 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         web::get()
                             .to(payment::handle_get_user_paid_package)
                             .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/balance",
+                        web::get()
+                            .to(payment::handle_get_user_balance)
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/initiate-top-up",
+                        web::post()
+                            .to(payment::handle_initiate_top_up)
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/initiate-withdrawal",
+                        web::post()
+                            .to(payment::handle_initiate_withdrawal)
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/top-ups",
+                        web::get()
+                            .to(payment::handle_list_user_top_ups)
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/withdrawals",
+                        web::get()
+                            .to(payment::handle_list_user_withdrawals)
+                            .wrap(from_fn(auth_closed_guard_middleware)),
                     ),
             )
             .service(

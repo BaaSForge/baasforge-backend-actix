@@ -218,3 +218,42 @@ where
         billing,
     ))
 }
+
+pub fn calculate_user_overall_usage_cost<C>(
+    conn: &mut C,
+    user_id: Uuid,
+) -> Result<f64, diesel::result::Error>
+where
+    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+        + diesel::connection::LoadConnection,
+{
+    use crate::services::billing::MAX_BILLING_PERIOD_DAYS;
+    use chrono::Duration;
+    use diesel::dsl::min;
+
+    let earliest = project_usage_entries::table
+        .inner_join(projects::table.on(project_usage_entries::project_id.eq(projects::id)))
+        .filter(projects::owner_user_id.eq(user_id))
+        .select(min(project_usage_entries::recorded_at))
+        .first::<Option<DateTime<Utc>>>(conn)?;
+
+    let Some(mut cursor) = earliest else {
+        return Ok(0.0);
+    };
+    let end = Utc::now();
+    if cursor >= end {
+        return Ok(0.0);
+    }
+
+    let chunk = Duration::days(MAX_BILLING_PERIOD_DAYS);
+    let mut total = 0.0;
+    while cursor < end {
+        let next = std::cmp::min(cursor + chunk, end);
+        let summary =
+            calculate_user_usage_cost(conn, user_id, None, Some(cursor), Some(next))?;
+        total += summary.total_cost;
+        cursor = next;
+    }
+
+    Ok(total)
+}

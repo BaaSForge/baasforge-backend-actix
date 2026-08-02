@@ -228,6 +228,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    top_ups (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        amount -> Float8,
+        gateway_metadata -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::UserTokenType;
 
@@ -261,6 +271,16 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    withdrawals (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        amount -> Float8,
+        gateway_metadata -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
+    }
+}
+
 diesel::joinable!(chat_messages -> chat_sessions (chat_session_id));
 diesel::joinable!(chat_sessions -> projects (project_id));
 diesel::joinable!(chat_sessions -> users (user_id));
@@ -276,7 +296,9 @@ diesel::joinable!(project_units -> chat_sessions (chat_session_id));
 diesel::joinable!(project_units -> projects (project_id));
 diesel::joinable!(project_usage_entries -> projects (project_id));
 diesel::joinable!(projects -> users (owner_user_id));
+diesel::joinable!(top_ups -> users (user_id));
 diesel::joinable!(user_tokens -> users (user_id));
+diesel::joinable!(withdrawals -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     app_settings,
@@ -291,6 +313,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     project_units,
     project_usage_entries,
     projects,
+    top_ups,
     user_tokens,
     users,
+    withdrawals,
 );
