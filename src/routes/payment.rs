@@ -7,7 +7,7 @@ use crate::models::withdrawals::WithdrawalResponse;
 use crate::schema::{payments, top_ups, withdrawals};
 use crate::services::balance::{
     cancel_active_subscriptions, get_subscription_reserve, get_user_balance, record_top_up,
-    record_withdrawal, set_billing_frozen,
+    record_withdrawal,
 };
 use crate::services::payment::get_user_active_paid_packages;
 use crate::{
@@ -182,9 +182,6 @@ pub async fn handle_initiate_withdrawal(
             false
         };
         let withdrawal = record_withdrawal(conn, user_id, amount, None)?;
-        if remaining <= 0.0 {
-            set_billing_frozen(conn, user_id, true)?;
-        }
         Ok(WithdrawOut::Ok {
             withdrawal,
             subscription_cancelled,

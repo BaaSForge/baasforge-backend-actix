@@ -93,14 +93,19 @@ where
     C: diesel::connection::Connection<Backend = diesel::pg::Pg>
         + diesel::connection::LoadConnection,
 {
-    diesel::insert_into(withdrawals::table)
+    let withdrawal = diesel::insert_into(withdrawals::table)
         .values(WithdrawalInsert {
             user_id,
             amount,
             gateway_metadata,
         })
         .returning(WithdrawalResponse::as_select())
-        .get_result(conn)
+        .get_result(conn)?;
+    let balance = get_user_balance(conn, user_id)?;
+    if balance.balance <= 0.0 {
+        set_billing_frozen(conn, user_id, true)?;
+    }
+    Ok(withdrawal)
 }
 
 // TODO: add periodic snapshots (e.g. daily) for faster balance reads, covering:
