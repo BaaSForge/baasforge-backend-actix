@@ -32,6 +32,13 @@ pub struct SubscriptionReserve {
     pub period_usage_cost: f64,
 }
 
+/// Balances at or below this are treated as empty for freeze decisions (float/usage dust).
+const BILLING_FREEZE_BALANCE_THRESHOLD: f64 = 0.1;
+
+pub fn should_freeze_for_balance(balance: f64) -> bool {
+    balance <= BILLING_FREEZE_BALANCE_THRESHOLD
+}
+
 pub fn set_billing_frozen<C>(
     conn: &mut C,
     user_id: Uuid,
@@ -102,7 +109,7 @@ where
         .returning(WithdrawalResponse::as_select())
         .get_result(conn)?;
     let balance = get_user_balance(conn, user_id)?;
-    if balance.balance <= 0.0 {
+    if should_freeze_for_balance(balance.balance) {
         set_billing_frozen(conn, user_id, true)?;
     }
     Ok(withdrawal)

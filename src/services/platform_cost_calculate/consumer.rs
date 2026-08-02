@@ -6,7 +6,9 @@ use crate::services::message_queue::{
     publish_to_dead_letter, publish_to_retry_delay, wait_for_consumer_recovery,
     wait_for_rabbit_connection,
 };
-use crate::services::balance::{get_user_balance, set_billing_frozen};
+use crate::services::balance::{
+    get_user_balance, set_billing_frozen, should_freeze_for_balance,
+};
 use crate::services::pricing::platform_rates_for_package_tier;
 use crate::services::platform_cost_calculate::db;
 use crate::services::platform_cost_calculate::meter;
@@ -259,7 +261,7 @@ async fn process_message(pool: &DbPool, message: PlatformCostCalculateMessage) -
 
                 let should_freeze = block_on_db_tokio(pool, move |conn| {
                     let balance = get_user_balance(conn, owner_user_id)?;
-                    if balance.balance <= 0.0 {
+                    if should_freeze_for_balance(balance.balance) {
                         set_billing_frozen(conn, owner_user_id, true)?;
                         Ok(true)
                     } else {
