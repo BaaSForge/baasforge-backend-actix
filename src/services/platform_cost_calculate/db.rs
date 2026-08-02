@@ -145,6 +145,7 @@ where
     let is_annual: bool = payments::table
         .filter(payments::user_id.eq(user_id))
         .filter(payments::is_success.eq(true))
+        .filter(payments::cancelled_at.is_null())
         .filter(
             payments::expires_at
                 .is_null()

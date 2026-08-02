@@ -23,6 +23,7 @@ where
         .inner_join(packages::table.on(payments::package_id.eq(packages::id)))
         .filter(payments::user_id.eq(user_id))
         .filter(payments::is_success.eq(true))
+        .filter(payments::cancelled_at.is_null())
         .filter(not_expired)
         .order(payments::id.desc())
         .select((PaymentResponse::as_select(), Package::as_select()))
@@ -31,6 +32,7 @@ where
     let largest_tier: i32 = payments::table
         .filter(payments::user_id.eq(user_id))
         .filter(payments::is_success.eq(true))
+        .filter(payments::cancelled_at.is_null())
         .filter(
             payments::expires_at
                 .is_null()

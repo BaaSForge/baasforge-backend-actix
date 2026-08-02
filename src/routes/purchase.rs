@@ -81,6 +81,7 @@ pub async fn handle_initiate_purchase(
                 payments::table
                     .filter(payments::user_id.eq(user_id))
                     .filter(payments::is_success.eq(true))
+                    .filter(payments::cancelled_at.is_null())
                     .filter(not_expired),
             )
             .set(payments::expires_at.eq(now))

@@ -5,7 +5,10 @@ use crate::models::payments::PaymentResponse;
 use crate::models::top_ups::TopUpResponse;
 use crate::models::withdrawals::WithdrawalResponse;
 use crate::schema::{payments, top_ups, withdrawals};
-use crate::services::balance::{get_user_balance, record_top_up, record_withdrawal};
+use crate::services::balance::{
+    cancel_active_subscriptions, get_subscription_reserve, get_user_balance, record_top_up,
+    record_withdrawal,
+};
 use crate::services::payment::get_user_active_paid_packages;
 use crate::{
     libs::api_response::{api_error, api_success},
@@ -157,7 +160,10 @@ pub async fn handle_initiate_withdrawal(
 
     enum WithdrawOut {
         InsufficientBalance { balance: f64 },
-        Ok(crate::models::withdrawals::WithdrawalResponse),
+        Ok {
+            withdrawal: crate::models::withdrawals::WithdrawalResponse,
+            subscription_cancelled: bool,
+        },
     }
 
     let result = database::block_on_db(&context.pool, move |conn| {
@@ -167,8 +173,19 @@ pub async fn handle_initiate_withdrawal(
                 balance: balance.balance,
             });
         }
+        let reserve = get_subscription_reserve(conn, user_id)?;
+        let remaining = balance.balance - amount;
+        let subscription_cancelled = if remaining < reserve.min_balance_to_keep {
+            cancel_active_subscriptions(conn, user_id)?;
+            true
+        } else {
+            false
+        };
         let withdrawal = record_withdrawal(conn, user_id, amount, None)?;
-        Ok(WithdrawOut::Ok(withdrawal))
+        Ok(WithdrawOut::Ok {
+            withdrawal,
+            subscription_cancelled,
+        })
     })
     .await;
 
@@ -179,12 +196,16 @@ pub async fn handle_initiate_withdrawal(
                 json!({ "amount": amount, "balance": balance }),
             ))
         }
-        Ok(WithdrawOut::Ok(withdrawal)) => HttpResponse::Created().json(api_success(
+        Ok(WithdrawOut::Ok {
+            withdrawal,
+            subscription_cancelled,
+        }) => HttpResponse::Created().json(api_success(
             "Withdrawal initiated successfully",
             json!({
                 "id": withdrawal.id,
                 "amount": withdrawal.amount,
                 "created_at": withdrawal.created_at,
+                "subscription_cancelled": subscription_cancelled,
             }),
         )),
         Err(e) => {
@@ -193,6 +214,37 @@ pub async fn handle_initiate_withdrawal(
                 .json(api_error("Database temporarily unavailable", json!({})))
         }
     }
+}
+
+pub async fn handle_get_subscription_reserve(
+    context: web::Data<AppContext>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let extensions = req.extensions();
+
+    let access_payload = extensions
+        .get::<AccessPayload>()
+        .expect("AccessPayload must exist to get subscription reserve");
+
+    let user_id = access_payload.user_id;
+
+    let reserve = match database::block_on_db(&context.pool, move |conn| {
+        get_subscription_reserve(conn, user_id)
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("[handle_get_subscription_reserve] DB/block error: {}", e);
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    HttpResponse::Ok().json(api_success(
+        "Subscription reserve fetched successfully",
+        json!(reserve),
+    ))
 }
 
 pub async fn handle_get_user_balance(

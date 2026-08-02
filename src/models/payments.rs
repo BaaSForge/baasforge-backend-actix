@@ -58,4 +58,6 @@ pub struct PaymentResponse {
     pub is_success: bool,
     pub expires_at: Option<DateTime<Utc>>,
     pub billing_period: BillingPeriod,
+    pub created_at: DateTime<Utc>,
+    pub cancelled_at: Option<DateTime<Utc>>,
 }

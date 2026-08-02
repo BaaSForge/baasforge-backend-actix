@@ -1,7 +1,12 @@
+use crate::models::payments::{BillingPeriod, PaymentResponse};
 use crate::models::top_ups::{TopUpInsert, TopUpResponse};
 use crate::models::withdrawals::{WithdrawalInsert, WithdrawalResponse};
 use crate::schema::{payments, top_ups, withdrawals};
-use crate::services::usage::calculate_user_overall_usage_cost;
+use crate::services::payment::get_user_active_paid_packages;
+use crate::services::usage::{
+    calculate_user_overall_usage_cost, calculate_user_usage_cost_between,
+};
+use chrono::Utc;
 use diesel::dsl::sum;
 use diesel::prelude::*;
 use serde::Serialize;
@@ -16,6 +21,15 @@ pub struct UserBalance {
     pub withdrawn: f64,
     pub total_usage: f64,
     pub balance: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SubscriptionReserve {
+    pub min_balance_to_keep: f64,
+    pub max_withdraw_without_cancel: f64,
+    pub balance: f64,
+    pub effective_package_price: f64,
+    pub period_usage_cost: f64,
 }
 
 pub fn record_top_up<C>(
@@ -102,4 +116,78 @@ where
         total_usage,
         balance: deposited - withdrawn - total_usage,
     })
+}
+
+fn effective_package_price(payment: &PaymentResponse) -> f64 {
+    match payment.billing_period {
+        BillingPeriod::Annual => payment.amount,
+        BillingPeriod::Monthly => {
+            let base = payment.package_price.unwrap_or(payment.amount);
+            let discount = payment.package_discount.unwrap_or(0).clamp(0, 100) as f64 / 100.0;
+            base * (1.0 - discount)
+        }
+    }
+}
+
+pub fn get_subscription_reserve<C>(
+    conn: &mut C,
+    user_id: Uuid,
+) -> Result<SubscriptionReserve, diesel::result::Error>
+where
+    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+        + diesel::connection::LoadConnection,
+{
+    let balance = get_user_balance(conn, user_id)?;
+    let (active, _) = get_user_active_paid_packages(conn, user_id)?;
+
+    let Some((payment, _)) = active
+        .into_iter()
+        .max_by_key(|(payment, _)| payment.package_tier)
+    else {
+        return Ok(SubscriptionReserve {
+            min_balance_to_keep: 0.0,
+            max_withdraw_without_cancel: balance.balance.max(0.0),
+            balance: balance.balance,
+            effective_package_price: 0.0,
+            period_usage_cost: 0.0,
+        });
+    };
+
+    let effective_package_price = effective_package_price(&payment);
+    let period_usage_cost =
+        calculate_user_usage_cost_between(conn, user_id, payment.created_at, Utc::now())?;
+    let min_balance_to_keep = (effective_package_price - period_usage_cost).max(0.0);
+    let max_withdraw_without_cancel = (balance.balance - min_balance_to_keep).max(0.0);
+
+    Ok(SubscriptionReserve {
+        min_balance_to_keep,
+        max_withdraw_without_cancel,
+        balance: balance.balance,
+        effective_package_price,
+        period_usage_cost,
+    })
+}
+
+pub fn cancel_active_subscriptions<C>(
+    conn: &mut C,
+    user_id: Uuid,
+) -> Result<usize, diesel::result::Error>
+where
+    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+        + diesel::connection::LoadConnection,
+{
+    let now = Utc::now();
+    let not_expired = payments::expires_at
+        .is_null()
+        .or(payments::expires_at.gt(now));
+
+    diesel::update(
+        payments::table
+            .filter(payments::user_id.eq(user_id))
+            .filter(payments::is_success.eq(true))
+            .filter(payments::cancelled_at.is_null())
+            .filter(not_expired),
+    )
+    .set(payments::cancelled_at.eq(now))
+    .execute(conn)
 }

@@ -280,6 +280,12 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                             .wrap(from_fn(auth_closed_guard_middleware)),
                     )
                     .route(
+                        "/subscription-reserve",
+                        web::get()
+                            .to(payment::handle_get_subscription_reserve)
+                            .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
                         "/initiate-top-up",
                         web::post()
                             .to(payment::handle_initiate_top_up)

@@ -116,6 +116,8 @@ diesel::table! {
         expires_at -> Nullable<Timestamptz>,
         package_is_tiral -> Bool,
         billing_period -> BillingPeriodType,
+        created_at -> Timestamptz,
+        cancelled_at -> Nullable<Timestamptz>,
     }
 }
 
