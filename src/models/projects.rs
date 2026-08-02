@@ -108,6 +108,7 @@ pub struct ProjectInsert {
     pub owner_user_id: Uuid,
     pub name: String,
     pub slug: String,
+    pub is_billing_frozen: bool,
 }
 
 #[derive(Insertable)]

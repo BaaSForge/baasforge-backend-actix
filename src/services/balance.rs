@@ -1,7 +1,7 @@
 use crate::models::payments::{BillingPeriod, PaymentResponse};
 use crate::models::top_ups::{TopUpInsert, TopUpResponse};
 use crate::models::withdrawals::{WithdrawalInsert, WithdrawalResponse};
-use crate::schema::{payments, top_ups, withdrawals};
+use crate::schema::{payments, projects, top_ups, users, withdrawals};
 use crate::services::payment::get_user_active_paid_packages;
 use crate::services::usage::{
     calculate_user_overall_usage_cost, calculate_user_usage_cost_between,
@@ -32,6 +32,35 @@ pub struct SubscriptionReserve {
     pub period_usage_cost: f64,
 }
 
+pub fn set_billing_frozen<C>(
+    conn: &mut C,
+    user_id: Uuid,
+    frozen: bool,
+) -> Result<(), diesel::result::Error>
+where
+    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+        + diesel::connection::LoadConnection,
+{
+    diesel::update(users::table.filter(users::id.eq(user_id)))
+        .set(users::is_billing_frozen.eq(frozen))
+        .execute(conn)?;
+    diesel::update(projects::table.filter(projects::owner_user_id.eq(user_id)))
+        .set(projects::is_billing_frozen.eq(frozen))
+        .execute(conn)?;
+    Ok(())
+}
+
+pub fn unfreeze_user_billing<C>(
+    conn: &mut C,
+    user_id: Uuid,
+) -> Result<(), diesel::result::Error>
+where
+    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+        + diesel::connection::LoadConnection,
+{
+    set_billing_frozen(conn, user_id, false)
+}
+
 pub fn record_top_up<C>(
     conn: &mut C,
     user_id: Uuid,
@@ -42,14 +71,16 @@ where
     C: diesel::connection::Connection<Backend = diesel::pg::Pg>
         + diesel::connection::LoadConnection,
 {
-    diesel::insert_into(top_ups::table)
+    let top_up = diesel::insert_into(top_ups::table)
         .values(TopUpInsert {
             user_id,
             amount,
             gateway_metadata,
         })
         .returning(TopUpResponse::as_select())
-        .get_result(conn)
+        .get_result(conn)?;
+    unfreeze_user_billing(conn, user_id)?;
+    Ok(top_up)
 }
 
 pub fn record_withdrawal<C>(

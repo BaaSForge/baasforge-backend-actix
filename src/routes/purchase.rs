@@ -3,6 +3,7 @@ use crate::middlewares::auth::AccessPayload;
 use crate::models::packages::Package;
 use crate::models::payments::{BillingPeriod, PaymentInsert};
 use crate::schema::{packages, payments};
+use crate::services::balance::unfreeze_user_billing;
 use crate::services::payment::get_user_active_paid_packages;
 use crate::services::pricing::config::ANNUAL_BILLING_DISCOUNT;
 use crate::{
@@ -105,6 +106,7 @@ pub async fn handle_initiate_purchase(
         diesel::insert_into(payments::table)
             .values(&payment)
             .execute(conn)?;
+        unfreeze_user_billing(conn, user_id)?;
         Ok(PurchaseOut::Ok { package, new_expires_at, amount })
     })
     .await;

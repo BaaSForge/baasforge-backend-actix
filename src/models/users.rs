@@ -27,6 +27,7 @@ pub struct User {
     pub email_in_platform: Option<String>,
     #[allow(dead_code)]
     pub last_subscription_cost_calculated_at: Option<DateTime<Utc>>,
+    pub is_billing_frozen: bool,
 }
 
 #[derive(Serialize)]

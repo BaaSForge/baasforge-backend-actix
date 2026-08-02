@@ -32,6 +32,7 @@ use crate::schema::project_runtimes;
 use crate::schema::project_units;
 use crate::schema::project_usage_entries;
 use crate::schema::projects;
+use crate::schema::users;
 use crate::services::chat_worker::db::{
     list_distinct_context_slugs_from_units, load_project_units_by_keys,
     load_units_from_latest_production_metadata, modules_by_context_slugs_from_units,
@@ -296,14 +297,18 @@ pub async fn handle_create_project(
             .json(api_error("Project slug and name must be unique", json!({})));
     }
 
-    let new_project = ProjectInsert {
-        owner_user_id: user_id,
-        slug: body.slug.clone(),
-        name: body.name.clone(),
-    };
-
     let project: ProjectResponse = match database::block_on_db(&context.pool, move |conn| {
         conn.transaction::<_, Error, _>(|conn| {
+            let is_billing_frozen = users::table
+                .find(user_id)
+                .select(users::is_billing_frozen)
+                .first::<bool>(conn)?;
+            let new_project = ProjectInsert {
+                owner_user_id: user_id,
+                slug: body.slug.clone(),
+                name: body.name.clone(),
+                is_billing_frozen,
+            };
             let project = diesel::insert_into(projects::table)
                 .values(&new_project)
                 .returning(ProjectResponse::as_select())

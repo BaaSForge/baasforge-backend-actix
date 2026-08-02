@@ -226,6 +226,7 @@ diesel::table! {
         #[max_length = 255]
         documentation_share_key -> Nullable<Varchar>,
         documentation_share_key_expires_at -> Nullable<Timestamptz>,
+        is_billing_frozen -> Bool,
     }
 }
 
@@ -270,6 +271,7 @@ diesel::table! {
         #[max_length = 255]
         email_in_platform -> Nullable<Varchar>,
         last_subscription_cost_calculated_at -> Nullable<Timestamptz>,
+        is_billing_frozen -> Bool,
     }
 }
 
