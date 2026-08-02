@@ -1,9 +1,9 @@
 use crate::models::project_usage_entries::ProjectUsageEntryResponse;
 use crate::schema::{project_usage_entries, projects};
 use crate::services::billing::{period_total, validate_billing_period, PeriodBilling};
+use crate::services::payment::{package_tier_at, package_tier_segments};
 use crate::services::pricing::billing_rates_for_package_tier;
 use crate::services::pricing::SUBSCRIPTION_METRIC;
-use crate::services::payment::get_user_active_paid_packages;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use serde::Serialize;
@@ -203,16 +203,18 @@ where
         ensure_owned_project(conn, user_id, project_id)?;
     }
 
-    let (_, largest_tier) = get_user_active_paid_packages(conn, user_id)?;
-    let rates = billing_rates_for_package_tier(largest_tier);
-    let billing = period_total(conn, user_id, project_id, from, to, rates, largest_tier)?;
+    let segments = package_tier_segments(conn, user_id, from, to)?;
+    let mut billing = PeriodBilling::zero();
+    for (seg_from, seg_to, tier) in segments {
+        let rates = billing_rates_for_package_tier(tier);
+        let segment_billing =
+            period_total(conn, user_id, project_id, seg_from, seg_to, rates, tier)?;
+        billing.merge(&segment_billing);
+    }
 
+    let package_tier = package_tier_at(conn, user_id, to)?;
     Ok(UsageCostSummary::from_billing(
-        if largest_tier <= 0 {
-            1
-        } else {
-            largest_tier
-        },
+        package_tier,
         from,
         to,
         billing,

@@ -369,6 +369,55 @@ impl PeriodBilling {
                 + platform_total,
         }
     }
+
+    pub fn zero() -> Self {
+        Self {
+            sum_gb_ms: 0,
+            compute_cost: 0.0,
+            byte_hours_active: 0.0,
+            byte_hours_retained: 0.0,
+            storage_hot_cost: 0.0,
+            storage_cold_cost: 0.0,
+            sum_input_tokens: 0,
+            sum_output_tokens: 0,
+            llm_input_cost: 0.0,
+            llm_output_cost: 0.0,
+            platform: PlatformPeriodBilling {
+                subscription_entity_seconds: 0,
+                project_entity_seconds: 0,
+                unit_entity_seconds: 0,
+                stage_runtime_entity_seconds: 0,
+                subscription_cost: 0.0,
+                project_cost: 0.0,
+                unit_cost: 0.0,
+                stage_runtime_cost: 0.0,
+            },
+            total: 0.0,
+        }
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        self.sum_gb_ms += other.sum_gb_ms;
+        self.compute_cost += other.compute_cost;
+        self.byte_hours_active += other.byte_hours_active;
+        self.byte_hours_retained += other.byte_hours_retained;
+        self.storage_hot_cost += other.storage_hot_cost;
+        self.storage_cold_cost += other.storage_cold_cost;
+        self.sum_input_tokens += other.sum_input_tokens;
+        self.sum_output_tokens += other.sum_output_tokens;
+        self.llm_input_cost += other.llm_input_cost;
+        self.llm_output_cost += other.llm_output_cost;
+        self.platform.subscription_entity_seconds += other.platform.subscription_entity_seconds;
+        self.platform.project_entity_seconds += other.platform.project_entity_seconds;
+        self.platform.unit_entity_seconds += other.platform.unit_entity_seconds;
+        self.platform.stage_runtime_entity_seconds +=
+            other.platform.stage_runtime_entity_seconds;
+        self.platform.subscription_cost += other.platform.subscription_cost;
+        self.platform.project_cost += other.platform.project_cost;
+        self.platform.unit_cost += other.platform.unit_cost;
+        self.platform.stage_runtime_cost += other.platform.stage_runtime_cost;
+        self.total += other.total;
+    }
 }
 
 const COMPUTE_SUM_SQL: &str = "
@@ -1283,6 +1332,47 @@ mod tests {
         let platform_total = 0.01 + 0.001;
         assert!((billing.platform.total_cost() - platform_total).abs() < 1e-12);
         assert!((billing.total - platform_total).abs() < 1e-12);
+    }
+
+    #[test]
+    fn period_billing_merge_sums_segment_costs() {
+        let rates = BillingRates::test_rates();
+        let llm_a = LlmPeriodCost {
+            sum_input_tokens: 100,
+            sum_output_tokens: 50,
+            input_cost: 0.1,
+            output_cost: 0.2,
+        };
+        let llm_b = LlmPeriodCost {
+            sum_input_tokens: 100,
+            sum_output_tokens: 50,
+            input_cost: 0.1,
+            output_cost: 0.2,
+        };
+        let mut a = PeriodBilling::from_metered(
+            rates,
+            1_000,
+            2.0,
+            3.0,
+            llm_a,
+            platform_from_sums(&[(PROJECT_METRIC.to_string(), 3_600)]),
+        );
+        let b = PeriodBilling::from_metered(
+            rates,
+            500,
+            1.0,
+            1.0,
+            llm_b,
+            platform_from_sums(&[(UNIT_METRIC.to_string(), 3_600)]),
+        );
+        let expected_total = a.total + b.total;
+        a.merge(&b);
+        assert_eq!(a.sum_gb_ms, 1_500);
+        assert_eq!(a.sum_input_tokens, 200);
+        assert_eq!(a.sum_output_tokens, 100);
+        assert!((a.total - expected_total).abs() < 1e-12);
+        assert_eq!(a.platform.project_entity_seconds, 3_600);
+        assert_eq!(a.platform.unit_entity_seconds, 3_600);
     }
 
     #[test]
