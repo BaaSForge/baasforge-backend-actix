@@ -5,7 +5,7 @@ use crate::models::payments::{BillingPeriod, PaymentInsert};
 use crate::schema::{packages, payments};
 use crate::services::balance::unfreeze_user_billing;
 use crate::services::payment::get_user_active_paid_packages;
-use crate::services::pricing::config::ANNUAL_BILLING_DISCOUNT;
+use crate::services::pricing::package_subscription_amount;
 use crate::{
     libs::api_response::{api_error, api_success},
     routes::AppContext,
@@ -67,11 +67,12 @@ pub async fn handle_initiate_purchase(
             return Ok(PurchaseOut::TierNotLarger);
         }
         let now = Utc::now();
-        let (new_expires_at, amount) = if is_annual {
-            let annual_amount = package.price * 12.0 * (1.0 - ANNUAL_BILLING_DISCOUNT);
-            (now + Duration::days(365), annual_amount)
+        let amount =
+            package_subscription_amount(package.price, package.discount_percent, is_annual);
+        let new_expires_at = if is_annual {
+            now + Duration::days(365)
         } else {
-            (now + Duration::days(30), package.price)
+            now + Duration::days(30)
         };
         if !paid_packages.is_empty() {
             // TODO: refund remaining price for the previous active package(s) before upgrading

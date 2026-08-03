@@ -3,6 +3,7 @@ use crate::models::top_ups::{TopUpInsert, TopUpResponse};
 use crate::models::withdrawals::{WithdrawalInsert, WithdrawalResponse};
 use crate::schema::{payments, projects, top_ups, users, withdrawals};
 use crate::services::payment::get_user_active_paid_packages;
+use crate::services::pricing::package_subscription_amount;
 use crate::services::usage::{
     calculate_user_overall_usage_cost, calculate_user_usage_cost_between,
 };
@@ -129,12 +130,16 @@ where
     C: diesel::connection::Connection<Backend = diesel::pg::Pg>
         + diesel::connection::LoadConnection,
 {
-    let package_deposits: f64 = payments::table
+    let successful_payments = payments::table
         .filter(payments::user_id.eq(user_id))
         .filter(payments::is_success.eq(true))
-        .select(sum(payments::amount))
-        .get_result::<Option<f64>>(conn)?
-        .unwrap_or(0.0);
+        .select(PaymentResponse::as_select())
+        .load::<PaymentResponse>(conn)?;
+
+    let package_deposits: f64 = successful_payments
+        .iter()
+        .map(payment_credit_amount)
+        .sum();
 
     let top_ups_total: f64 = top_ups::table
         .filter(top_ups::user_id.eq(user_id))
@@ -161,15 +166,15 @@ where
     })
 }
 
-fn effective_package_price(payment: &PaymentResponse) -> f64 {
-    match payment.billing_period {
-        BillingPeriod::Annual => payment.amount,
-        BillingPeriod::Monthly => {
-            let base = payment.package_price.unwrap_or(payment.amount);
-            let discount = payment.package_discount.unwrap_or(0).clamp(0, 100) as f64 / 100.0;
-            base * (1.0 - discount)
-        }
-    }
+fn payment_credit_amount(payment: &PaymentResponse) -> f64 {
+    let Some(list_price) = payment.package_price else {
+        return payment.amount;
+    };
+    package_subscription_amount(
+        list_price,
+        payment.package_discount,
+        payment.billing_period == BillingPeriod::Annual,
+    )
 }
 
 pub fn get_subscription_reserve<C>(
@@ -196,7 +201,7 @@ where
         });
     };
 
-    let effective_package_price = effective_package_price(&payment);
+    let effective_package_price = payment_credit_amount(&payment);
     let period_usage_cost =
         calculate_user_usage_cost_between(conn, user_id, payment.created_at, Utc::now())?;
     let min_balance_to_keep = (effective_package_price - period_usage_cost).max(0.0);

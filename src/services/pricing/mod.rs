@@ -8,7 +8,10 @@ pub mod llm;
 pub mod llm_prices;
 pub mod metrics;
 pub mod platform_resources;
+pub mod subscription;
 pub mod tiers;
+
+pub use subscription::package_subscription_amount;
 
 pub use compute_storage::{billing_rates_for_package_tier, byte_hours_to_gb_ms, BillingRates};
 pub use llm::{
