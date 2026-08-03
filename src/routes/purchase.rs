@@ -1,17 +1,16 @@
 use crate::database;
 use crate::middlewares::auth::AccessPayload;
 use crate::models::packages::Package;
-use crate::models::payments::{BillingPeriod, PaymentInsert};
-use crate::schema::{packages, payments};
-use crate::services::balance::unfreeze_user_billing;
-use crate::services::payment::get_user_active_paid_packages;
+use crate::models::payments::BillingPeriod;
+use crate::schema::packages;
+use crate::services::payment::{get_user_active_paid_packages, grant_package_payment};
 use crate::services::pricing::package_subscription_amount;
+use crate::services::stripe::{amount_to_unit_cents, create_package_checkout_session};
 use crate::{
     libs::api_response::{api_error, api_success},
     routes::AppContext,
 };
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
-use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
@@ -40,19 +39,13 @@ pub async fn handle_initiate_purchase(
     let billing_period = body.billing_period.unwrap_or_default();
     let is_annual = billing_period == BillingPeriod::Annual;
 
-    enum PurchaseOut {
+    enum PurchasePrep {
         PackageNotFound,
         TierNotLarger,
-        Ok {
-            package: Package,
-            new_expires_at: chrono::DateTime<Utc>,
-            amount: f64,
-        },
-        #[allow(dead_code)]
-        DbErr(diesel::result::Error),
+        Ok { package: Package, amount: f64 },
     }
-    let result = database::block_on_db(&context.pool, move |conn| {
-        let (paid_packages, largest_tier) = get_user_active_paid_packages(conn, user_id)?;
+    let prep = database::block_on_db(&context.pool, move |conn| {
+        let (_, largest_tier) = get_user_active_paid_packages(conn, user_id)?;
         let package: Package = match packages::table
             .filter(packages::id.eq(package_id))
             .filter(packages::is_active.eq(true))
@@ -60,88 +53,101 @@ pub async fn handle_initiate_purchase(
             .first::<Package>(conn)
         {
             Ok(p) => p,
-            Err(diesel::result::Error::NotFound) => return Ok(PurchaseOut::PackageNotFound),
+            Err(diesel::result::Error::NotFound) => return Ok(PurchasePrep::PackageNotFound),
             Err(e) => return Err(e),
         };
         if package.tier <= largest_tier {
-            return Ok(PurchaseOut::TierNotLarger);
+            return Ok(PurchasePrep::TierNotLarger);
         }
-        let now = Utc::now();
         let amount =
             package_subscription_amount(package.price, package.discount_percent, is_annual);
-        let new_expires_at = if is_annual {
-            now + Duration::days(365)
-        } else {
-            now + Duration::days(30)
-        };
-        if !paid_packages.is_empty() {
-            // TODO: refund remaining price for the previous active package(s) before upgrading
-            let not_expired = payments::expires_at
-                .is_null()
-                .or(payments::expires_at.gt(now));
-            diesel::update(
-                payments::table
-                    .filter(payments::user_id.eq(user_id))
-                    .filter(payments::is_success.eq(true))
-                    .filter(payments::cancelled_at.is_null())
-                    .filter(not_expired),
-            )
-            .set(payments::expires_at.eq(now))
-            .execute(conn)?;
-        }
-        let payment = PaymentInsert {
-            user_id,
-            amount,
-            package_id: package.id,
-            package_title: Some(package.title.clone()),
-            package_slug: Some(package.slug.clone()),
-            package_tier: package.tier,
-            package_price: Some(package.price),
-            package_discount: package.discount_percent,
-            package_is_tiral: package.is_trial.unwrap_or(false),
-            is_success: true,
-            gateway_metadata: None,
-            expires_at: Some(new_expires_at),
-            billing_period,
-        };
-        diesel::insert_into(payments::table)
-            .values(&payment)
-            .execute(conn)?;
-        unfreeze_user_billing(conn, user_id)?;
-        Ok(PurchaseOut::Ok { package, new_expires_at, amount })
+        Ok(PurchasePrep::Ok { package, amount })
     })
     .await;
 
-    match result {
-        Ok(PurchaseOut::PackageNotFound) => HttpResponse::BadRequest().json(api_error(
-            "Package not found or inactive",
-            json!({ "package_id": package_id }),
-        )),
-        Ok(PurchaseOut::TierNotLarger) => HttpResponse::BadRequest().json(api_error(
-            "Target package tier must be larger than your current largest tier",
-            json!({}),
-        )),
-        Ok(PurchaseOut::Ok { package, new_expires_at, amount }) => {
-            HttpResponse::Created().json(api_success(
-                "Purchase initiated successfully",
-                json!({
-                    "package_id": package.id,
-                    "expires_at": new_expires_at,
-                    "amount": amount,
-                    "billing_period": billing_period,
-                }),
-            ))
+    let (package, amount) = match prep {
+        Ok(PurchasePrep::PackageNotFound) => {
+            return HttpResponse::BadRequest().json(api_error(
+                "Package not found or inactive",
+                json!({ "package_id": package_id }),
+            ));
         }
-        Ok(PurchaseOut::DbErr(e)) => {
-            HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})))
+        Ok(PurchasePrep::TierNotLarger) => {
+            return HttpResponse::BadRequest().json(api_error(
+                "Target package tier must be larger than your current largest tier",
+                json!({}),
+            ));
         }
+        Ok(PurchasePrep::Ok { package, amount }) => (package, amount),
         Err(database::BlockingDbError::Query(e)) => {
-            HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})))
+            return HttpResponse::InternalServerError()
+                .json(api_error(&e.to_string(), json!({})));
         }
         Err(e) => {
             log::error!("[handle_initiate_purchase] DB/block error: {}", e);
-            HttpResponse::ServiceUnavailable()
-                .json(api_error("Database temporarily unavailable", json!({})))
+            return HttpResponse::ServiceUnavailable()
+                .json(api_error("Database temporarily unavailable", json!({})));
+        }
+    };
+
+    if amount_to_unit_cents(amount) <= 0 {
+        let package_for_grant = package.clone();
+        let grant = database::block_on_db(&context.pool, move |conn| {
+            grant_package_payment(conn, user_id, &package_for_grant, billing_period, None)
+        })
+        .await;
+
+        return match grant {
+            Ok(granted) => HttpResponse::Created().json(api_success(
+                "Purchase completed successfully",
+                json!({
+                    "package_id": granted.package.id,
+                    "expires_at": granted.expires_at,
+                    "amount": granted.amount,
+                    "billing_period": granted.billing_period,
+                    "checkout_url": null,
+                    "session_id": null,
+                }),
+            )),
+            Err(database::BlockingDbError::Query(e)) => {
+                HttpResponse::InternalServerError().json(api_error(&e.to_string(), json!({})))
+            }
+            Err(e) => {
+                log::error!("[handle_initiate_purchase] zero-amount grant error: {}", e);
+                HttpResponse::ServiceUnavailable()
+                    .json(api_error("Database temporarily unavailable", json!({})))
+            }
+        };
+    }
+
+    match create_package_checkout_session(
+        &context.settings,
+        user_id,
+        &package,
+        billing_period,
+        amount,
+    )
+    .await
+    {
+        Ok(session) => {
+            let checkout_url = session.url.clone();
+            HttpResponse::Created().json(api_success(
+                "Checkout session created",
+                json!({
+                    "package_id": package.id,
+                    "amount": amount,
+                    "billing_period": billing_period,
+                    "checkout_url": checkout_url,
+                    "session_id": session.id,
+                }),
+            ))
+        }
+        Err(e) => {
+            log::error!("[handle_initiate_purchase] Stripe checkout error: {}", e);
+            HttpResponse::BadGateway().json(api_error(
+                "Failed to create Stripe checkout session",
+                json!({ "detail": e.to_string() }),
+            ))
         }
     }
 }

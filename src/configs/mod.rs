@@ -161,6 +161,12 @@ pub struct Settings {
     pub jaeger_query_base_url: String,
     /// Browser origins allowed for cross-origin API calls (`CORS_ALLOWED_ORIGINS`, comma-separated).
     pub cors_allowed_origins: Vec<String>,
+    pub stripe_secret_key: String,
+    pub stripe_webhook_secret: String,
+    /// ISO currency code lowercase (e.g. `usd`).
+    pub stripe_currency: String,
+    pub stripe_success_url: String,
+    pub stripe_cancel_url: String,
 }
 
 impl Settings {
@@ -481,6 +487,42 @@ impl Settings {
             return Err("CORS_ALLOWED_ORIGINS must contain at least one origin".into());
         }
 
+        let stripe_secret_key = env::var("STRIPE_SECRET_KEY")
+            .expect("STRIPE_SECRET_KEY must be set")
+            .trim()
+            .to_string();
+        if stripe_secret_key.is_empty() {
+            return Err("STRIPE_SECRET_KEY must not be empty".into());
+        }
+        let stripe_webhook_secret = env::var("STRIPE_WEBHOOK_SECRET")
+            .expect("STRIPE_WEBHOOK_SECRET must be set")
+            .trim()
+            .to_string();
+        if stripe_webhook_secret.is_empty() {
+            return Err("STRIPE_WEBHOOK_SECRET must not be empty".into());
+        }
+        let stripe_currency = env::var("STRIPE_CURRENCY")
+            .expect("STRIPE_CURRENCY must be set")
+            .trim()
+            .to_lowercase();
+        if stripe_currency.is_empty() {
+            return Err("STRIPE_CURRENCY must not be empty".into());
+        }
+        let stripe_success_url = env::var("STRIPE_SUCCESS_URL")
+            .expect("STRIPE_SUCCESS_URL must be set")
+            .trim()
+            .to_string();
+        if stripe_success_url.is_empty() {
+            return Err("STRIPE_SUCCESS_URL must not be empty".into());
+        }
+        let stripe_cancel_url = env::var("STRIPE_CANCEL_URL")
+            .expect("STRIPE_CANCEL_URL must be set")
+            .trim()
+            .to_string();
+        if stripe_cancel_url.is_empty() {
+            return Err("STRIPE_CANCEL_URL must not be empty".into());
+        }
+
         Ok(Settings {
             bind_host,
             port,
@@ -542,6 +584,11 @@ impl Settings {
             base_private_endpoint,
             jaeger_query_base_url,
             cors_allowed_origins,
+            stripe_secret_key,
+            stripe_webhook_secret,
+            stripe_currency,
+            stripe_success_url,
+            stripe_cancel_url,
         })
     }
 }

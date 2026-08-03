@@ -8,6 +8,7 @@ pub mod redis_conn;
 pub mod observability;
 pub mod balance;
 pub mod payment;
+pub mod stripe;
 pub mod platform_cost_calculate;
 pub mod releases;
 pub mod runtime_nats;

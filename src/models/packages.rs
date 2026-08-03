@@ -4,7 +4,7 @@ use diesel::Selectable;
 use serde::Serialize;
 use uuid::Uuid;
 
-#[derive(Serialize, Queryable, Selectable, Insertable)]
+#[derive(Clone, Debug, Serialize, Queryable, Selectable, Insertable)]
 #[diesel(table_name = crate::schema::packages)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct Package {

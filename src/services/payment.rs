@@ -1,10 +1,81 @@
 use crate::models::packages::Package;
-use crate::models::payments::PaymentResponse;
+use crate::models::payments::{BillingPeriod, PaymentInsert, PaymentResponse};
 use crate::schema::{packages, payments};
-use chrono::{DateTime, Utc};
+use crate::services::balance::unfreeze_user_billing;
+use crate::services::pricing::package_subscription_amount;
+use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
 use serde::Serialize;
+use serde_json::Value;
 use uuid::Uuid;
+
+#[derive(Debug)]
+pub struct GrantedPackagePayment {
+    pub package: Package,
+    pub amount: f64,
+    pub expires_at: DateTime<Utc>,
+    pub billing_period: BillingPeriod,
+}
+
+pub fn grant_package_payment<C>(
+    conn: &mut C,
+    user_id: Uuid,
+    package: &Package,
+    billing_period: BillingPeriod,
+    gateway_metadata: Option<Value>,
+) -> Result<GrantedPackagePayment, diesel::result::Error>
+where
+    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+        + diesel::connection::LoadConnection,
+{
+    let (paid_packages, _) = get_user_active_paid_packages(conn, user_id)?;
+    let now = Utc::now();
+    let is_annual = billing_period == BillingPeriod::Annual;
+    let amount = package_subscription_amount(package.price, package.discount_percent, is_annual);
+    let expires_at = if is_annual {
+        now + Duration::days(365)
+    } else {
+        now + Duration::days(30)
+    };
+    if !paid_packages.is_empty() {
+        let not_expired = payments::expires_at
+            .is_null()
+            .or(payments::expires_at.gt(now));
+        diesel::update(
+            payments::table
+                .filter(payments::user_id.eq(user_id))
+                .filter(payments::is_success.eq(true))
+                .filter(payments::cancelled_at.is_null())
+                .filter(not_expired),
+        )
+        .set(payments::expires_at.eq(now))
+        .execute(conn)?;
+    }
+    diesel::insert_into(payments::table)
+        .values(&PaymentInsert {
+            user_id,
+            amount,
+            package_id: package.id,
+            package_title: Some(package.title.clone()),
+            package_slug: Some(package.slug.clone()),
+            package_tier: package.tier,
+            package_price: Some(package.price),
+            package_discount: package.discount_percent,
+            package_is_tiral: package.is_trial.unwrap_or(false),
+            is_success: true,
+            gateway_metadata,
+            expires_at: Some(expires_at),
+            billing_period,
+        })
+        .execute(conn)?;
+    unfreeze_user_billing(conn, user_id)?;
+    Ok(GrantedPackagePayment {
+        package: package.clone(),
+        amount,
+        expires_at,
+        billing_period,
+    })
+}
 
 pub fn get_user_active_paid_packages<C>(
     conn: &mut C,

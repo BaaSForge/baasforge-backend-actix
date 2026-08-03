@@ -7,6 +7,7 @@ pub mod payment;
 pub mod project;
 pub mod runtime_env_vars;
 pub mod purchase;
+pub mod stripe_webhook;
 pub mod private_proxy;
 pub mod test;
 pub mod usage;
@@ -260,6 +261,10 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
                         web::post()
                             .to(purchase::handle_initiate_purchase)
                             .wrap(from_fn(auth_closed_guard_middleware)),
+                    )
+                    .route(
+                        "/stripe/webhook",
+                        web::post().to(stripe_webhook::handle_stripe_webhook),
                     )
                     .route(
                         "/payments",
