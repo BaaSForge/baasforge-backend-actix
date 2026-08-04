@@ -11,7 +11,7 @@ pub mod platform_resources;
 pub mod subscription;
 pub mod tiers;
 
-pub use subscription::package_subscription_amount;
+pub use subscription::{package_balance_credit_amount, package_subscription_amount};
 
 pub use compute_storage::{billing_rates_for_package_tier, byte_hours_to_gb_ms, BillingRates};
 pub use llm::{

@@ -9,7 +9,7 @@ use crate::services::balance::{
     // cancel_active_subscriptions, record_withdrawal,
     get_subscription_reserve, get_user_balance,
 };
-use crate::services::payment::get_user_active_paid_packages;
+use crate::services::payment::{get_user_active_paid_packages, maybe_renew_free_package};
 use crate::{
     libs::api_response::{api_error, api_success},
     routes::AppContext,
@@ -46,6 +46,7 @@ pub async fn handle_get_user_paid_package(
 
     let (payments_with_packages, largest_tier, previous_successful_payment_count) =
         match database::block_on_db(&context.pool, move |conn| {
+            let _ = maybe_renew_free_package(conn, user_id)?;
             let (packages, largest_tier) = get_user_active_paid_packages(conn, user_id)?;
             let count = payments::table
                 .filter(payments::user_id.eq(user_id))
@@ -270,6 +271,7 @@ pub async fn handle_get_user_balance(
     let user_id = access_payload.user_id;
 
     let balance = match database::block_on_db(&context.pool, move |conn| {
+        let _ = maybe_renew_free_package(conn, user_id)?;
         get_user_balance(conn, user_id)
     })
     .await

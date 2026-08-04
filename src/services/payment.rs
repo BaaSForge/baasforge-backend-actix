@@ -2,12 +2,14 @@ use crate::models::packages::Package;
 use crate::models::payments::{BillingPeriod, PaymentInsert, PaymentResponse};
 use crate::schema::{packages, payments};
 use crate::services::balance::unfreeze_user_billing;
-use crate::services::pricing::package_subscription_amount;
+use crate::services::pricing::package_balance_credit_amount;
 use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use uuid::Uuid;
+
+pub const FREE_PACKAGE_SLUG: &str = "free-trial";
 
 #[derive(Debug)]
 pub struct GrantedPackagePayment {
@@ -31,8 +33,9 @@ where
     let (paid_packages, _) = get_user_active_paid_packages(conn, user_id)?;
     let now = Utc::now();
     let is_annual = billing_period == BillingPeriod::Annual;
-    // Charged via Stripe and credited to balance — always the discounted sale price.
-    let amount = package_subscription_amount(package.price, package.discount_percent, is_annual);
+    // Balance credit (free plans may credit list price while Stripe charge is $0).
+    let amount =
+        package_balance_credit_amount(package.price, package.discount_percent, is_annual);
     let expires_at = if is_annual {
         now + Duration::days(365)
     } else {
@@ -115,6 +118,71 @@ where
         .unwrap_or(0);
 
     Ok((payments_with_packages, largest_tier))
+}
+
+/// If the user was on the free plan and it expired, grant another month (+$5 credit).
+/// Returns `true` when a renewal was granted.
+pub fn maybe_renew_free_package<C>(
+    conn: &mut C,
+    user_id: Uuid,
+) -> Result<bool, diesel::result::Error>
+where
+    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+        + diesel::connection::LoadConnection,
+{
+    let (active, _) = get_user_active_paid_packages(conn, user_id)?;
+    if !active.is_empty() {
+        return Ok(false);
+    }
+
+    let free_package: Package = match packages::table
+        .filter(packages::slug.eq(FREE_PACKAGE_SLUG))
+        .filter(packages::is_active.eq(true))
+        .select(Package::as_select())
+        .first::<Package>(conn)
+        .optional()?
+    {
+        Some(p) => p,
+        None => return Ok(false),
+    };
+
+    let last: PaymentResponse = match payments::table
+        .filter(payments::user_id.eq(user_id))
+        .filter(payments::is_success.eq(true))
+        .filter(payments::cancelled_at.is_null())
+        .order(payments::created_at.desc())
+        .select(PaymentResponse::as_select())
+        .first::<PaymentResponse>(conn)
+        .optional()?
+    {
+        Some(p) => p,
+        None => return Ok(false),
+    };
+
+    if last.package_id != free_package.id {
+        return Ok(false);
+    }
+
+    let Some(expires_at) = last.expires_at else {
+        return Ok(false);
+    };
+    if expires_at > Utc::now() {
+        return Ok(false);
+    }
+
+    let metadata = json!({
+        "provider": "system",
+        "reason": "free_package_auto_renew",
+        "previous_payment_id": last.id,
+    });
+    grant_package_payment(
+        conn,
+        user_id,
+        &free_package,
+        BillingPeriod::Monthly,
+        Some(metadata),
+    )?;
+    Ok(true)
 }
 
 #[derive(Debug, Clone, Copy, Queryable, Selectable)]

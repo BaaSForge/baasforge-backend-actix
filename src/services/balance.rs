@@ -3,7 +3,7 @@ use crate::models::top_ups::{TopUpInsert, TopUpResponse};
 use crate::models::withdrawals::{WithdrawalInsert, WithdrawalResponse};
 use crate::schema::{payments, projects, top_ups, users, withdrawals};
 use crate::services::payment::get_user_active_paid_packages;
-use crate::services::pricing::package_subscription_amount;
+use crate::services::pricing::package_balance_credit_amount;
 use crate::services::usage::{
     calculate_user_overall_usage_cost, calculate_user_usage_cost_between,
 };
@@ -166,13 +166,12 @@ where
     })
 }
 
-/// Balance credit for a package payment: same as the discounted amount charged
-/// (`package_subscription_amount`), not the undiscounted list price.
+/// Balance credit for a package payment (sale price; free plans credit list price).
 fn payment_credit_amount(payment: &PaymentResponse) -> f64 {
     let Some(list_price) = payment.package_price else {
         return payment.amount;
     };
-    package_subscription_amount(
+    package_balance_credit_amount(
         list_price,
         payment.package_discount,
         payment.billing_period == BillingPeriod::Annual,
