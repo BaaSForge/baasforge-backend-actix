@@ -3,6 +3,7 @@ use crate::models::packages::Package;
 use crate::models::payments::BillingPeriod;
 use crate::schema::packages;
 use crate::services::payment::grant_package_payment;
+use chrono::Utc;
 use diesel::prelude::*;
 use diesel::sql_types::{Bool, Text};
 use serde_json::json;
@@ -159,6 +160,51 @@ where
     grant_package_payment(conn, user_id, &package, billing_period, Some(gateway_metadata))
         .map_err(FulfillCheckoutError::Db)?;
     Ok(true)
+}
+
+/// Cancels a granted payment for this Checkout Session if one exists (async failure race).
+/// Returns `true` when a row was cancelled.
+pub fn cancel_checkout_session_payment<C>(
+    conn: &mut C,
+    session: &CheckoutSession,
+) -> Result<bool, diesel::result::Error>
+where
+    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+        + diesel::connection::LoadConnection,
+{
+    let session_id = session.id.to_string();
+    let now = Utc::now();
+    let updated = diesel::sql_query(
+        "UPDATE payments
+         SET cancelled_at = $1
+         WHERE is_success = true
+           AND cancelled_at IS NULL
+           AND gateway_metadata->>'checkout_session_id' = $2",
+    )
+    .bind::<diesel::sql_types::Timestamptz, _>(now)
+    .bind::<Text, _>(&session_id)
+    .execute(conn)?;
+    Ok(updated > 0)
+}
+
+pub fn checkout_session_log_context(session: &CheckoutSession) -> String {
+    let session_id = session.id.to_string();
+    let user_id = session
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("user_id"))
+        .map(String::as_str)
+        .unwrap_or("-");
+    let package_id = session
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("package_id"))
+        .map(String::as_str)
+        .unwrap_or("-");
+    format!(
+        "session_id={session_id} user_id={user_id} package_id={package_id} payment_status={}",
+        session.payment_status
+    )
 }
 
 fn billing_period_to_str(period: BillingPeriod) -> &'static str {
