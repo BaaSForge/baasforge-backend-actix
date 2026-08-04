@@ -7,19 +7,61 @@ use crate::services::payment::grant_package_payment;
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel::sql_types::{Bool, Text};
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
 use std::str::FromStr;
 use stripe::{
-    CheckoutSession, CheckoutSessionMode, CheckoutSessionPaymentStatus, Client,
-    CreateCheckoutSession, CreateCheckoutSessionLineItems,
-    CreateCheckoutSessionLineItemsPriceData, CreateCheckoutSessionLineItemsPriceDataProductData,
-    Currency, StripeError,
+    CheckoutSession, CheckoutSessionMode, Client, CreateCheckoutSession,
+    CreateCheckoutSessionLineItems, CreateCheckoutSessionLineItemsPriceData,
+    CreateCheckoutSessionLineItemsPriceDataProductData, Currency, StripeError,
 };
 use uuid::Uuid;
 
 pub const CHECKOUT_KIND_PACKAGE: &str = "package";
 pub const CHECKOUT_KIND_TOP_UP: &str = "top_up";
+
+/// Minimal checkout session fields used for fulfillment.
+/// Avoids deserializing the full Stripe `CheckoutSession` (breaks on newer API fields like `ui_mode=hosted_page`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CheckoutFulfillmentSession {
+    pub id: String,
+    pub payment_status: String,
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+impl CheckoutFulfillmentSession {
+    pub fn is_payable(&self) -> bool {
+        self.payment_status == "paid" || self.payment_status == "no_payment_required"
+    }
+
+    pub fn meta(&self, key: &str) -> Option<&str> {
+        self.metadata.as_ref().and_then(|m| m.get(key)).map(String::as_str)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct StripeWebhookEventEnvelope {
+    id: String,
+    #[serde(rename = "type")]
+    type_: String,
+    data: StripeWebhookEventData,
+}
+
+#[derive(Debug, Deserialize)]
+struct StripeWebhookEventData {
+    object: serde_json::Value,
+}
+
+pub fn parse_checkout_fulfillment_event(
+    payload: &str,
+) -> Result<(String, String, CheckoutFulfillmentSession), String> {
+    let envelope: StripeWebhookEventEnvelope =
+        serde_json::from_str(payload).map_err(|e| format!("event envelope: {e}"))?;
+    let session: CheckoutFulfillmentSession = serde_json::from_value(envelope.data.object)
+        .map_err(|e| format!("checkout session object: {e}"))?;
+    Ok((envelope.id, envelope.type_, session))
+}
 
 pub fn amount_to_unit_cents(amount: f64) -> i64 {
     (amount * 100.0).round() as i64
@@ -144,34 +186,29 @@ struct SessionExistsRow {
 
 pub fn fulfill_checkout_session<C>(
     conn: &mut C,
-    session: &CheckoutSession,
+    session: &CheckoutFulfillmentSession,
 ) -> Result<bool, FulfillCheckoutError>
 where
     C: diesel::connection::Connection<Backend = diesel::pg::Pg>
         + diesel::connection::LoadConnection,
 {
-    if session.payment_status == CheckoutSessionPaymentStatus::Unpaid {
+    if !session.is_payable() {
         return Ok(false);
     }
 
-    let session_id = session.id.to_string();
-    let kind = session
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get("kind"))
-        .map(String::as_str)
-        .unwrap_or(CHECKOUT_KIND_PACKAGE);
+    let session_id = session.id.as_str();
+    let kind = session.meta("kind").unwrap_or(CHECKOUT_KIND_PACKAGE);
 
     match kind {
-        CHECKOUT_KIND_TOP_UP => fulfill_top_up(conn, session, &session_id),
-        CHECKOUT_KIND_PACKAGE => fulfill_package(conn, session, &session_id),
+        CHECKOUT_KIND_TOP_UP => fulfill_top_up(conn, session, session_id),
+        CHECKOUT_KIND_PACKAGE => fulfill_package(conn, session, session_id),
         _ => Err(FulfillCheckoutError::InvalidMetadata("kind")),
     }
 }
 
 fn fulfill_package<C>(
     conn: &mut C,
-    session: &CheckoutSession,
+    session: &CheckoutFulfillmentSession,
     session_id: &str,
 ) -> Result<bool, FulfillCheckoutError>
 where
@@ -182,21 +219,20 @@ where
         return Ok(false);
     }
 
-    let metadata = session.metadata.as_ref();
-    let user_id = metadata
-        .and_then(|m| m.get("user_id"))
+    let user_id = session
+        .meta("user_id")
         .ok_or(FulfillCheckoutError::MissingMetadata("user_id"))
         .and_then(|s| {
             Uuid::parse_str(s).map_err(|_| FulfillCheckoutError::InvalidMetadata("user_id"))
         })?;
-    let package_id = metadata
-        .and_then(|m| m.get("package_id"))
+    let package_id = session
+        .meta("package_id")
         .ok_or(FulfillCheckoutError::MissingMetadata("package_id"))
         .and_then(|s| {
             Uuid::parse_str(s).map_err(|_| FulfillCheckoutError::InvalidMetadata("package_id"))
         })?;
-    let billing_period = metadata
-        .and_then(|m| m.get("billing_period"))
+    let billing_period = session
+        .meta("billing_period")
         .ok_or(FulfillCheckoutError::MissingMetadata("billing_period"))
         .and_then(|s| {
             billing_period_from_str(s)
@@ -225,7 +261,7 @@ where
 
 fn fulfill_top_up<C>(
     conn: &mut C,
-    session: &CheckoutSession,
+    session: &CheckoutFulfillmentSession,
     session_id: &str,
 ) -> Result<bool, FulfillCheckoutError>
 where
@@ -236,15 +272,14 @@ where
         return Ok(false);
     }
 
-    let metadata = session.metadata.as_ref();
-    let user_id = metadata
-        .and_then(|m| m.get("user_id"))
+    let user_id = session
+        .meta("user_id")
         .ok_or(FulfillCheckoutError::MissingMetadata("user_id"))
         .and_then(|s| {
             Uuid::parse_str(s).map_err(|_| FulfillCheckoutError::InvalidMetadata("user_id"))
         })?;
-    let amount = metadata
-        .and_then(|m| m.get("amount"))
+    let amount = session
+        .meta("amount")
         .ok_or(FulfillCheckoutError::MissingMetadata("amount"))
         .and_then(|s| {
             s.parse::<f64>()
@@ -288,13 +323,13 @@ where
 /// Returns `true` when a row was cancelled.
 pub fn cancel_checkout_session_payment<C>(
     conn: &mut C,
-    session: &CheckoutSession,
+    session: &CheckoutFulfillmentSession,
 ) -> Result<bool, diesel::result::Error>
 where
     C: diesel::connection::Connection<Backend = diesel::pg::Pg>
         + diesel::connection::LoadConnection,
 {
-    let session_id = session.id.to_string();
+    let session_id = session.id.as_str();
     let now = Utc::now();
     let updated = diesel::sql_query(
         "UPDATE payments
@@ -304,28 +339,17 @@ where
            AND gateway_metadata->>'checkout_session_id' = $2",
     )
     .bind::<diesel::sql_types::Timestamptz, _>(now)
-    .bind::<Text, _>(&session_id)
+    .bind::<Text, _>(session_id)
     .execute(conn)?;
     Ok(updated > 0)
 }
 
-pub fn checkout_session_log_context(session: &CheckoutSession) -> String {
-    let session_id = session.id.to_string();
-    let kind = session
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get("kind"))
-        .map(String::as_str)
-        .unwrap_or(CHECKOUT_KIND_PACKAGE);
-    let user_id = session
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get("user_id"))
-        .map(String::as_str)
-        .unwrap_or("-");
+pub fn checkout_session_log_context(session: &CheckoutFulfillmentSession) -> String {
+    let kind = session.meta("kind").unwrap_or(CHECKOUT_KIND_PACKAGE);
+    let user_id = session.meta("user_id").unwrap_or("-");
     format!(
-        "session_id={session_id} kind={kind} user_id={user_id} payment_status={}",
-        session.payment_status
+        "session_id={} kind={kind} user_id={user_id} payment_status={}",
+        session.id, session.payment_status
     )
 }
 
