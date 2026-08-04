@@ -166,6 +166,8 @@ where
     })
 }
 
+/// Balance credit for a package payment: same as the discounted amount charged
+/// (`package_subscription_amount`), not the undiscounted list price.
 fn payment_credit_amount(payment: &PaymentResponse) -> f64 {
     let Some(list_price) = payment.package_price else {
         return payment.amount;

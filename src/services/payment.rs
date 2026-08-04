@@ -31,6 +31,7 @@ where
     let (paid_packages, _) = get_user_active_paid_packages(conn, user_id)?;
     let now = Utc::now();
     let is_annual = billing_period == BillingPeriod::Annual;
+    // Charged via Stripe and credited to balance — always the discounted sale price.
     let amount = package_subscription_amount(package.price, package.discount_percent, is_annual);
     let expires_at = if is_annual {
         now + Duration::days(365)

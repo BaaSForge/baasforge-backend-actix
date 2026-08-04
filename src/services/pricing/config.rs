@@ -3,8 +3,8 @@ pub const LLM_PLATFORM_MARGIN: f64 = 0.25;
 
 // ── Billing period discount ───────────────────────────────────────────────────
 
-/// Fraction subtracted from the subscription cost for annual billing (20% off).
-/// Matches the standard used by GitHub, Vercel, Railway, and Linear.
+/// Fraction subtracted from the subscription **sale price** for annual billing (20% off).
+/// Lowers both Stripe charge and balance credit equally (not bonus credit above what was paid).
 pub const ANNUAL_BILLING_DISCOUNT: f64 = 0.20;
 
 // ── Tier volume factors (multipliers on compute, storage, and LLM rates) ──────

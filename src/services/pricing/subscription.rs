@@ -1,5 +1,9 @@
 use super::config::ANNUAL_BILLING_DISCOUNT;
 
+/// Amount charged for a package purchase (Stripe) and credited to the user's balance.
+///
+/// Package / annual discounts lower the **sale price**. We do not credit list price
+/// while charging less — balance increases by exactly this amount (pay $X → get $X credit).
 pub fn package_subscription_amount(
     list_monthly_price: f64,
     discount_percent: Option<i32>,
