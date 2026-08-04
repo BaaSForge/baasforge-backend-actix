@@ -2,6 +2,7 @@ use crate::configs::Settings;
 use crate::models::packages::Package;
 use crate::models::payments::BillingPeriod;
 use crate::schema::packages;
+use crate::services::balance::record_top_up;
 use crate::services::payment::grant_package_payment;
 use chrono::Utc;
 use diesel::prelude::*;
@@ -17,6 +18,9 @@ use stripe::{
 };
 use uuid::Uuid;
 
+pub const CHECKOUT_KIND_PACKAGE: &str = "package";
+pub const CHECKOUT_KIND_TOP_UP: &str = "top_up";
+
 pub fn amount_to_unit_cents(amount: f64) -> i64 {
     (amount * 100.0).round() as i64
 }
@@ -28,6 +32,58 @@ pub async fn create_package_checkout_session(
     billing_period: BillingPeriod,
     amount: f64,
 ) -> Result<CheckoutSession, StripeError> {
+    let user_id_str = user_id.to_string();
+    let package_id_str = package.id.to_string();
+    let billing_period_str = billing_period_to_str(billing_period).to_string();
+    let product_name = format!("{} ({})", package.title, billing_period_str);
+
+    let mut metadata = HashMap::new();
+    metadata.insert("kind".to_string(), CHECKOUT_KIND_PACKAGE.to_string());
+    metadata.insert("user_id".to_string(), user_id_str.clone());
+    metadata.insert("package_id".to_string(), package_id_str);
+    metadata.insert("billing_period".to_string(), billing_period_str);
+
+    create_checkout_session(
+        settings,
+        &user_id_str,
+        metadata,
+        amount,
+        product_name,
+        package.description.clone(),
+    )
+    .await
+}
+
+pub async fn create_top_up_checkout_session(
+    settings: &Settings,
+    user_id: Uuid,
+    amount: f64,
+) -> Result<CheckoutSession, StripeError> {
+    let user_id_str = user_id.to_string();
+    let mut metadata = HashMap::new();
+    metadata.insert("kind".to_string(), CHECKOUT_KIND_TOP_UP.to_string());
+    metadata.insert("user_id".to_string(), user_id_str.clone());
+    metadata.insert("amount".to_string(), format!("{amount:.2}"));
+
+    create_checkout_session(
+        settings,
+        &user_id_str,
+        metadata,
+        amount,
+        "Account top up".to_string(),
+        Some("Add funds to your BaaS Forge balance".to_string()),
+    )
+    .await
+}
+
+async fn create_checkout_session(
+    settings: &Settings,
+    client_reference_id: &str,
+    metadata: HashMap<String, String>,
+    amount: f64,
+    product_name: String,
+    product_description: Option<String>,
+) -> Result<CheckoutSession, StripeError> {
     let unit_amount = amount_to_unit_cents(amount);
     let currency = Currency::from_str(&settings.stripe_currency).map_err(|_| {
         StripeError::ClientError(format!(
@@ -36,21 +92,11 @@ pub async fn create_package_checkout_session(
         ))
     })?;
 
-    let user_id_str = user_id.to_string();
-    let package_id_str = package.id.to_string();
-    let billing_period_str = billing_period_to_str(billing_period).to_string();
-    let product_name = format!("{} ({})", package.title, billing_period_str);
-
-    let mut metadata = HashMap::new();
-    metadata.insert("user_id".to_string(), user_id_str.clone());
-    metadata.insert("package_id".to_string(), package_id_str);
-    metadata.insert("billing_period".to_string(), billing_period_str);
-
     let mut params = CreateCheckoutSession::new();
     params.mode = Some(CheckoutSessionMode::Payment);
     params.success_url = Some(settings.stripe_success_url.as_str());
     params.cancel_url = Some(settings.stripe_cancel_url.as_str());
-    params.client_reference_id = Some(user_id_str.as_str());
+    params.client_reference_id = Some(client_reference_id);
     params.metadata = Some(metadata);
     params.line_items = Some(vec![CreateCheckoutSessionLineItems {
         quantity: Some(1),
@@ -59,7 +105,7 @@ pub async fn create_package_checkout_session(
             unit_amount: Some(unit_amount),
             product_data: Some(CreateCheckoutSessionLineItemsPriceDataProductData {
                 name: product_name,
-                description: package.description.clone(),
+                description: product_description,
                 ..Default::default()
             }),
             ..Default::default()
@@ -109,16 +155,30 @@ where
     }
 
     let session_id = session.id.to_string();
-    let already: SessionExistsRow = diesel::sql_query(
-        "SELECT EXISTS(
-            SELECT 1 FROM payments
-            WHERE gateway_metadata->>'checkout_session_id' = $1
-        ) AS exists",
-    )
-    .bind::<Text, _>(&session_id)
-    .get_result(conn)
-    .map_err(FulfillCheckoutError::Db)?;
-    if already.exists {
+    let kind = session
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("kind"))
+        .map(String::as_str)
+        .unwrap_or(CHECKOUT_KIND_PACKAGE);
+
+    match kind {
+        CHECKOUT_KIND_TOP_UP => fulfill_top_up(conn, session, &session_id),
+        CHECKOUT_KIND_PACKAGE => fulfill_package(conn, session, &session_id),
+        _ => Err(FulfillCheckoutError::InvalidMetadata("kind")),
+    }
+}
+
+fn fulfill_package<C>(
+    conn: &mut C,
+    session: &CheckoutSession,
+    session_id: &str,
+) -> Result<bool, FulfillCheckoutError>
+where
+    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+        + diesel::connection::LoadConnection,
+{
+    if session_already_recorded(conn, "payments", session_id)? {
         return Ok(false);
     }
 
@@ -156,13 +216,75 @@ where
     let gateway_metadata = json!({
         "provider": "stripe",
         "checkout_session_id": session_id,
+        "kind": CHECKOUT_KIND_PACKAGE,
     });
     grant_package_payment(conn, user_id, &package, billing_period, Some(gateway_metadata))
         .map_err(FulfillCheckoutError::Db)?;
     Ok(true)
 }
 
-/// Cancels a granted payment for this Checkout Session if one exists (async failure race).
+fn fulfill_top_up<C>(
+    conn: &mut C,
+    session: &CheckoutSession,
+    session_id: &str,
+) -> Result<bool, FulfillCheckoutError>
+where
+    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+        + diesel::connection::LoadConnection,
+{
+    if session_already_recorded(conn, "top_ups", session_id)? {
+        return Ok(false);
+    }
+
+    let metadata = session.metadata.as_ref();
+    let user_id = metadata
+        .and_then(|m| m.get("user_id"))
+        .ok_or(FulfillCheckoutError::MissingMetadata("user_id"))
+        .and_then(|s| {
+            Uuid::parse_str(s).map_err(|_| FulfillCheckoutError::InvalidMetadata("user_id"))
+        })?;
+    let amount = metadata
+        .and_then(|m| m.get("amount"))
+        .ok_or(FulfillCheckoutError::MissingMetadata("amount"))
+        .and_then(|s| {
+            s.parse::<f64>()
+                .ok()
+                .filter(|a| a.is_finite() && *a > 0.0)
+                .ok_or(FulfillCheckoutError::InvalidMetadata("amount"))
+        })?;
+
+    let gateway_metadata = json!({
+        "provider": "stripe",
+        "checkout_session_id": session_id,
+        "kind": CHECKOUT_KIND_TOP_UP,
+    });
+    record_top_up(conn, user_id, amount, Some(gateway_metadata)).map_err(FulfillCheckoutError::Db)?;
+    Ok(true)
+}
+
+fn session_already_recorded<C>(
+    conn: &mut C,
+    table: &str,
+    session_id: &str,
+) -> Result<bool, FulfillCheckoutError>
+where
+    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+        + diesel::connection::LoadConnection,
+{
+    let sql = format!(
+        "SELECT EXISTS(
+            SELECT 1 FROM {table}
+            WHERE gateway_metadata->>'checkout_session_id' = $1
+        ) AS exists"
+    );
+    let already: SessionExistsRow = diesel::sql_query(sql)
+        .bind::<Text, _>(session_id)
+        .get_result(conn)
+        .map_err(FulfillCheckoutError::Db)?;
+    Ok(already.exists)
+}
+
+/// Cancels a granted package payment for this Checkout Session if one exists (async failure race).
 /// Returns `true` when a row was cancelled.
 pub fn cancel_checkout_session_payment<C>(
     conn: &mut C,
@@ -189,20 +311,20 @@ where
 
 pub fn checkout_session_log_context(session: &CheckoutSession) -> String {
     let session_id = session.id.to_string();
+    let kind = session
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("kind"))
+        .map(String::as_str)
+        .unwrap_or(CHECKOUT_KIND_PACKAGE);
     let user_id = session
         .metadata
         .as_ref()
         .and_then(|m| m.get("user_id"))
         .map(String::as_str)
         .unwrap_or("-");
-    let package_id = session
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get("package_id"))
-        .map(String::as_str)
-        .unwrap_or("-");
     format!(
-        "session_id={session_id} user_id={user_id} package_id={package_id} payment_status={}",
+        "session_id={session_id} kind={kind} user_id={user_id} payment_status={}",
         session.payment_status
     )
 }

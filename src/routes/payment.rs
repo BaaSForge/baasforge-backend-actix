@@ -6,8 +6,8 @@ use crate::models::top_ups::TopUpResponse;
 use crate::models::withdrawals::WithdrawalResponse;
 use crate::schema::{payments, top_ups, withdrawals};
 use crate::services::balance::{
-    cancel_active_subscriptions, get_subscription_reserve, get_user_balance, record_top_up,
-    record_withdrawal,
+    // cancel_active_subscriptions, record_withdrawal,
+    get_subscription_reserve, get_user_balance,
 };
 use crate::services::payment::get_user_active_paid_packages;
 use crate::{
@@ -109,27 +109,29 @@ pub async fn handle_initiate_top_up(
         ));
     }
 
-    let top_up = match database::block_on_db(&context.pool, move |conn| {
-        record_top_up(conn, user_id, amount, None)
-    })
+    match crate::services::stripe::create_top_up_checkout_session(
+        &context.settings,
+        user_id,
+        amount,
+    )
     .await
     {
-        Ok(t) => t,
+        Ok(session) => HttpResponse::Created().json(api_success(
+            "Checkout session created",
+            json!({
+                "amount": amount,
+                "checkout_url": session.url,
+                "session_id": session.id,
+            }),
+        )),
         Err(e) => {
-            log::error!("[handle_initiate_top_up] DB/block error: {}", e);
-            return HttpResponse::ServiceUnavailable()
-                .json(api_error("Database temporarily unavailable", json!({})));
+            log::error!("[handle_initiate_top_up] Stripe checkout error: {}", e);
+            HttpResponse::BadGateway().json(api_error(
+                "Failed to create Stripe checkout session",
+                json!({ "detail": e.to_string() }),
+            ))
         }
-    };
-
-    HttpResponse::Created().json(api_success(
-        "Top up initiated successfully",
-        json!({
-            "id": top_up.id,
-            "amount": top_up.amount,
-            "created_at": top_up.created_at,
-        }),
-    ))
+    }
 }
 
 #[derive(Deserialize)]
@@ -138,10 +140,17 @@ pub struct InitiateWithdrawalRequest {
 }
 
 pub async fn handle_initiate_withdrawal(
-    context: web::Data<AppContext>,
-    req: HttpRequest,
-    body: web::Json<InitiateWithdrawalRequest>,
+    _context: web::Data<AppContext>,
+    _req: HttpRequest,
+    _body: web::Json<InitiateWithdrawalRequest>,
 ) -> HttpResponse {
+    // Temporarily disabled — restore the implementation below when re-enabling withdrawals.
+    return HttpResponse::ServiceUnavailable().json(api_error(
+        "Withdrawals are temporarily unavailable. Please try again later.",
+        json!({}),
+    ));
+
+    /*
     let extensions = req.extensions();
 
     let access_payload = extensions
@@ -214,6 +223,7 @@ pub async fn handle_initiate_withdrawal(
                 .json(api_error("Database temporarily unavailable", json!({})))
         }
     }
+    */
 }
 
 pub async fn handle_get_subscription_reserve(
