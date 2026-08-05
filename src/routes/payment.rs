@@ -178,9 +178,9 @@ pub async fn handle_initiate_withdrawal(
 
     let result = database::block_on_db(&context.pool, move |conn| {
         let balance = get_user_balance(conn, user_id)?;
-        if amount > balance.balance {
+        if amount > balance.withdrawable {
             return Ok(WithdrawOut::InsufficientBalance {
-                balance: balance.balance,
+                balance: balance.withdrawable,
             });
         }
         let reserve = get_subscription_reserve(conn, user_id)?;
@@ -202,8 +202,8 @@ pub async fn handle_initiate_withdrawal(
     match result {
         Ok(WithdrawOut::InsufficientBalance { balance }) => {
             HttpResponse::BadRequest().json(api_error(
-                "Amount exceeds available balance",
-                json!({ "amount": amount, "balance": balance }),
+                "Amount exceeds withdrawable balance",
+                json!({ "amount": amount, "withdrawable": balance }),
             ))
         }
         Ok(WithdrawOut::Ok {

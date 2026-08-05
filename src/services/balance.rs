@@ -3,7 +3,7 @@ use crate::models::top_ups::{TopUpInsert, TopUpResponse};
 use crate::models::withdrawals::{WithdrawalInsert, WithdrawalResponse};
 use crate::schema::{payments, projects, top_ups, users, withdrawals};
 use crate::services::payment::get_user_active_paid_packages;
-use crate::services::pricing::package_balance_credit_amount;
+use crate::services::pricing::{package_balance_credit_amount, package_subscription_amount};
 use crate::services::usage::{
     calculate_user_overall_usage_cost, calculate_user_usage_cost_between,
 };
@@ -22,6 +22,9 @@ pub struct UserBalance {
     pub withdrawn: f64,
     pub total_usage: f64,
     pub balance: f64,
+    /// Cash that can leave the platform (paid sale amounts + top-ups − withdrawn),
+    /// capped by remaining balance. Discount bonus credit is usage-only.
+    pub withdrawable: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -141,6 +144,11 @@ where
         .map(payment_credit_amount)
         .sum();
 
+    let package_paid: f64 = successful_payments
+        .iter()
+        .map(payment_paid_amount)
+        .sum();
+
     let top_ups_total: f64 = top_ups::table
         .filter(top_ups::user_id.eq(user_id))
         .select(sum(top_ups::amount))
@@ -155,6 +163,8 @@ where
 
     let deposited = package_deposits + top_ups_total;
     let total_usage = calculate_user_overall_usage_cost(conn, user_id)?;
+    let balance = deposited - withdrawn - total_usage;
+    let cash_net = (package_paid + top_ups_total - withdrawn).max(0.0);
 
     Ok(UserBalance {
         package_deposits,
@@ -162,16 +172,29 @@ where
         deposited,
         withdrawn,
         total_usage,
-        balance: deposited - withdrawn - total_usage,
+        balance,
+        withdrawable: balance.min(cash_net).max(0.0),
     })
 }
 
-/// Balance credit for a package payment (sale price; free plans credit list price).
+/// Balance credit for a package payment (list price; discounts are promotional).
 fn payment_credit_amount(payment: &PaymentResponse) -> f64 {
     let Some(list_price) = payment.package_price else {
         return payment.amount;
     };
     package_balance_credit_amount(
+        list_price,
+        payment.package_discount,
+        payment.billing_period == BillingPeriod::Annual,
+    )
+}
+
+/// Cash actually paid for a package (sale price after discounts).
+fn payment_paid_amount(payment: &PaymentResponse) -> f64 {
+    let Some(list_price) = payment.package_price else {
+        return payment.amount;
+    };
+    package_subscription_amount(
         list_price,
         payment.package_discount,
         payment.billing_period == BillingPeriod::Annual,
@@ -195,7 +218,7 @@ where
     else {
         return Ok(SubscriptionReserve {
             min_balance_to_keep: 0.0,
-            max_withdraw_without_cancel: balance.balance.max(0.0),
+            max_withdraw_without_cancel: balance.withdrawable,
             balance: balance.balance,
             effective_package_price: 0.0,
             period_usage_cost: 0.0,
@@ -206,7 +229,9 @@ where
     let period_usage_cost =
         calculate_user_usage_cost_between(conn, user_id, payment.created_at, Utc::now())?;
     let min_balance_to_keep = (effective_package_price - period_usage_cost).max(0.0);
-    let max_withdraw_without_cancel = (balance.balance - min_balance_to_keep).max(0.0);
+    let max_withdraw_without_cancel = (balance.balance - min_balance_to_keep)
+        .min(balance.withdrawable)
+        .max(0.0);
 
     Ok(SubscriptionReserve {
         min_balance_to_keep,

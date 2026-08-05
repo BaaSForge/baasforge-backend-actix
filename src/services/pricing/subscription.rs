@@ -2,9 +2,9 @@ use super::config::ANNUAL_BILLING_DISCOUNT;
 
 /// Amount charged via Stripe for a package purchase.
 ///
-/// Package / annual discounts lower the **sale price**. For paid packages, balance
-/// credit matches this amount (pay $X → get $X). Free plans (sale `$0` with list
-/// price > 0) still credit list price — see [`package_balance_credit_amount`].
+/// Package / annual discounts lower the **sale price**. Balance credit uses the
+/// list price instead — see [`package_balance_credit_amount`]. The difference is
+/// promotional and is not withdrawable.
 pub fn package_subscription_amount(
     list_monthly_price: f64,
     discount_percent: Option<i32>,
@@ -21,17 +21,44 @@ pub fn package_subscription_amount(
 
 /// Amount added to the user's balance for a package payment.
 ///
-/// Free plans (100% off → `$0` charge, list price > 0) credit the list monthly
-/// price as promotional balance. Paid packages credit the sale price.
+/// Credits the **list price** (no package or annual discount). Example: list $15
+/// with discounts that make the Stripe charge $10 → balance +$15. Free plans
+/// (100% off) still credit list price while charging $0.
 pub fn package_balance_credit_amount(
     list_monthly_price: f64,
-    discount_percent: Option<i32>,
+    _discount_percent: Option<i32>,
     is_annual: bool,
 ) -> f64 {
-    let sale = package_subscription_amount(list_monthly_price, discount_percent, is_annual);
-    if sale <= 0.0 && list_monthly_price > 0.0 {
-        list_monthly_price
+    if is_annual {
+        list_monthly_price * 12.0
     } else {
-        sale
+        list_monthly_price
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paid_package_credits_list_not_sale() {
+        let sale = package_subscription_amount(15.0, Some(40), false);
+        assert!((sale - 9.0).abs() < 1e-9);
+        assert_eq!(package_balance_credit_amount(15.0, Some(40), false), 15.0);
+    }
+
+    #[test]
+    fn annual_credits_full_list_year() {
+        assert_eq!(
+            package_subscription_amount(10.0, Some(0), true),
+            10.0 * 12.0 * 0.8
+        );
+        assert_eq!(package_balance_credit_amount(10.0, Some(0), true), 120.0);
+    }
+
+    #[test]
+    fn free_plan_credits_list_while_charging_zero() {
+        assert_eq!(package_subscription_amount(5.0, Some(100), false), 0.0);
+        assert_eq!(package_balance_credit_amount(5.0, Some(100), false), 5.0);
     }
 }

@@ -33,7 +33,7 @@ where
     let (paid_packages, _) = get_user_active_paid_packages(conn, user_id)?;
     let now = Utc::now();
     let is_annual = billing_period == BillingPeriod::Annual;
-    // Balance credit (free plans may credit list price while Stripe charge is $0).
+    // Balance credit = list price; Stripe charges sale price separately.
     let amount =
         package_balance_credit_amount(package.price, package.discount_percent, is_annual);
     let expires_at = if is_annual {
@@ -324,16 +324,16 @@ where
 
 pub const PACKAGE_PAID_FEATURES: [(&str, &[PaidFeature]); 4] = [
     ("free-trial", &[]),
-    ("basic", &[PaidFeature::LotsOfProjects]),
+    ("solo", &[PaidFeature::LotsOfProjects]),
     (
-        "pro",
+        "team",
         &[
             PaidFeature::LotsOfProjects,
             PaidFeature::MonitoringDashboard,
         ],
     ),
     (
-        "ultra",
+        "scale",
         &[
             PaidFeature::LotsOfProjects,
             PaidFeature::MonitoringDashboard,
