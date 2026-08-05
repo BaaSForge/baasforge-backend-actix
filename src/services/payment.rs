@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-pub const FREE_PACKAGE_SLUG: &str = "free-trial";
+pub const FREE_PACKAGE_SLUG: &str = "free";
 
 #[derive(Debug)]
 pub struct GrantedPackagePayment {
@@ -323,7 +323,7 @@ where
 }
 
 pub const PACKAGE_PAID_FEATURES: [(&str, &[PaidFeature]); 4] = [
-    ("free-trial", &[]),
+    ("free", &[]),
     ("solo", &[PaidFeature::LotsOfProjects]),
     (
         "team",

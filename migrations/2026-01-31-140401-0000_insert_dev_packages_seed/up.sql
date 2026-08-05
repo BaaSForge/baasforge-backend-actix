@@ -13,7 +13,7 @@ BEGIN
     VALUES
         (
             'Free',
-            'free-trial',
+            'free',
             1,
             E'- Free plan — **$0** charged every month\n- **$5** credited to your balance each month while you stay on Free\n- Renews automatically when your Free period ends (or claim again after it expires)\n- Up to **2 projects**\n- Up to **1 stage runtime** (plus production)\n- Standard usage rates (no volume discount on compute, storage, or AI tokens)\n- Full platform access to build and deploy',
             5,
