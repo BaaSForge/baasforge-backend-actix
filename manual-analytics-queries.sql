@@ -1,111 +1,71 @@
--- Manual analytics queries (copy/paste one at a time into your DB client)
--- Note: users & projects have no created_at; time filters use UUID v7 timestamp from id.
--- Note: project_units have no timestamps; "last 3 days" uses successful create/modify tool messages.
+-- Manual analytics snapshot (run once → one table)
+-- Notes:
+--   users/projects last_3_days: UUID v7 timestamp from id (no created_at)
+--   units last_3_days: successful create/modify tool messages
+--   compute_usd: $8e-9 per GB·ms (LLM/storage omitted)
 
--- =============================================================================
--- Users
--- =============================================================================
+WITH metrics AS (
+  SELECT
+    (SELECT COUNT(*) FROM users) AS users_total,
+    (SELECT COUNT(*) FROM users
+     WHERE to_timestamp((
+       (get_byte(uuid_send(id), 0)::bigint << 40)
+       | (get_byte(uuid_send(id), 1)::bigint << 32)
+       | (get_byte(uuid_send(id), 2)::bigint << 24)
+       | (get_byte(uuid_send(id), 3)::bigint << 16)
+       | (get_byte(uuid_send(id), 4)::bigint << 8)
+       | get_byte(uuid_send(id), 5)::bigint
+     ) / 1000.0) >= NOW() - INTERVAL '3 days') AS users_last_3_days,
 
--- Number of users
-SELECT COUNT(*) AS users_total
-FROM users;
+    (SELECT COUNT(*) FROM projects) AS projects_total,
+    (SELECT COUNT(*) FROM projects
+     WHERE to_timestamp((
+       (get_byte(uuid_send(id), 0)::bigint << 40)
+       | (get_byte(uuid_send(id), 1)::bigint << 32)
+       | (get_byte(uuid_send(id), 2)::bigint << 24)
+       | (get_byte(uuid_send(id), 3)::bigint << 16)
+       | (get_byte(uuid_send(id), 4)::bigint << 8)
+       | get_byte(uuid_send(id), 5)::bigint
+     ) / 1000.0) >= NOW() - INTERVAL '3 days') AS projects_last_3_days,
 
--- Number of users in last 3 days
-SELECT COUNT(*) AS users_last_3_days
-FROM users
-WHERE to_timestamp(
-        (
-          (get_byte(uuid_send(id), 0)::bigint << 40)
-          | (get_byte(uuid_send(id), 1)::bigint << 32)
-          | (get_byte(uuid_send(id), 2)::bigint << 24)
-          | (get_byte(uuid_send(id), 3)::bigint << 16)
-          | (get_byte(uuid_send(id), 4)::bigint << 8)
-          | get_byte(uuid_send(id), 5)::bigint
-        ) / 1000.0
-      ) >= NOW() - INTERVAL '3 days';
+    (SELECT COUNT(*) FROM chat_sessions) AS chat_sessions_total,
+    (SELECT COUNT(*) FROM chat_sessions
+     WHERE created_at >= NOW() - INTERVAL '3 days') AS chat_sessions_last_3_days,
 
--- =============================================================================
--- Projects
--- =============================================================================
+    (SELECT COUNT(*) FROM project_units WHERE revision = 1) AS units_created_total,
+    (SELECT COUNT(*) FROM chat_messages
+     WHERE type = 'tool_create_unit'
+       AND status = 'completed'
+       AND payload ? 'created_unit'
+       AND payload->'created_unit' IS NOT NULL
+       AND payload->>'created_unit' <> 'null'
+       AND created_at >= NOW() - INTERVAL '3 days') AS units_created_last_3_days,
 
--- Number of projects
-SELECT COUNT(*) AS projects_total
-FROM projects;
+    (SELECT COUNT(*) FROM project_units WHERE revision > 1) AS units_modified_total,
+    (SELECT COUNT(*) FROM chat_messages
+     WHERE type = 'tool_modify_unit'
+       AND status = 'completed'
+       AND payload ? 'revised_unit'
+       AND payload->'revised_unit' IS NOT NULL
+       AND payload->>'revised_unit' <> 'null'
+       AND created_at >= NOW() - INTERVAL '3 days') AS units_modified_last_3_days,
 
--- Number of projects in last 3 days
-SELECT COUNT(*) AS projects_last_3_days
-FROM projects
-WHERE to_timestamp(
-        (
-          (get_byte(uuid_send(id), 0)::bigint << 40)
-          | (get_byte(uuid_send(id), 1)::bigint << 32)
-          | (get_byte(uuid_send(id), 2)::bigint << 24)
-          | (get_byte(uuid_send(id), 3)::bigint << 16)
-          | (get_byte(uuid_send(id), 4)::bigint << 8)
-          | get_byte(uuid_send(id), 5)::bigint
-        ) / 1000.0
-      ) >= NOW() - INTERVAL '3 days';
-
--- =============================================================================
--- Chat sessions
--- =============================================================================
-
--- Number of chat sessions made by users
-SELECT COUNT(*) AS chat_sessions_total
-FROM chat_sessions;
-
--- Number of chat sessions made by users in last 3 days
-SELECT COUNT(*) AS chat_sessions_last_3_days
-FROM chat_sessions
-WHERE created_at >= NOW() - INTERVAL '3 days';
-
--- =============================================================================
--- Units created (revision = 1)
--- =============================================================================
-
--- Number of units created
-SELECT COUNT(*) AS units_created_total
-FROM project_units
-WHERE revision = 1;
-
--- Number of units created in last 3 days
-SELECT COUNT(*) AS units_created_last_3_days
-FROM chat_messages
-WHERE type = 'tool_create_unit'
-  AND status = 'completed'
-  AND payload ? 'created_unit'
-  AND payload->'created_unit' IS NOT NULL
-  AND payload->>'created_unit' <> 'null'
-  AND created_at >= NOW() - INTERVAL '3 days';
-
--- =============================================================================
--- Units modified (revision > 1)
--- =============================================================================
-
--- Number of units modified
-SELECT COUNT(*) AS units_modified_total
-FROM project_units
-WHERE revision > 1;
-
--- Number of units modified in last 3 days
-SELECT COUNT(*) AS units_modified_last_3_days
-FROM chat_messages
-WHERE type = 'tool_modify_unit'
-  AND status = 'completed'
-  AND payload ? 'revised_unit'
-  AND payload->'revised_unit' IS NOT NULL
-  AND payload->>'revised_unit' <> 'null'
-  AND created_at >= NOW() - INTERVAL '3 days';
-
--- =============================================================================
--- Usages / costs (project_usage_entries rows)
--- =============================================================================
-
--- Total usages of all users (cost rows)
-SELECT COUNT(*) AS usage_rows_total
-FROM project_usage_entries;
-
--- Total usages of all users (cost rows) in last 3 days
-SELECT COUNT(*) AS usage_rows_last_3_days
-FROM project_usage_entries
-WHERE recorded_at >= NOW() - INTERVAL '3 days';
+    (SELECT COALESCE(SUM(quantity) * 8e-9, 0)
+     FROM project_usage_entries
+     WHERE kind = 'compute' AND metric = 'compute.gb_ms') AS compute_usd_total,
+    (SELECT COALESCE(SUM(quantity) * 8e-9, 0)
+     FROM project_usage_entries
+     WHERE kind = 'compute'
+       AND metric = 'compute.gb_ms'
+       AND recorded_at >= NOW() - INTERVAL '3 days') AS compute_usd_last_3_days
+)
+SELECT v.metric, v.total, v.last_3_days
+FROM metrics,
+LATERAL (VALUES
+  ('users',          users_total::numeric,          users_last_3_days::numeric),
+  ('projects',       projects_total::numeric,       projects_last_3_days::numeric),
+  ('chat_sessions',  chat_sessions_total::numeric,  chat_sessions_last_3_days::numeric),
+  ('units_created',  units_created_total::numeric,  units_created_last_3_days::numeric),
+  ('units_modified', units_modified_total::numeric, units_modified_last_3_days::numeric),
+  ('compute_usd',    ROUND(compute_usd_total::numeric, 6), ROUND(compute_usd_last_3_days::numeric, 6))
+) AS v(metric, total, last_3_days);
