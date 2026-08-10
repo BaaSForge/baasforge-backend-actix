@@ -3,7 +3,9 @@ use crate::middlewares::auth::AccessPayload;
 use crate::models::packages::Package;
 use crate::models::payments::BillingPeriod;
 use crate::schema::packages;
-use crate::services::payment::{get_user_active_paid_packages, grant_package_payment};
+use crate::services::payment::{
+    FREE_PACKAGE_SLUG, get_user_active_paid_packages, grant_package_payment,
+};
 use crate::services::pricing::package_subscription_amount;
 use crate::services::stripe::{amount_to_unit_cents, create_package_checkout_session};
 use crate::{
@@ -42,6 +44,7 @@ pub async fn handle_initiate_purchase(
     enum PurchasePrep {
         PackageNotFound,
         TierNotLarger,
+        FreeAnnualNotAllowed,
         Ok { package: Package, amount: f64 },
     }
     let prep = database::block_on_db(&context.pool, move |conn| {
@@ -59,6 +62,9 @@ pub async fn handle_initiate_purchase(
         if package.tier <= largest_tier {
             return Ok(PurchasePrep::TierNotLarger);
         }
+        if package.slug == FREE_PACKAGE_SLUG && is_annual {
+            return Ok(PurchasePrep::FreeAnnualNotAllowed);
+        }
         let amount =
             package_subscription_amount(package.price, package.discount_percent, is_annual);
         Ok(PurchasePrep::Ok { package, amount })
@@ -75,6 +81,12 @@ pub async fn handle_initiate_purchase(
         Ok(PurchasePrep::TierNotLarger) => {
             return HttpResponse::BadRequest().json(api_error(
                 "Target package tier must be larger than your current largest tier",
+                json!({}),
+            ));
+        }
+        Ok(PurchasePrep::FreeAnnualNotAllowed) => {
+            return HttpResponse::BadRequest().json(api_error(
+                "Free package is only available with monthly billing",
                 json!({}),
             ));
         }
