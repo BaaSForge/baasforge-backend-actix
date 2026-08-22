@@ -9,7 +9,7 @@ WITH params AS (
   SELECT 1 AS page, 5 AS page_size
 ),
 page_users AS (
-  SELECT u.id, u.full_name
+  SELECT u.id, u.full_name, u.email_in_platform AS email
   FROM users u
   ORDER BY u.full_name NULLS LAST, u.id
   LIMIT (SELECT page_size FROM params)
@@ -19,6 +19,7 @@ metrics AS (
   SELECT
     pu.id AS user_id,
     pu.full_name,
+    pu.email,
 
     (SELECT COUNT(*) FROM projects p WHERE p.owner_user_id = pu.id) AS projects_total,
     (SELECT COUNT(*) FROM projects p
@@ -78,7 +79,7 @@ metrics AS (
        AND e.recorded_at >= NOW() - INTERVAL '3 days') AS compute_usd_last_3_days
   FROM page_users pu
 )
-SELECT m.user_id, m.full_name, v.metric, v.total, v.last_3_days
+SELECT m.user_id, m.full_name, m.email, v.metric, v.total, v.last_3_days
 FROM metrics m,
 LATERAL (VALUES
   (1, 'projects',       m.projects_total::numeric,       m.projects_last_3_days::numeric),
