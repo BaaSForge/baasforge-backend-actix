@@ -2346,9 +2346,10 @@ struct TracePlan {
     unit_id: Option<String>,
 }
 
-/// Loads full Jaeger trace JSON for the given ids, verifies `baal.project.id` on each trace matches
-/// the path project, optionally attaches the release row, runtime row, and a unit row resolved only
-/// from that release’s combined snapshot metadata (no path/id DB fallback outside the snapshot).
+/// Loads full Jaeger trace JSON for the given ids, verifies the legacy BaaSForge tag
+/// `baal.project.id` on each trace matches the path project, optionally attaches the release row,
+/// runtime row, and a unit row resolved only from that release’s combined snapshot metadata
+/// (no path/id DB fallback outside the snapshot).
 pub async fn handle_load_project_traces_by_ids(
     context: web::Data<AppContext>,
     path: web::Path<Uuid>,

@@ -1,37 +1,52 @@
-# Chat session queue (RabbitMQ)
+# Chat session queue
 
-The API publishes work to `chat_session_exchange`; the chat worker consumes from `chat_session_work_queue`. See `queue_setup_http.sh` for declarations.
+The API publishes work to `chat_session_exchange`. `chat_worker` consumes
+`chat_session_work_queue`. `queue_setup_http.sh` creates these resources.
 
-## What one queue message represents
+## One queue message
 
-Each message is **at most**:
+One message contains at most:
 
-- one LLM “thinking”,
-- plus content retrieval for that step,
-- plus **tool result retrieval** needed to build the model context (history) for that step.
+- One LLM generation pass
+- Content retrieval for that pass
+- Tool-result retrieval needed to build the model context
 
-**Tool invocations themselves are not bounded by the invoker message.** When the model requests tools, those runs are handled as **separate queue messages** (continuations and tool-message handlers). The worker **acks** after each of those steps completes.
+Tool execution is separate work. The worker publishes each tool call and each
+later LLM continuation as another queue message. It acknowledges a message
+after that step finishes.
 
-So you do **not** need `CHAT_CONSUMER_TIMEOUT_SECS` to cover an entire multi-tool conversation end-to-end—only the **longest single consumer pass** for one message (one LLM round + its immediate retrievals for that round). Work is split across messages and consumed **separately**.
+`CHAT_CONSUMER_TIMEOUT_SECS` must cover the slowest single message. It does not
+need to cover a complete multi-tool conversation.
 
-## `CHAT_CONSUMER_TIMEOUT_SECS` and `x-consumer-timeout`
+## Consumer timeout
 
-RabbitMQ’s queue argument `x-consumer-timeout` (milliseconds) is derived from `CHAT_CONSUMER_TIMEOUT_SECS` in `.env` when you run `queue_setup_http.sh`. If a consumer does not **ack** within that window, the broker closes the channel and the message can be redelivered.
+`queue_setup_http.sh` converts `CHAT_CONSUMER_TIMEOUT_SECS` to milliseconds and
+sets RabbitMQ `x-consumer-timeout` on the work queue. If a worker does not
+acknowledge the message in time, RabbitMQ closes the channel and can redeliver
+the message.
 
-Set `CHAT_CONSUMER_TIMEOUT_SECS` high enough for the **worst-case single message** above (heavy models, extended thinking, large context), not for the whole agent loop.
+Allow time for a slow model, extended thinking, and a large context.
 
-Changing this value requires the work queue to be recreated (or otherwise updated) so the queue argument matches; see comments in `queue_setup_http.sh`.
+RabbitMQ cannot update this argument on an existing queue declaration. If the
+value changes, delete and recreate `chat_session_work_queue`, then run
+`queue_setup_http.sh` again.
 
-## Environment
+The setup script loads `.env`, then `.env.local` if it exists.
 
-- **`CHAT_CONSUMER_TIMEOUT_SECS`**: required in `.env` for the app and for `queue_setup_http.sh`.
-- The setup script loads **`.env` only**, not `.env.local`.
+## Message flow
 
-## Messages flow
-When a message is received by the user, we save that message into db, then publish a message into rabbitMQ with a uuid
+1. The API stores the user message and publishes a serialized chat work
+   message to RabbitMQ. The work message identifies the assistant response.
+2. A chat worker loads the message and history from PostgreSQL.
+3. The worker publishes WebSocket state through Redis.
+4. The worker calls the selected LLM and streams the response.
+5. If the LLM returns text only, the worker completes the message.
+6. If the LLM requests tools, the worker creates and publishes one message for
+   each tool call.
+7. Workers process the tool calls and publish their progress.
+8. After all sibling tool calls finish, the worker publishes an LLM
+   continuation.
+9. The next LLM pass loads the tool results and either requests more tools or
+   completes the response.
 
-Then a worker consumes that rabbitMQ, and receives that message, it creates that message into the DB and send a websocket event to the user, then it sends it to LLM and waits for the response
-
-When the response is completed (as its streaming, we wait for the end of responses, if it has no tool calls, then everything is done and nothing is done after, so user can send another messages again
-
-But if it has any tool call requested by the LLM, we create a message per tool calls requested and publish those to the rabbitMQ and then we are done, next time the consumer picks those tool calls messages asynchronously, each processing one of those tool calls, first sends a message to the front-end in websocket, then after completing the tool call, sends another message to tell front-end its completed in websocket, after each tool call completed, we may have all tool calls for the caller message completed, so if all completed, we publish another message to the rabbitMQ so the LLM will be called again and loads the history, then the tool calls results are ready to be passed to the LLM and it can continue the loop by calling other tool calls or stop it by just sending string content and stop the loop
+See [Architecture](architecture.md) and [Chat agents](chat-agents.md).

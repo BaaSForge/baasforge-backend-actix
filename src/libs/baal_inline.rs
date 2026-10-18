@@ -1,4 +1,4 @@
-//! Decode and rewrite `<baal:inline type="…" data="…"/>` widgets embedded in chat text.
+//! Decode and rewrite legacy BaaSForge `<baal:inline type="…" data="…"/>` widgets in chat text.
 //!
 //! `data` is standard base64-encoded JSON. Supported `type` values: `release`, `trace`.
 
@@ -131,7 +131,8 @@ pub fn format_baal_inline_for_llm(decoded: &BaalInlineDecoded) -> String {
     }
 }
 
-/// Replace every `<baal:inline …/>` in `text` using `format_one`. Unrecognized or invalid tags are left unchanged.
+/// Replace every legacy BaaSForge `<baal:inline …/>` in `text` using `format_one`.
+/// Unrecognized or invalid tags are left unchanged.
 pub fn replace_baal_inline_tags(text: &str, format_one: impl Fn(&BaalInlineDecoded) -> String) -> Cow<'_, str> {
     if !text.contains("<baal:inline") {
         return Cow::Borrowed(text);

@@ -19,7 +19,7 @@ pub struct JaegerTracesQueryBody {
     /// Optional. When provided, fetches the single trace and groups its spans by service.
     #[serde(default, rename = "traceID")]
     pub trace_id: Option<String>,
-    /// Optional. Filters spans whose `baal.release.id` tag matches.
+    /// Optional. Filters spans whose legacy BaaSForge `baal.release.id` tag matches.
     #[serde(default, rename = "releaseID")]
     pub release_id: Option<String>,
     pub services: Vec<ObservabilityService>,

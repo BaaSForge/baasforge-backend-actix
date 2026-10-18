@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the main API server binary in release mode.
-# Output: target/release/baal-backend-actix
+# Output uses the legacy binary name: target/release/baal-backend-actix
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

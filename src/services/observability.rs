@@ -52,7 +52,7 @@ impl ObservabilityService {
 pub struct JaegerQueryFilters {
     /// When set, fetches the single trace by id; otherwise per-service search.
     pub trace_id: Option<String>,
-    /// When set, only spans tagged `baal.release.id == release_id` are kept.
+    /// When set, only spans with the legacy BaaSForge tag `baal.release.id == release_id` are kept.
     pub release_id: Option<String>,
     pub services: Vec<ObservabilityService>,
     pub lookback_minutes: u32,
@@ -209,9 +209,9 @@ pub async fn fetch_jaeger_trace_by_id(
         .and_then(|arr| arr.first().cloned()))
 }
 
-/// Every `baal.project.id` value on the trace (process and span tags) must parse as the same UUID and
-/// match `expected`. Returns `Ok(())` when there is at least one tag and all agree; otherwise an
-/// error message suitable for a 403/400 response.
+/// Every legacy BaaSForge `baal.project.id` value on the trace (process and span tags) must parse as
+/// the same UUID and match `expected`. Returns `Ok(())` when there is at least one tag and all agree;
+/// otherwise an error message suitable for a 403/400 response.
 pub fn trace_baal_project_id_matches(trace: &Value, expected: uuid::Uuid) -> Result<(), &'static str> {
     use uuid::Uuid;
     let mut seen: HashSet<Uuid> = HashSet::new();

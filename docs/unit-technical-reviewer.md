@@ -4,9 +4,9 @@ The unit technical reviewer is a second worker binary (`unit_technical_reviewer`
 
 ## Why a separate binary
 
-Unit code checks (compiler syntax validation, rule/convention checking) are expected to be non-trivial operations. Offloading them to a dedicated binary means:
+Unit code checks can use significant CPU and memory. A dedicated binary means:
 
-- This binary might use a v8 engine which is heavy, so it's better to have a separate binary with v8 included to have flexibility to scale depending on the overall throughput of these code review messages.
+- The reviewer can scale for review traffic without scaling the API or chat worker.
 - The chat worker is never blocked waiting for a check to finish.
 - Multiple reviewer instances can run in parallel and scale independently from the chat worker.
 - Each reviewer instance picks up one check message at a time (prefetch = 1), so the same check is never processed twice by two instances simultaneously.
@@ -137,13 +137,14 @@ The client receives incremental updates as each sub-task completes:
 2. `ChatSessionMessageUpdated` — after compiler_check (`compiler_check_sub_task`).
 3. `ChatSessionMessageUpdated` — after lint_check (`lint_check_sub_task`).
 4. `ChatSessionMessageUpdated` — after rule_check (`rule_check_sub_task`, `status=Completed`, unit fields on success).
-4. `ProjectUnitCreated` / `ProjectUnitModified` / `ProjectUnitDeleted` — broadcast by the reviewer **only** on rule_check success, after the row is actually in the database. Never sent on failure.
+5. `ProjectUnitCreated` / `ProjectUnitModified` / `ProjectUnitDeleted` — broadcast by the reviewer **only** on rule_check success, after the row is actually in the database. Never sent on failure.
 
 ## Compiler check: real TypeScript type checking
 
 The `compiler_check` sub-task runs a full TypeScript type check against the
-LLM-generated code. See [docs/type-checker.md](type-checker.md) for the complete
-breakdown. In brief:
+LLM-generated code. See [Type checker](type-checker.md) for the complete
+breakdown. It uses tsgo with an in-memory virtual file system. The next lint
+step uses Oxc and tsgolint. A unit row is written only after all checks pass.
 
 
 ## Running locally
@@ -152,7 +153,7 @@ breakdown. In brief:
 # One-time queue setup (adds unit_reviewer_exchange + unit_reviewer_work_queue)
 ./queue_setup_http.sh
 
-# Start everything (2 API instances, 2 chat workers, 2 reviewers)
+# Start 2 API instances, 2 chat workers, 2 reviewers, and 2 cost consumers
 ./dev-scaled.sh
 
 # Or start a single reviewer instance manually (feature flag is included)
@@ -165,3 +166,6 @@ breakdown. In brief:
 ## Scaling
 
 Because all reviewer instances consume from the same `unit_reviewer_work_queue` with `basic_qos(1)` (prefetch = 1), RabbitMQ load-balances messages across instances. Each check message is delivered to exactly one reviewer instance. The number of instances is set in `dev-scaled.sh` (currently 2); adjust as needed.
+
+See [Local development](local-development.md) for prerequisites and current
+restart behavior.
