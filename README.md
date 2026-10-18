@@ -73,7 +73,7 @@ docker compose up -d
 
 > **IMPORTANT — FRESH DEVELOPMENT DATABASE**
 >
-> **Do this before the first** `./migration-up.sh`**.**
+> **Do this before the first `./migration-up.sh`.**
 >
 > ```sql
 > CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT);
@@ -171,6 +171,7 @@ not run format, Clippy, or test checks. See [Contributing](CONTRIBUTING.md).
 - [Unit technical reviewer](docs/unit-technical-reviewer.md)
 - [Type checker](docs/type-checker.md)
 - [Type extractor](docs/type-extractor.md)
+- [Optional design resources](docs/resources.md)
 
 ## License
 

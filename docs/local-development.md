@@ -25,7 +25,25 @@ On macOS, install `libpq` if Rust cannot link PostgreSQL:
 brew install libpq
 export LIBRARY_PATH="$(brew --prefix libpq)/lib"
 export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig"
+cargo clean
+cargo build
 ```
+
+Docker provides the development PostgreSQL server. Install the full Homebrew
+package with `brew install postgresql` only if you also need a host server or
+its additional tools.
+
+To keep the library path, add the paths returned by `brew --prefix libpq` to
+`~/.cargo/config.toml`. On Apple Silicon, the usual configuration is:
+
+```toml
+[env]
+LIBRARY_PATH = "/opt/homebrew/opt/libpq/lib"
+PKG_CONFIG_PATH = "/opt/homebrew/opt/libpq/lib/pkgconfig"
+```
+
+Do not use `brew link --force libpq` unless you understand how it affects other
+PostgreSQL installations.
 
 ## Environment
 
@@ -99,9 +117,10 @@ To create a migration:
 
 ```bash
 source ./load-project-env.sh
-diesel migration generate descriptive_migration_name
+diesel migration generate create_users_table
 ```
 
+Replace `create_users_table` with a short description of the schema change.
 Edit both `up.sql` and `down.sql`. Test the forward and reverse operations:
 
 ```bash
@@ -122,8 +141,11 @@ Run it once for each environment. It creates the chat, technical-review, and
 platform-cost exchanges, work queues, retry queues, dead-letter queues, and
 bindings through the RabbitMQ Management API.
 
-The script reads `RABBIT_URL`, `RABBITMQ_MANAGEMENT_URL`,
-`RETRY_DELAY_EXCHANGE`, and `CHAT_CONSUMER_TIMEOUT_SECS`.
+The script loads `.env`, then `.env.local`. Queue setup uses `RABBIT_URL`,
+`RABBITMQ_MANAGEMENT_URL`, `RETRY_DELAY_EXCHANGE`, and
+`CHAT_CONSUMER_TIMEOUT_SECS`. The workers use `RETRY_DELAY_TTL_MS` when they
+publish delayed retries. The management username and password are parsed from
+`RABBIT_URL`.
 
 Run it again after topology changes. If `CHAT_CONSUMER_TIMEOUT_SECS` changes,
 delete and recreate the existing chat work queue before setup so RabbitMQ can

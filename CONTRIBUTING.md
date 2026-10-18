@@ -62,21 +62,32 @@ project check. The current GitHub workflow deploys tagged versions, but it does
 not run format, Clippy, or test checks. Run the checks locally before a pull
 request.
 
-## API contracts
+## API and backend-client conventions
 
-### Use snake_case JSON keys
+### Use snake_case JSON keys everywhere
 
-Use `snake_case` for all REST and WebSocket request and response fields.
+All JSON sent between the backend and clients must use `snake_case` keys. This
+applies to:
+
+- REST API requests and responses
+- WebSocket event payloads
+- Manually built payloads such as `json!({ "stopped_count": count })`
+- OpenAPI contracts, documentation, and client expectations
 
 Examples:
 
-- Use `project_id`, `message_id`, and `stopped_count`.
-- Do not use `projectId`, `messageId`, or `stoppedCount`.
-- Use Rust field names directly where possible.
+- Use `stopped_count`, `stopped_message_ids`, `project_id`,
+  `chat_session_id`, `message_id`, `chunk_index`, and `runtime_id`.
+- Do not use `stoppedCount`, `stoppedMessageIds`, `projectId`,
+  `chatSessionId`, `messageId`, `chunkIndex`, or `runtimeId`.
+- Use Rust field names in `snake_case`.
+- Do not use `#[serde(rename = "camelCase")]`.
 - Use `#[serde(rename_all = "snake_case")]` for serialized enum variants when
   needed.
 
 Review `src/routes/ws/events.rs` when you change a WebSocket payload.
+Developers and AI agents must keep this convention for all new or changed API
+and WebSocket payloads.
 
 ### Keep WebSocket topics private
 
@@ -89,16 +100,45 @@ A user can subscribe to:
 Do not allow a user to subscribe to another user's topic or chat session. The
 authorization is in `src/routes/ws/topics.rs`.
 
-### Use UUID v7
+All allowed topics are scoped to the authenticated user. Do not relax this
+rule. A user must never receive another user's events.
 
-Use UUID v7 for table primary keys and new entities. Generate IDs with:
+### Use UUID v7 for new entity primary keys
+
+New entity tables must use a UUID v7 `id` primary key.
+
+- Do not use integer or auto-incrementing primary keys.
+- Use UUID v7 for all new entity tables and entity rows.
+- Keep this rule in every migration and schema change.
+
+Some existing domain tables use non-UUID or composite keys, such as
+`app_settings` and `project_units`. These are established schema exceptions,
+not examples for new entity tables.
+
+Generate new entity IDs with:
 
 ```rust
 crate::libs::ids::new_uuid()
 ```
 
-Do not call UUID constructors such as `Uuid::new_v4()` or `Uuid::now_v7()`.
-Clippy denies these methods.
+Do not use the `uuid` crate directly to generate entity IDs. Do not call
+constructors such as `Uuid::new_v4()` or `Uuid::now_v7()`. Clippy denies these
+methods.
+
+The project sets `rustc-wrapper = "clippy-driver"`, so `cargo build` and
+`cargo run` also apply Clippy rules. Install Clippy with:
+
+```bash
+rustup component add clippy
+```
+
+If the wrapper itself blocks a diagnostic build, disable it for that command:
+
+```bash
+CARGO_BUILD_RUSTC_WRAPPER= cargo build
+```
+
+The current GitHub workflow does not run Clippy. Local checks are required.
 
 ## Database migrations
 
