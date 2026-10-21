@@ -1,8 +1,55 @@
-# BaaSForge Backend
+<p align="center">
+  <img src="https://raw.githubusercontent.com/BaaSForge/baasforge-frontend-vite/main/public/logo-256x256.png" alt="BaaSForge logo" width="96" height="96">
+</p>
+<h1 align="center">BaaSForge Backend</h1>
+<p align="center"><strong>Describe your backend in plain language. Ship APIs, workflows, and queue workers.</strong></p>
+<p align="center">For developers and small teams building with BaaSForge.</p>
+<p align="center">
+  <a href="#local-quick-start">Get started</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="#contributing">Contribute</a>
+</p>
+
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/BaaSForge/baasforge-backend-actix?style=flat)](https://github.com/BaaSForge/baasforge-backend-actix)
+[![Issues](https://img.shields.io/github/issues/BaaSForge/baasforge-backend-actix)](https://github.com/BaaSForge/baasforge-backend-actix/issues)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
+[![Support](https://img.shields.io/badge/support-GitHub%20Issues-181717?logo=github)](#community-and-support)
+
+
+<p align="center">
+  <a href="docs/assets/backend-conversation.png">
+    <img src="docs/assets/backend-conversation-framed.png" alt="BaaSForge conversation showing a plain-language request, analysis, and draft units." width="1000">
+  </a>
+</p>
+
+A plain-language request alongside the analysis and draft units in the BaaSForge dashboard.
+
+## Contents
+
+- [Why BaaSForge?](#why-baasforge)
+- [Ecosystem](#ecosystem)
+- [Services](#services)
+- [Local quick start](#local-quick-start)
+- [Runtime connection](#runtime-connection)
+- [Production](#production)
+- [Development checks](#development-checks)
+- [Historical name](#historical-name)
+- [Documentation](#documentation)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [Community and support](#community-and-support)
+- [Code of Conduct](#code-of-conduct)
+- [Security](#security)
+- [License](#license)
+
+## Why BaaSForge?
+
+BaaSForge is for developers and small teams who want to describe a backend in plain language and ship APIs, workflows, and queue workers to production.
+
+Start here for the BaaSForge ecosystem. For self-hosting, follow the [production guide](docs/production.md) and [configuration reference](docs/configuration.md) after the local setup.
 
 Actix backend for the BaaSForge platform.
-
-
 
 This repository contains the HTTP API, WebSocket server, chat worker, technical
 review worker, and platform-cost jobs. It uses PostgreSQL, RabbitMQ, Redis, and
@@ -13,18 +60,15 @@ The backend also requires the separate
 The two repositories connect through HTTP and NATS. They do not use a shared
 Rust dependency.
 
-## Historical name
+## Ecosystem
 
-`baal` was the old platform name. The current name is `baasforge`.
+The [backend repository](https://github.com/BaaSForge/baasforge-backend-actix) is the main entry point. Use the runtime and frontend repositories for their respective parts of the system.
 
-Some internal and infrastructure identifiers still use `baal`, including the
-Rust package and binary, database name and user, container names, trace tags,
-and inline markup. Treat these as legacy compatibility names. A reference to
-`baal` in this repository usually refers to BaaSForge; it does not refer to a
-separate service.
-
-Do not rename a legacy identifier without checking all integrations,
-migrations, deployment files, stored data, and the runtime repository.
+| Repository | Start here |
+| --- | --- |
+| [Backend](https://github.com/BaaSForge/baasforge-backend-actix) | Main entry point and control plane |
+| [Runtime](https://github.com/BaaSForge/baasforge-runtime-actix) | Execution plane |
+| [Frontend](https://github.com/BaaSForge/baasforge-frontend-vite) | Dashboard, public pages, and documentation |
 
 ## Services
 
@@ -159,6 +203,19 @@ CARGO_BUILD_RUSTC_WRAPPER= cargo clippy --all-targets
 The repository has no Prettier command. The current deployment workflow does
 not run format, Clippy, or test checks. See [Contributing](CONTRIBUTING.md).
 
+## Historical name
+
+`baal` was the old platform name. The current name is `baasforge`.
+
+Some internal and infrastructure identifiers still use `baal`, including the
+Rust package and binary, database name and user, container names, trace tags,
+and inline markup. Treat these as legacy compatibility names. A reference to
+`baal` in this repository usually refers to BaaSForge; it does not refer to a
+separate service.
+
+Do not rename a legacy identifier without checking all integrations,
+migrations, deployment files, stored data, and the runtime repository.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md)
@@ -171,7 +228,52 @@ not run format, Clippy, or test checks. See [Contributing](CONTRIBUTING.md).
 - [Unit technical reviewer](docs/unit-technical-reviewer.md)
 - [Type checker](docs/type-checker.md)
 - [Type extractor](docs/type-extractor.md)
-- [Optional design resources](docs/resources.md)
+
+## Roadmap
+
+Where BaaSForge is heading:
+
+- [ ] Performance & runtime durability
+- [ ] Stream processing and WebSocket / realtime units
+- [ ] Storage pattern units
+- [ ] Monitoring, alerting, and collaboration
+
+<details>
+<summary><strong>Explore more planned capabilities</strong></summary>
+
+- Event and schedule triggers
+- SDK convenience helpers
+- Files and search behaviors
+- Unit marketplace
+- Third-party integrations
+
+</details>
+
+> These plans are directional. Timing and order may change.
+
+**[Explore the full roadmap →](https://baasforge.com/docs/about/future-plans)**
+
+See [Units](https://baasforge.com/docs/platform/units) for what is available now.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+Documentation fixes, reproducible bug reports, and focused improvements are welcome.
+Browse [open issues](https://github.com/BaaSForge/baasforge-backend-actix/issues), or explain a proposed change before starting substantial work.
+
+## Community and support
+
+- [Report a bug or suggest an improvement](https://github.com/BaaSForge/baasforge-backend-actix/issues).
+- Include reproduction steps and the relevant repository when asking for help.
+- If BaaSForge is useful to you, consider starring the repository or sharing what you built.
+
+## Code of Conduct
+
+Read our [Code of Conduct](CODE_OF_CONDUCT.md) for community standards and private reporting instructions.
+
+## Security
+
+Read our [Security Policy](SECURITY.md) to report a vulnerability privately and understand the scope of security maintenance.
 
 ## License
 
